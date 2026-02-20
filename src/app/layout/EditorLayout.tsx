@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useAppStore } from "../core/store/useAppStore";
+import { useRuntimeTrainingStore } from "../core/store/useRuntimeTrainingStore";
 import { useSceneStore } from "../core/store/useSceneStore";
 import DockArea from "../ui/DockArea";
 import { copySelection, deleteSelection, duplicateSelection, pasteSelection, redo, undo } from "../core/editor/actions/editorActions";
@@ -60,6 +61,9 @@ export default function EditorLayout() {
   const [menuOpen, setMenuOpen] = useState<"file" | "edit" | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const trainingTokens = useRuntimeTrainingStore((s) => s.trainingTokens);
+  const trainingTokenCost = useRuntimeTrainingStore((s) => s.trainingTokenCost);
+  const hasEnoughTokens = trainingTokens >= trainingTokenCost;
 
   const robotsForExport = listRobotsForExport(nodes, selectedId);
 
@@ -156,7 +160,7 @@ export default function EditorLayout() {
           background: "#0d131a",
         }}
       >
-        <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>agent-inspector-web</div>
+        <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>robot-editor-web</div>
 
         <div ref={menuRef} style={{ marginLeft: 16, display: "flex", gap: 6 }}>
           <div style={{ position: "relative" }}>
@@ -213,7 +217,11 @@ export default function EditorLayout() {
           </button>
         </div>
 
-        <div style={{ marginLeft: "auto" }} />
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center" }}>
+          <div style={tokenBadge(hasEnoughTokens)}>
+            Tokens: {trainingTokens} · Cost/job: {trainingTokenCost}
+          </div>
+        </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
@@ -339,6 +347,22 @@ function topBtn(): React.CSSProperties {
     color: "rgba(255,255,255,0.85)",
     cursor: "pointer",
     fontSize: 12,
+  };
+}
+
+function tokenBadge(hasEnoughTokens: boolean): React.CSSProperties {
+  return {
+    minHeight: 28,
+    display: "flex",
+    alignItems: "center",
+    padding: "0 10px",
+    borderRadius: 999,
+    border: hasEnoughTokens ? "1px solid rgba(140,220,140,0.45)" : "1px solid rgba(255,140,140,0.55)",
+    background: hasEnoughTokens ? "rgba(70,150,90,0.18)" : "rgba(170,70,70,0.20)",
+    color: hasEnoughTokens ? "rgba(215,255,225,0.96)" : "rgba(255,220,220,0.97)",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 0.2,
   };
 }
 

@@ -1,7 +1,7 @@
 import type { DockId, PanelId } from "../dock/types";
 import type React from "react";
 
-export type TrainingJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type TrainingJobStatus = "queued" | "provisioning" | "running" | "completed" | "failed" | "cancelled";
 
 export type SubmitTrainingJobInput = {
   modelName: string;
@@ -20,6 +20,32 @@ export type TrainingJobSummary = {
   loss: number | null;
   startedAt: number;
   updatedAt: number;
+  runRef?: string | null;
+  failureReason?: string | null;
+  tenantId?: string;
+  experimentName?: string;
+  envId?: string;
+  maxSteps?: number;
+};
+
+export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
+
+export type TrainingArtifactSummary = {
+  id: string;
+  jobId: string;
+  kind: TrainingArtifactKind;
+  uri: string;
+  sizeBytes?: number;
+  checksumSha256?: string;
+  createdAt: string;
+};
+
+export type TrainingJobEventSummary = {
+  id: string;
+  jobId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type TrainingRecordingSummary = {
@@ -40,6 +66,8 @@ export type PluginHostAPI = {
     cancelJob: (jobId: string) => void;
     getJobs: () => TrainingJobSummary[];
     getRecordings: () => TrainingRecordingSummary[];
+    listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
+    listEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
     subscribe: (listener: () => void) => () => void;
   };
 };
