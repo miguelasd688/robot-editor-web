@@ -1,0 +1,42 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b0f14;
+  color: #e6edf3;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  display: block; /* IMPORTANT: no flex centering */
+}
+
+button,
+input {
+  font: inherit;
+}
+
+select.dark-select {
+  color-scheme: dark;
+}
+
+select.dark-select option {
+  background-color: #0c1016;
+  color: rgba(255,255,255,0.92);
+}
+
+select.dark-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
