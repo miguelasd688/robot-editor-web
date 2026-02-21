@@ -308,6 +308,10 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const epochs = Math.max(1, Math.round(input.epochs));
       const modelName = input.modelName.trim() || "default-model";
       const dataset = input.dataset.trim() || "default-dataset";
+      const experimentName = (input.experimentName ?? modelName).trim() || modelName;
+      const envId = (input.envId ?? dataset).trim() || dataset;
+      const trainer = input.trainer ?? "rsl_rl";
+      const maxSteps = Math.max(1, Math.round(input.maxSteps ?? epochs));
       const optimisticJob: TrainingJobSummary = {
         id: localId,
         modelName,
@@ -328,6 +332,13 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         modelName,
         dataset,
         epochs,
+        tenantId: input.tenantId,
+        experimentName,
+        envId,
+        trainer,
+        maxSteps,
+        seed: input.seed,
+        config: input.config ?? {},
       })
         .then((remoteJob) => {
           optimisticJobIds.delete(localId);

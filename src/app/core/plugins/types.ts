@@ -2,11 +2,19 @@ import type { DockId, PanelId } from "../dock/types";
 import type React from "react";
 
 export type TrainingJobStatus = "queued" | "provisioning" | "running" | "completed" | "failed" | "cancelled";
+export type TrainingTrainer = "rsl_rl" | "rllib" | "sb3";
 
 export type SubmitTrainingJobInput = {
   modelName: string;
   dataset: string;
   epochs: number;
+  tenantId?: string;
+  experimentName?: string;
+  envId?: string;
+  trainer?: TrainingTrainer;
+  maxSteps?: number;
+  seed?: number;
+  config?: Record<string, unknown>;
 };
 
 export type TrainingJobSummary = {
