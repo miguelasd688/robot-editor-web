@@ -4,12 +4,15 @@ import type {
   TrainingArtifactKind,
   TrainingArtifactSummary,
   TrainingJobEventSummary,
+  TrainingRunnerLogsSummary,
   TrainingJobStatus,
   TrainingJobSummary,
   TrainingRecordingSummary,
 } from "../plugins/types";
 import {
   cancelTrainingJobRemote,
+  getTrainingRunnerLogsRemote,
+  submitCartpoleDirectJobRemote,
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
   listTrainingJobsRemote,
@@ -27,6 +30,7 @@ type RuntimeTrainingState = {
   cancelTrainingJob: (jobId: string) => void;
   listTrainingArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
   listTrainingJobEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
+  listTrainingRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
 };
 
 const runningIntervals = new Map<string, number>();
@@ -37,6 +41,7 @@ let trainingJobCounter = 0;
 let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
+const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["queued", "provisioning", "running"]);
 
 function readPositiveIntEnv(rawValue: unknown, fallback: number) {
   const parsed = Number(rawValue);
@@ -160,6 +165,18 @@ function buildLocalEvents(job: TrainingJobSummary): TrainingJobEventSummary[] {
     .map((event) => ({ ...event }));
 }
 
+function buildLocalRunnerLogs(job: TrainingJobSummary): TrainingRunnerLogsSummary {
+  return {
+    jobId: job.id,
+    runnerJobId: null,
+    totalLines: 0,
+    lines: [],
+    highlights: [],
+    runtime: null,
+    unavailableReason: "runner_mode_not_remote",
+  };
+}
+
 async function syncRemoteJobsOnce() {
   if (!trainingApiEnabled || remoteSyncInFlight) return;
   remoteSyncInFlight = true;
@@ -276,6 +293,20 @@ function scheduleTrainingProgress(jobId: string) {
   runningIntervals.set(jobId, timer);
 }
 
+function isCartpoleDirectProfile(config: unknown) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+  const profile = (config as Record<string, unknown>).profile;
+  return typeof profile === "string" && profile.trim().toLowerCase() === "cartpole_direct_mvp";
+}
+
+function toTextOrEmpty(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isOptimisticLocalJobId(jobId: string) {
+  return jobId.startsWith("local_job_");
+}
+
 export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingState>> = create<RuntimeTrainingState>(
   (set, get) => ({
   jobs: [],
@@ -284,6 +315,23 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
   trainingTokenCost: trainingTokenCost,
 
   submitTrainingJob: (input) => {
+    const modelName = input.modelName.trim() || "default-model";
+    const dataset = input.dataset.trim() || "default-dataset";
+    const activeForDataset = get().jobs.find(
+      (job) => job.dataset === dataset && ACTIVE_JOB_STATUSES.has(job.status)
+    );
+    if (activeForDataset) {
+      logWarn("Training job launch blocked: active job already exists for dataset", {
+        scope: "runtime-training",
+        data: {
+          dataset,
+          existingJobId: activeForDataset.id,
+          status: activeForDataset.status,
+        },
+      });
+      return activeForDataset.id;
+    }
+
     const tokenCostPerJob = get().trainingTokenCost;
     if (get().trainingTokens < tokenCostPerJob) {
       logWarn("Training job launch blocked: not enough tokens", {
@@ -306,8 +354,6 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const now = Date.now();
       const localId = `local_job_${now}_${trainingJobCounter++}`;
       const epochs = Math.max(1, Math.round(input.epochs));
-      const modelName = input.modelName.trim() || "default-model";
-      const dataset = input.dataset.trim() || "default-dataset";
       const experimentName = (input.experimentName ?? modelName).trim() || modelName;
       const envId = (input.envId ?? dataset).trim() || dataset;
       const trainer = input.trainer ?? "rsl_rl";
@@ -328,18 +374,34 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       optimisticJobIds.add(localId);
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
-      void submitTrainingJobRemote({
-        modelName,
-        dataset,
-        epochs,
-        tenantId: input.tenantId,
-        experimentName,
-        envId,
-        trainer,
-        maxSteps,
-        seed: input.seed,
-        config: input.config ?? {},
-      })
+      const configObject = input.config ?? {};
+      const submissionPromise = isCartpoleDirectProfile(configObject)
+        ? submitCartpoleDirectJobRemote({
+            tenantId: input.tenantId,
+            experimentName,
+            robotAssetId: toTextOrEmpty((configObject as Record<string, unknown>).robotAssetId),
+            sceneAssetId: toTextOrEmpty((configObject as Record<string, unknown>).sceneAssetId) || undefined,
+            maxSteps,
+            seed: input.seed,
+            headless:
+              typeof (configObject as Record<string, unknown>).headless === "boolean"
+                ? ((configObject as Record<string, unknown>).headless as boolean)
+                : true,
+          })
+        : submitTrainingJobRemote({
+            modelName,
+            dataset,
+            epochs,
+            tenantId: input.tenantId,
+            experimentName,
+            envId,
+            trainer,
+            maxSteps,
+            seed: input.seed,
+            config: configObject,
+          });
+
+      void submissionPromise
         .then((remoteJob) => {
           optimisticJobIds.delete(localId);
           set((state) => {
@@ -382,8 +444,6 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     const now = Date.now();
     const id = `job_${now}_${trainingJobCounter++}`;
     const epochs = Math.max(1, Math.round(input.epochs));
-    const modelName = input.modelName.trim() || "default-model";
-    const dataset = input.dataset.trim() || "default-dataset";
 
     const job: TrainingJobSummary = {
       id,
@@ -471,6 +531,14 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
   },
 
   listTrainingArtifacts: async (jobId, kind): Promise<TrainingArtifactSummary[]> => {
+    if (isOptimisticLocalJobId(jobId)) {
+      const job = get().jobs.find((item) => item.id === jobId) ?? null;
+      if (!job) return [];
+      const local = buildLocalArtifacts(job);
+      if (!kind) return local;
+      return local.filter((item) => item.kind === kind);
+    }
+
     if (trainingApiEnabled) {
       try {
         return await listTrainingArtifactsRemote(jobId, kind);
@@ -491,6 +559,12 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
   },
 
   listTrainingJobEvents: async (jobId, limit = 100): Promise<TrainingJobEventSummary[]> => {
+    if (isOptimisticLocalJobId(jobId)) {
+      const job = get().jobs.find((item) => item.id === jobId) ?? null;
+      if (!job) return [];
+      return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), 500));
+    }
+
     if (trainingApiEnabled) {
       try {
         return await listTrainingJobEventsRemote(jobId, limit);
@@ -506,6 +580,58 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     const job = get().jobs.find((item) => item.id === jobId) ?? null;
     if (!job) return [];
     return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), 500));
+  },
+
+  listTrainingRunnerLogs: async (jobId, tail = 250): Promise<TrainingRunnerLogsSummary> => {
+    if (isOptimisticLocalJobId(jobId)) {
+      const job = get().jobs.find((item) => item.id === jobId) ?? null;
+      if (!job) {
+        return {
+          jobId,
+          runnerJobId: null,
+          totalLines: 0,
+          lines: [],
+          highlights: [],
+          runtime: null,
+          unavailableReason: "job_not_found",
+        };
+      }
+      return buildLocalRunnerLogs(job);
+    }
+
+    if (trainingApiEnabled) {
+      try {
+        return await getTrainingRunnerLogsRemote(jobId, tail);
+      } catch (error) {
+        logWarn("Failed to read runner logs from remote API", {
+          scope: "runtime-training",
+          data: { jobId, tail, error },
+        });
+        return {
+          jobId,
+          runnerJobId: null,
+          totalLines: 0,
+          lines: [],
+          highlights: [],
+          runtime: null,
+          unavailableReason: "runner_logs_fetch_failed",
+        };
+      }
+    }
+
+    const job = get().jobs.find((item) => item.id === jobId) ?? null;
+    if (!job) {
+      return {
+        jobId,
+        runnerJobId: null,
+        totalLines: 0,
+        lines: [],
+        highlights: [],
+        runtime: null,
+        unavailableReason: "job_not_found",
+      };
+    }
+    return buildLocalRunnerLogs(job);
   },
 })
 );

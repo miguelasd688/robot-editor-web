@@ -3,11 +3,14 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { useAppStore } from "../core/store/useAppStore";
 import { useRuntimeTrainingStore } from "../core/store/useRuntimeTrainingStore";
 import { useSceneStore } from "../core/store/useSceneStore";
+import { useAssetStore } from "../core/store/useAssetStore";
 import DockArea from "../ui/DockArea";
 import { copySelection, deleteSelection, duplicateSelection, pasteSelection, redo, undo } from "../core/editor/actions/editorActions";
 import { editorEngine } from "../core/editor/engineSingleton";
 import { exportRobotToUrdf } from "../core/urdf/urdfExport";
+import type { UrdfImportOptions } from "../core/urdf/urdfImportOptions";
 import type { SceneNode } from "../core/editor/document/types";
+import { exportRobotToMjcf, exportSceneToMjcf } from "../core/physics/mujoco/mjcfExport";
 
 function ResizeHandle() {
   return (
@@ -58,6 +61,8 @@ export default function EditorLayout() {
   const toggle = useAppStore((s) => s.togglePanel);
   const selectedId = useSceneStore((s) => s.selectedId);
   const nodes = useSceneStore((s) => s.nodes);
+  const assets = useAssetStore((s) => s.assets);
+  const urdfOptions = useAssetStore((s) => s.urdfOptions);
   const [menuOpen, setMenuOpen] = useState<"file" | "edit" | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -76,6 +81,55 @@ export default function EditorLayout() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to export URDF.";
+      alert(message);
+    }
+  };
+
+  const resolveRuntimeRobotData = (robotId: string) => {
+    const viewer = useAppStore.getState().viewer;
+    const root = viewer?.getObjectById(robotId) ?? null;
+    return {
+      urdfKey: root ? ((root.userData?.urdfKey as string | undefined) ?? null) : null,
+      importOptions: root
+        ? ((root.userData?.urdfImportOptions as UrdfImportOptions | undefined) ?? undefined)
+        : undefined,
+      root,
+    };
+  };
+
+  const exportRobotMjcf = async (robotId: string) => {
+    try {
+      const { robotName, mjcf, warnings } = await exportRobotToMjcf({
+        doc: editorEngine.getDoc(),
+        robotId,
+        assets,
+        defaultUrdfOptions: urdfOptions,
+        runtime: resolveRuntimeRobotData(robotId),
+      });
+      downloadText(`${robotName}.mjcf`, mjcf, "application/xml");
+      if (warnings.length > 0) {
+        console.warn("[mjcf:export] Robot export completed with warnings:", warnings);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to export MJCF.";
+      alert(message);
+    }
+  };
+
+  const exportSceneMjcf = async () => {
+    try {
+      const { filename, mjcf, warnings } = await exportSceneToMjcf({
+        doc: editorEngine.getDoc(),
+        assets,
+        defaultUrdfOptions: urdfOptions,
+        resolveRuntimeRobotData,
+      });
+      downloadText(filename, mjcf, "application/xml");
+      if (warnings.length > 0) {
+        console.warn("[mjcf:export] Scene export completed with warnings:", warnings);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to export scene MJCF.";
       alert(message);
     }
   };
@@ -170,7 +224,7 @@ export default function EditorLayout() {
             {menuOpen === "file" && (
               <div style={menuList()}>
                 <button style={menuItem()} onClick={openExportDialog}>
-                  Export robot as URDF...
+                  Export URDF / MJCF...
                 </button>
               </div>
             )}
@@ -259,8 +313,8 @@ export default function EditorLayout() {
           <div style={exportDialogStyle()} onMouseDown={(e) => e.stopPropagation()}>
             <div style={exportHeaderStyle()}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>Export Robots as URDF</div>
-                <div style={{ fontSize: 12, opacity: 0.72 }}>Choose one robot from the current scene.</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Export URDF / MJCF</div>
+                <div style={{ fontSize: 12, opacity: 0.72 }}>URDF per robot, MJCF per robot or full scene.</div>
               </div>
               <button style={dialogCloseBtn()} onClick={() => setShowExportDialog(false)}>
                 Close
@@ -268,6 +322,32 @@ export default function EditorLayout() {
             </div>
 
             <div style={exportBodyStyle()}>
+              <div style={sceneExportRowStyle()}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>Complete Scene</div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      opacity: 0.6,
+                      whiteSpace: "normal",
+                      overflowWrap: "anywhere",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    Merge all robots into a single MJCF XML.
+                  </div>
+                </div>
+                <button
+                  style={exportActionBtn("scene", robotsForExport.length === 0)}
+                  disabled={robotsForExport.length === 0}
+                  onClick={() => {
+                    void exportSceneMjcf();
+                  }}
+                >
+                  Export Scene MJCF
+                </button>
+              </div>
+
               {robotsForExport.length === 0 ? (
                 <div style={{ fontSize: 12, opacity: 0.78 }}>No robot nodes found in the scene.</div>
               ) : (
@@ -279,9 +359,19 @@ export default function EditorLayout() {
                         {robot.id}
                       </div>
                     </div>
-                    <button style={exportActionBtn()} onClick={() => exportRobotUrdf(robot.id)}>
-                      Export URDF
-                    </button>
+                    <div style={exportActionsStyle()}>
+                      <button style={exportActionBtn("urdf")} onClick={() => exportRobotUrdf(robot.id)}>
+                        Export URDF
+                      </button>
+                      <button
+                        style={exportActionBtn("mjcf")}
+                        onClick={() => {
+                          void exportRobotMjcf(robot.id);
+                        }}
+                      >
+                        Export MJCF
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -477,15 +567,55 @@ function robotRowStyle(selected: boolean): React.CSSProperties {
   };
 }
 
-function exportActionBtn(): React.CSSProperties {
+function sceneExportRowStyle(): React.CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: "1fr auto",
+    alignItems: "start",
+    gap: 10,
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.03)",
+  };
+}
+
+function exportActionsStyle(): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  };
+}
+
+function exportActionBtn(kind: "urdf" | "mjcf" | "scene", disabled = false): React.CSSProperties {
+  const palette =
+    kind === "urdf"
+      ? {
+          border: "1px solid rgba(90,160,255,0.50)",
+          background: "rgba(70,120,200,0.22)",
+        }
+      : kind === "mjcf"
+        ? {
+            border: "1px solid rgba(120,190,120,0.50)",
+            background: "rgba(70,150,90,0.25)",
+          }
+        : {
+            border: "1px solid rgba(180,170,90,0.50)",
+            background: "rgba(150,130,70,0.24)",
+          };
+
   return {
     height: 28,
     padding: "0 10px",
     borderRadius: 8,
-    border: "1px solid rgba(120,190,120,0.50)",
-    background: "rgba(70,150,90,0.25)",
+    border: palette.border,
+    background: palette.background,
     color: "rgba(255,255,255,0.96)",
-    cursor: "pointer",
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.55 : 1,
     fontSize: 12,
     fontWeight: 600,
   };

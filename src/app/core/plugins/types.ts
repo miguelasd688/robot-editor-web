@@ -56,6 +56,16 @@ export type TrainingJobEventSummary = {
   createdAt: string;
 };
 
+export type TrainingRunnerLogsSummary = {
+  jobId: string;
+  runnerJobId: string | null;
+  totalLines: number;
+  lines: string[];
+  highlights: string[];
+  runtime: Record<string, unknown> | null;
+  unavailableReason?: string;
+};
+
 export type TrainingRecordingSummary = {
   id: string;
   jobId: string;
@@ -74,8 +84,11 @@ export type PluginHostAPI = {
     cancelJob: (jobId: string) => void;
     getJobs: () => TrainingJobSummary[];
     getRecordings: () => TrainingRecordingSummary[];
+    getTrainingTokens: () => number;
+    getTrainingTokenCost: () => number;
     listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
     listEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
+    listRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
     subscribe: (listener: () => void) => () => void;
   };
 };

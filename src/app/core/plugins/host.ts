@@ -13,8 +13,11 @@ export const pluginHostApi: PluginHostAPI = {
     cancelJob: (jobId) => useRuntimeTrainingStore.getState().cancelTrainingJob(jobId),
     getJobs: () => useRuntimeTrainingStore.getState().jobs.map((job) => ({ ...job })),
     getRecordings: () => useRuntimeTrainingStore.getState().recordings.map((recording) => ({ ...recording })),
+    getTrainingTokens: () => useRuntimeTrainingStore.getState().trainingTokens,
+    getTrainingTokenCost: () => useRuntimeTrainingStore.getState().trainingTokenCost,
     listArtifacts: (jobId, kind) => useRuntimeTrainingStore.getState().listTrainingArtifacts(jobId, kind),
     listEvents: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingJobEvents(jobId, limit),
+    listRunnerLogs: (jobId, tail) => useRuntimeTrainingStore.getState().listTrainingRunnerLogs(jobId, tail),
     subscribe: (listener) =>
       useRuntimeTrainingStore.subscribe(() => {
         listener();

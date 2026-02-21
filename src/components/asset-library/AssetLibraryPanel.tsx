@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { addSceneAsset } from "../../app/core/editor/actions/sceneAssetActions";
 import { BROWSER_DIRECTORIES, type BrowserDirectoryId } from "../../app/core/browser/directories";
 import { logInfo } from "../../app/core/services/logger";
@@ -58,6 +58,11 @@ type WorkspaceEntry = {
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
+};
+
+type NavigationSelection<TValue> = {
+  value: TValue;
+  navigationVersion: number;
 };
 
 const LIBRARY_SECTIONS: BrowserSection[] = [
@@ -206,8 +211,6 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
   },
 ];
 
-const ALL_ITEMS = LIBRARY_SECTIONS.flatMap((section) => section.items);
-
 function isMeshAssetId(assetId: SceneAssetId) {
   return assetId.startsWith("mesh:");
 }
@@ -285,12 +288,15 @@ function workspaceEntryIcon(name: string, isDir: boolean) {
 
 export default function AssetLibraryPanel() {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(ALL_ITEMS[0]?.id ?? "");
-  const [selectedRootDirectoryId, setSelectedRootDirectoryId] = useState<BrowserDirectoryId>("floors");
+  const [selectedId, setSelectedId] = useState<NavigationSelection<string> | null>(null);
+  const [selectedRootDirectoryId, setSelectedRootDirectoryId] =
+    useState<NavigationSelection<BrowserDirectoryId> | null>(null);
   const [workspacePath, setWorkspacePath] = useState("");
-  const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null);
+  const [selectedWorkspacePath, setSelectedWorkspacePath] =
+    useState<NavigationSelection<string> | null>(null);
 
   const activeDirectory = useBrowserStore((s) => s.activeDirectory);
+  const navigationVersion = useBrowserStore((s) => s.navigationVersion);
   const setActiveDirectory = useBrowserStore((s) => s.setActiveDirectory);
   const assets = useAssetStore((s) => s.assets);
   const importFiles = useAssetStore((s) => s.importFiles);
@@ -322,14 +328,10 @@ export default function AssetLibraryPanel() {
 
   const selectedItem = useMemo(() => {
     if (!activeSection) return null;
-    return (
-      visibleItems.find((item) => item.id === selectedId) ??
-      activeSection.items.find((item) => item.id === selectedId) ??
-      visibleItems[0] ??
-      activeSection.items[0] ??
-      null
-    );
-  }, [activeSection, selectedId, visibleItems]);
+    if (!selectedId) return null;
+    if (selectedId.navigationVersion !== navigationVersion) return null;
+    return activeSection.items.find((item) => item.id === selectedId.value) ?? null;
+  }, [activeSection, navigationVersion, selectedId]);
 
   const workspaceTree = useMemo(() => buildTree(Object.keys(assets).sort()), [assets]);
   const workspaceDirNode = useMemo(
@@ -360,9 +362,10 @@ export default function AssetLibraryPanel() {
   }, [workspaceDirNode, normalizedQuery]);
 
   const selectedWorkspaceEntry = useMemo(() => {
-    if (!workspaceEntries.length) return null;
-    return workspaceEntries.find((entry) => entry.path === selectedWorkspacePath) ?? workspaceEntries[0];
-  }, [selectedWorkspacePath, workspaceEntries]);
+    if (!selectedWorkspacePath) return null;
+    if (selectedWorkspacePath.navigationVersion !== navigationVersion) return null;
+    return workspaceEntries.find((entry) => entry.path === selectedWorkspacePath.value) ?? null;
+  }, [navigationVersion, selectedWorkspacePath, workspaceEntries]);
 
   const visibleRootDirectories = useMemo(() => {
     if (!normalizedQuery) return BROWSER_DIRECTORIES;
@@ -373,12 +376,10 @@ export default function AssetLibraryPanel() {
   }, [normalizedQuery]);
 
   const selectedRootDirectory = useMemo(() => {
-    return (
-      visibleRootDirectories.find((directory) => directory.id === selectedRootDirectoryId) ??
-      visibleRootDirectories[0] ??
-      null
-    );
-  }, [selectedRootDirectoryId, visibleRootDirectories]);
+    if (!selectedRootDirectoryId) return null;
+    if (selectedRootDirectoryId.navigationVersion !== navigationVersion) return null;
+    return BROWSER_DIRECTORIES.find((directory) => directory.id === selectedRootDirectoryId.value) ?? null;
+  }, [navigationVersion, selectedRootDirectoryId]);
 
   const importSceneAsset = (assetId: SceneAssetId, label: string) => {
     const isMesh = isMeshAssetId(assetId);
@@ -445,18 +446,18 @@ export default function AssetLibraryPanel() {
   };
 
   const openDirectoryFromRoot = (directoryId: BrowserDirectoryId) => {
-    setSelectedRootDirectoryId(directoryId);
     setActiveDirectory(directoryId);
+    setSelectedId(null);
+    setSelectedWorkspacePath(null);
     if (directoryId === "workspace") {
       setWorkspacePath("");
-      setSelectedWorkspacePath(null);
     }
   };
 
-  const openWorkspaceDirectory = (path: string) => {
+  const openWorkspaceDirectory = useCallback((path: string) => {
     setWorkspacePath(normalizeWorkspaceDir(path));
     setSelectedWorkspacePath(null);
-  };
+  }, []);
 
   const executeWorkspaceEntry = (entry: WorkspaceEntry | null) => {
     if (!entry) return;
@@ -505,15 +506,28 @@ export default function AssetLibraryPanel() {
   const breadcrumbItems = useMemo(() => {
     const crumbs: BreadcrumbItem[] = [
       {
-        label: "Root",
-        onClick: activeDirectory === "root" ? undefined : () => setActiveDirectory("root"),
+        label: "Directories",
+        onClick:
+          activeDirectory === "root"
+            ? undefined
+            : () => {
+                setActiveDirectory("root");
+                setSelectedRootDirectoryId(null);
+              },
       },
     ];
+
+    if (activeDirectory === "root") {
+      if (selectedRootDirectory) {
+        crumbs.push({ label: selectedRootDirectory.title });
+      }
+      return crumbs;
+    }
 
     if (activeDirectory === "workspace") {
       crumbs.push({
         label: "Workspace",
-        onClick: workspacePath ? () => setWorkspacePath("") : undefined,
+        onClick: workspacePath ? () => openWorkspaceDirectory("") : undefined,
       });
       const parts = workspacePath.split("/").filter(Boolean);
       let acc = "";
@@ -522,7 +536,7 @@ export default function AssetLibraryPanel() {
         const target = acc;
         crumbs.push({
           label: part,
-          onClick: target === workspacePath ? undefined : () => setWorkspacePath(target),
+          onClick: target === workspacePath ? undefined : () => openWorkspaceDirectory(target),
         });
       }
       return crumbs;
@@ -531,14 +545,14 @@ export default function AssetLibraryPanel() {
     if (activeSection) {
       crumbs.push({
         label: activeSection.title,
-        onClick: () => setActiveDirectory(activeSection.id),
+        onClick: () => setSelectedId(null),
       });
       if (selectedItem) {
         crumbs.push({ label: resolveItemPathName(selectedItem) });
       }
     }
     return crumbs;
-  }, [activeDirectory, activeSection, selectedItem, setActiveDirectory, workspacePath]);
+  }, [activeDirectory, activeSection, openWorkspaceDirectory, selectedItem, selectedRootDirectory, setActiveDirectory, workspacePath]);
 
   const importDisabled =
     activeDirectory === "root"
@@ -645,7 +659,12 @@ export default function AssetLibraryPanel() {
               return (
                 <div
                   key={directory.id}
-                  onClick={() => setSelectedRootDirectoryId(directory.id)}
+                  onClick={() =>
+                    setSelectedRootDirectoryId({
+                      value: directory.id,
+                      navigationVersion,
+                    })
+                  }
                   onDoubleClick={() => openDirectoryFromRoot(directory.id)}
                   style={{
                     border: selected ? "1px solid rgba(120,170,220,0.58)" : "1px solid rgba(255,255,255,0.1)",
@@ -710,7 +729,12 @@ export default function AssetLibraryPanel() {
               return (
                 <div
                   key={item.id}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() =>
+                    setSelectedId({
+                      value: item.id,
+                      navigationVersion,
+                    })
+                  }
                   onDoubleClick={() => {
                     void importAssetItem(item);
                   }}
@@ -797,7 +821,12 @@ export default function AssetLibraryPanel() {
                   return (
                     <div
                       key={entry.path}
-                      onClick={() => setSelectedWorkspacePath(entry.path)}
+                      onClick={() =>
+                        setSelectedWorkspacePath({
+                          value: entry.path,
+                          navigationVersion,
+                        })
+                      }
                       onDoubleClick={() => {
                         void executeWorkspaceEntry(entry);
                       }}

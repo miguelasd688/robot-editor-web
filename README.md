@@ -292,6 +292,7 @@ This section mirrors the original backlog notes and may lag behind current imple
 - [ ] Add and remove properties to existing assets from inspector.
 - [ ] Support link reference-frame changes.
 - [X] Mark joints as motorized/non-motorized.
+- [ ] Rework camera and scene controls, with ui axis.
 - [ ] Adjust debug arrow sizes.
 - [ ] Implement floating actuator joint.
 - [ ] Better simulation top bar (stats, FPS, running state).
@@ -303,6 +304,7 @@ This section mirrors the original backlog notes and may lag behind current imple
 - [ ] Tutorial documentation.
 - [ ] Populate built-in asset library.
 - [/] Improve UI styling, colors, and theme system.
+- [ ] Sounds for collisions and joints and actuators.
 - [ ] Cameras.
 - [ ] Actuators.
 - [ ] Sensors.

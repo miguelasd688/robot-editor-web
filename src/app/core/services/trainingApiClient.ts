@@ -3,11 +3,18 @@ import type {
   TrainingArtifactKind,
   TrainingArtifactSummary,
   TrainingJobEventSummary,
+  TrainingRunnerLogsSummary,
   TrainingJobSummary,
 } from "../plugins/types";
 
 type TrainingJobListResponse = {
   items: TrainingJobSummary[];
+};
+
+type CartpoleDirectLaunchResponse = {
+  recipeId: string;
+  job: TrainingJobSummary;
+  policy: Record<string, unknown>;
 };
 
 type TrainingArtifactListResponse = {
@@ -16,6 +23,15 @@ type TrainingArtifactListResponse = {
 
 type TrainingJobEventListResponse = {
   items: TrainingJobEventSummary[];
+};
+
+export type TrainingRunnerAssetMeta = {
+  assetId: string;
+  filename: string;
+  sizeBytes: number;
+  contentType: string;
+  createdAt: string;
+  uri: string;
 };
 
 const rawBaseUrl = String(import.meta.env.VITE_TRAINING_API_BASE_URL ?? "").trim();
@@ -53,6 +69,24 @@ export async function submitTrainingJobRemote(input: SubmitTrainingJobInput): Pr
     body: JSON.stringify(input),
   });
   return await parseJson<TrainingJobSummary>(response);
+}
+
+export async function submitCartpoleDirectJobRemote(input: {
+  tenantId?: string;
+  experimentName?: string;
+  robotAssetId: string;
+  sceneAssetId?: string;
+  maxSteps?: number;
+  seed?: number;
+  headless?: boolean;
+}): Promise<TrainingJobSummary> {
+  const response = await fetch(buildUrl("/v1/training/recipes/cartpole-direct/jobs"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  const payload = await parseJson<CartpoleDirectLaunchResponse>(response);
+  return payload.job;
 }
 
 export async function listTrainingJobsRemote(): Promise<TrainingJobSummary[]> {
@@ -98,4 +132,41 @@ export async function listTrainingJobEventsRemote(jobId: string, limit = 100): P
   );
   const payload = await parseJson<TrainingJobEventListResponse>(response);
   return payload.items;
+}
+
+export async function getTrainingRunnerLogsRemote(jobId: string, tail = 250): Promise<TrainingRunnerLogsSummary> {
+  const bounded = Math.min(Math.max(20, Math.round(tail)), 2000);
+  const response = await fetch(
+    buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/runner-logs?tail=${bounded}`),
+    {
+      method: "GET",
+      headers: buildHeaders({ accept: "application/json" }),
+    }
+  );
+  return await parseJson<TrainingRunnerLogsSummary>(response);
+}
+
+export async function uploadMjcfTrainingAssetRemote(input: {
+  filename: string;
+  mjcf: string;
+  contentType?: string;
+}): Promise<TrainingRunnerAssetMeta> {
+  const response = await fetch(buildUrl("/v1/training/assets/mjcf"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      filename: input.filename,
+      mjcf: input.mjcf,
+      contentType: input.contentType ?? "application/xml",
+    }),
+  });
+  return await parseJson<TrainingRunnerAssetMeta>(response);
+}
+
+export async function getTrainingAssetMetaRemote(assetId: string): Promise<TrainingRunnerAssetMeta> {
+  const response = await fetch(buildUrl(`/v1/training/assets/${encodeURIComponent(assetId)}/meta`), {
+    method: "GET",
+    headers: buildHeaders({ accept: "application/json" }),
+  });
+  return await parseJson<TrainingRunnerAssetMeta>(response);
 }
