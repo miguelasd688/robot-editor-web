@@ -74,6 +74,15 @@ export type TrainingRecordingMeta = {
   visibleVideoEpoch?: number;
   latestVideoStep?: number;
   latestVideoEpoch?: number;
+  currentClipIndex?: number;
+  states?: Array<{
+    clipIndex: number;
+    stateKey: string;
+    stateName: string;
+    videoStep?: number;
+    videoEpoch?: number;
+    isLatest: boolean;
+  }>;
   previewSource?: string;
   unavailableReason?: string;
   warning?: string;
@@ -182,7 +191,7 @@ export async function listTrainingArtifactsRemote(
 }
 
 export async function listTrainingJobEventsRemote(jobId: string, limit = 100): Promise<TrainingJobEventSummary[]> {
-  const bounded = Math.min(Math.max(1, Math.round(limit)), 500);
+  const bounded = Math.min(Math.max(1, Math.round(limit)), 20_000);
   const response = await fetch(
     buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/events?limit=${bounded}`),
     {
@@ -238,8 +247,21 @@ export async function getTrainingRecordingMetaRemote(jobId: string): Promise<Tra
   return await parseJson<TrainingRecordingMeta>(response);
 }
 
-export async function getTrainingRecordingLatestRemote(jobId: string): Promise<Blob> {
-  const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/recording/latest`), {
+export async function getTrainingRecordingLatestRemote(
+  jobId: string,
+  options?: { clipIndex?: number; state?: string }
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  const clipIndex = Number(options?.clipIndex);
+  if (Number.isFinite(clipIndex) && clipIndex > 0) {
+    params.set("clipIndex", String(Math.max(1, Math.round(clipIndex))));
+  }
+  const state = String(options?.state ?? "").trim();
+  if (state) {
+    params.set("state", state);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/recording/latest${suffix}`), {
     method: "GET",
     headers: buildHeaders({ accept: "video/*,application/octet-stream" }),
   });

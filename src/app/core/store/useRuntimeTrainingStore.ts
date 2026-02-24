@@ -42,6 +42,7 @@ let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
 const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["queued", "provisioning", "running"]);
+const MAX_EVENT_HISTORY_ITEMS = 20_000;
 
 function readPositiveIntEnv(rawValue: unknown, fallback: number) {
   const parsed = Number(rawValue);
@@ -585,7 +586,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     if (isOptimisticLocalJobId(jobId)) {
       const job = get().jobs.find((item) => item.id === jobId) ?? null;
       if (!job) return [];
-      return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), 500));
+      return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS));
     }
 
     if (trainingApiEnabled) {
@@ -602,7 +603,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
 
     const job = get().jobs.find((item) => item.id === jobId) ?? null;
     if (!job) return [];
-    return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), 500));
+    return buildLocalEvents(job).slice(0, Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS));
   },
 
   listTrainingRunnerLogs: async (jobId, tail = 250): Promise<TrainingRunnerLogsSummary> => {
