@@ -57,6 +57,8 @@ export type TrainingRecordingMeta = {
   available: boolean;
   updatedAt: string;
   sizeBytes?: number;
+  durationSec?: number;
+  frameCount?: number;
   contentType?: string;
   recordingSource?: string;
   sourcePath?: string;
@@ -66,6 +68,11 @@ export type TrainingRecordingMeta = {
   latestClipIndex?: number;
   visibleClipIndex?: number;
   lagClips?: number;
+  stepsPerEpoch?: number;
+  visibleVideoStep?: number;
+  visibleVideoEpoch?: number;
+  latestVideoStep?: number;
+  latestVideoEpoch?: number;
   previewSource?: string;
   unavailableReason?: string;
   warning?: string;
@@ -121,11 +128,15 @@ export async function submitTrainingJobRemote(input: SubmitTrainingJobInput): Pr
 export async function submitCartpoleDirectJobRemote(input: {
   tenantId?: string;
   experimentName?: string;
-  robotAssetId: string;
+  robotAssetId?: string;
   sceneAssetId?: string;
   maxSteps?: number;
-  seed?: number;
-  headless?: boolean;
+  numEnvs?: number;
+  checkpoint?: number;
+  stepsPerEpoch?: number;
+  videoLengthMs?: number;
+  videoLength?: number;
+  videoInterval?: number;
 }): Promise<TrainingJobSummary> {
   const response = await fetch(buildUrl("/v1/training/recipes/cartpole-direct/jobs"), {
     method: "POST",

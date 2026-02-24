@@ -303,6 +303,23 @@ function toTextOrEmpty(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function toPositiveIntOrUndefined(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(1, Math.round(parsed));
+}
+
+function toNonNegativeIntOrUndefined(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(0, Math.round(parsed));
+}
+
+function toObjectOrEmpty(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
 function isOptimisticLocalJobId(jobId: string) {
   return jobId.startsWith("local_job_");
 }
@@ -375,18 +392,21 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
       const configObject = input.config ?? {};
+      const configValues = toObjectOrEmpty(configObject);
+      const previewValues = toObjectOrEmpty(configValues.preview);
       const submissionPromise = isCartpoleDirectProfile(configObject)
         ? submitCartpoleDirectJobRemote({
             tenantId: input.tenantId,
             experimentName,
-            robotAssetId: toTextOrEmpty((configObject as Record<string, unknown>).robotAssetId),
-            sceneAssetId: toTextOrEmpty((configObject as Record<string, unknown>).sceneAssetId) || undefined,
+            robotAssetId: toTextOrEmpty(configValues.robotAssetId) || undefined,
+            sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
             maxSteps,
-            seed: input.seed,
-            headless:
-              typeof (configObject as Record<string, unknown>).headless === "boolean"
-                ? ((configObject as Record<string, unknown>).headless as boolean)
-                : true,
+            numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
+            checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
+            stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
+            videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
+            videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
+            videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
           })
         : submitTrainingJobRemote({
             modelName,
