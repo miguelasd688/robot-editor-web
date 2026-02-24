@@ -69,6 +69,7 @@ export type TrainingRecordingMeta = {
   visibleClipIndex?: number;
   lagClips?: number;
   stepsPerEpoch?: number;
+  videoInterval?: number;
   visibleVideoStep?: number;
   visibleVideoEpoch?: number;
   latestVideoStep?: number;
@@ -134,6 +135,7 @@ export async function submitCartpoleDirectJobRemote(input: {
   numEnvs?: number;
   checkpoint?: number;
   stepsPerEpoch?: number;
+  videoLengthSec?: number;
   videoLengthMs?: number;
   videoLength?: number;
   videoInterval?: number;

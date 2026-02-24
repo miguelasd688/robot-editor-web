@@ -404,6 +404,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
             checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
             stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
+            videoLengthSec:
+              toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
+              toPositiveIntOrUndefined(configValues.videoLengthSec),
             videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
             videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
             videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
