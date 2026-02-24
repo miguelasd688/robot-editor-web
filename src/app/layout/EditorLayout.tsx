@@ -147,7 +147,10 @@ export default function EditorLayout() {
       }
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      const selection = window.getSelection();
+      const hasTextSelection = Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
       if (mod && key === "c") {
+        if (hasTextSelection) return;
         e.preventDefault();
         copySelection();
         return;

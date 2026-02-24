@@ -16,10 +16,12 @@ type ConsoleState = {
   maxEntries: number;
   levels: Record<LogLevel, boolean>;
   search: string;
+  searchCaseSensitive: boolean;
   push: (entry: LogEntry) => void;
   clear: () => void;
   toggleLevel: (level: LogLevel) => void;
   setSearch: (value: string) => void;
+  toggleSearchCaseSensitive: () => void;
 };
 
 export const useConsoleStore = create<ConsoleState>((set, get) => ({
@@ -27,6 +29,7 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   maxEntries: 400,
   levels: { info: true, warn: true, error: true, debug: false },
   search: "",
+  searchCaseSensitive: false,
   push: (entry) =>
     set((state) => {
       const next = [...state.entries, entry];
@@ -38,4 +41,6 @@ export const useConsoleStore = create<ConsoleState>((set, get) => ({
   toggleLevel: (level) =>
     set((state) => ({ levels: { ...state.levels, [level]: !state.levels[level] } })),
   setSearch: (value) => set({ search: value }),
+  toggleSearchCaseSensitive: () =>
+    set((state) => ({ searchCaseSensitive: !state.searchCaseSensitive })),
 }));

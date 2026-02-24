@@ -10,30 +10,10 @@ const levelOrder: Array<{ level: LogLevel; label: string }> = [
 export default function ConsoleHeaderActions() {
   const levels = useConsoleStore((s) => s.levels);
   const toggleLevel = useConsoleStore((s) => s.toggleLevel);
-  const search = useConsoleStore((s) => s.search);
-  const setSearch = useConsoleStore((s) => s.setSearch);
   const clear = useConsoleStore((s) => s.clear);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search logs"
-        style={{
-          height: 24,
-          width: 150,
-          borderRadius: 6,
-          border: "1px solid rgba(255,255,255,0.12)",
-          background: "rgba(0,0,0,0.25)",
-          color: "rgba(255,255,255,0.9)",
-          padding: "0 8px",
-          fontSize: 12,
-          outline: "none",
-        }}
-      />
-
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         {levelOrder.map(({ level, label }) => {
           const active = levels[level];
@@ -78,6 +58,10 @@ export default function ConsoleHeaderActions() {
       >
         Clear
       </button>
+
+      <div style={{ fontSize: 11, opacity: 0.68, marginLeft: 4, whiteSpace: "nowrap" }}>
+        Find: Ctrl/Cmd + F
+      </div>
     </div>
   );
 }
