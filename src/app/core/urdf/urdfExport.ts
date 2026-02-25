@@ -518,6 +518,25 @@ const serializeUrdf = (robotName: string, links: Array<{ name: string; inertial?
         attrs.push(`friction="${formatNumber(Number(joint.dynamics.friction))}"`);
       if (attrs.length) lines.push(`    <dynamics ${attrs.join(" ")} />`);
     }
+    if (joint.actuator) {
+      const attrs: string[] = [];
+      if (typeof joint.actuator.enabled === "boolean") {
+        attrs.push(`enabled="${joint.actuator.enabled ? "true" : "false"}"`);
+      }
+      if (Number.isFinite(joint.actuator.stiffness)) {
+        attrs.push(`stiffness="${formatNumber(Number(joint.actuator.stiffness))}"`);
+      }
+      if (Number.isFinite(joint.actuator.damping)) {
+        attrs.push(`damping="${formatNumber(Number(joint.actuator.damping))}"`);
+      }
+      if (Number.isFinite(joint.actuator.initialPosition)) {
+        attrs.push(`initialPosition="${formatNumber(Number(joint.actuator.initialPosition))}"`);
+      }
+      if (joint.actuator.type) {
+        attrs.push(`type="${escapeAttr(joint.actuator.type)}"`);
+      }
+      if (attrs.length) lines.push(`    <actuator ${attrs.join(" ")} />`);
+    }
     lines.push(`  </joint>`);
   }
 
@@ -683,6 +702,7 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
       axis,
       limit: jointUrdf?.limit ? { ...jointUrdf.limit } : undefined,
       dynamics: jointUrdf?.dynamics ? { ...jointUrdf.dynamics } : undefined,
+      actuator: jointUrdf?.actuator ? { ...jointUrdf.actuator } : undefined,
     });
   }
 

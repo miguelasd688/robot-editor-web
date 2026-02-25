@@ -83,6 +83,7 @@ export const CARTPOLE_SAMPLE_URDF = `<?xml version="1.0"?>
     <axis xyz="1 0 0" />
     <limit lower="-180" upper="180" effort="60" velocity="100" />
     <dynamics damping="0.05" friction="0.01" />
+    <actuator enabled="false" />
   </joint>
 </robot>
 `;

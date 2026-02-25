@@ -321,6 +321,19 @@ function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function toObjectOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  const objectValue = toObjectOrEmpty(value);
+  return Object.keys(objectValue).length > 0 ? objectValue : undefined;
+}
+
+function toStringArrayOrUndefined(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const next = value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0);
+  return next.length > 0 ? next : undefined;
+}
+
 function isOptimisticLocalJobId(jobId: string) {
   return jobId.startsWith("local_job_");
 }
@@ -395,10 +408,13 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const configObject = input.config ?? {};
       const configValues = toObjectOrEmpty(configObject);
       const previewValues = toObjectOrEmpty(configValues.preview);
+      const environmentValues = toObjectOrEmpty(configValues.environment);
+      const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
       const submissionPromise = isCartpoleDirectProfile(configObject)
         ? submitCartpoleDirectJobRemote({
             tenantId: input.tenantId,
             experimentName,
+            task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
             robotAssetId: toTextOrEmpty(configValues.robotAssetId) || undefined,
             sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
             maxSteps,
@@ -411,6 +427,10 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
             videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
             videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
+            policy: toObjectOrUndefined(configValues.policy),
+            policyRules: toObjectOrUndefined(configValues.policyRules),
+            environment: toObjectOrUndefined(configValues.environment),
+            extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
           })
         : submitTrainingJobRemote({
             modelName,

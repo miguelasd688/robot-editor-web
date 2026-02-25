@@ -85,6 +85,14 @@ const parseNumber = (value: string | null | undefined, fallback?: number): numbe
   return Number.isFinite(n) ? n : fallback;
 };
 
+const parseBoolean = (value: string | null | undefined): boolean | undefined => {
+  if (value === null || value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") return true;
+  if (normalized === "false" || normalized === "0" || normalized === "no") return false;
+  return undefined;
+};
+
 function readPose(node: Element | null): Pose {
   if (!node) return defaultPose();
   const xyz = parseVector(node.getAttribute("xyz"), [0, 0, 0]);
@@ -182,7 +190,32 @@ function readJoint(node: Element): UrdfJoint | null {
           armature: parseNumber(dynamicsNode.getAttribute("armature"), undefined),
         }
       : undefined;
-  return { name, type, parent, child, origin, axis, limit, dynamics };
+  const actuatorNode = node.querySelector("actuator");
+  const actuatorTypeRaw = actuatorNode?.getAttribute("type")?.trim().toLowerCase();
+  let actuatorType: "position" | "velocity" | "torque" | undefined;
+  if (actuatorTypeRaw === "position" || actuatorTypeRaw === "velocity" || actuatorTypeRaw === "torque") {
+    actuatorType = actuatorTypeRaw;
+  }
+  const actuatorEnabled = parseBoolean(actuatorNode?.getAttribute("enabled"));
+  const actuatorStiffness = parseNumber(actuatorNode?.getAttribute("stiffness"), undefined);
+  const actuatorDamping = parseNumber(actuatorNode?.getAttribute("damping"), undefined);
+  const actuatorInitialPosition = parseNumber(actuatorNode?.getAttribute("initialPosition"), undefined);
+  const actuator =
+    actuatorNode &&
+    (actuatorEnabled !== undefined ||
+      Number.isFinite(actuatorStiffness) ||
+      Number.isFinite(actuatorDamping) ||
+      Number.isFinite(actuatorInitialPosition) ||
+      actuatorType)
+      ? {
+          enabled: actuatorEnabled,
+          stiffness: actuatorStiffness,
+          damping: actuatorDamping,
+          initialPosition: actuatorInitialPosition,
+          type: actuatorType,
+        }
+      : undefined;
+  return { name, type, parent, child, origin, axis, limit, dynamics, actuator };
 }
 
 export function parseUrdfElement(robotEl: Element | null): UrdfParseResult {

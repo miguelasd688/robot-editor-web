@@ -34,6 +34,17 @@ export type TrainingRunnerAssetMeta = {
   uri: string;
 };
 
+export type TrainingMjcfToUsdConversionMeta = {
+  sourceAssetId: string;
+  sourceFilename: string;
+  outputFilename: string;
+  convertedAssetId: string;
+  convertedAssetUri: string;
+  mode: "dry_run" | "isaac_lab";
+  stdoutTail?: string;
+  stderrTail?: string;
+};
+
 export type TrainingPreviewMeta = {
   jobId: string;
   runnerJobId: string | null;
@@ -138,6 +149,7 @@ export async function submitTrainingJobRemote(input: SubmitTrainingJobInput): Pr
 export async function submitCartpoleDirectJobRemote(input: {
   tenantId?: string;
   experimentName?: string;
+  task?: string;
   robotAssetId?: string;
   sceneAssetId?: string;
   maxSteps?: number;
@@ -148,6 +160,10 @@ export async function submitCartpoleDirectJobRemote(input: {
   videoLengthMs?: number;
   videoLength?: number;
   videoInterval?: number;
+  policy?: Record<string, unknown>;
+  policyRules?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  extraArgs?: string[];
 }): Promise<TrainingJobSummary> {
   const response = await fetch(buildUrl("/v1/training/recipes/cartpole-direct/jobs"), {
     method: "POST",
@@ -295,4 +311,33 @@ export async function getTrainingAssetMetaRemote(assetId: string): Promise<Train
     headers: buildHeaders({ accept: "application/json" }),
   });
   return await parseJson<TrainingRunnerAssetMeta>(response);
+}
+
+export async function convertTrainingMjcfAssetToUsdRemote(input: {
+  assetId: string;
+  outputFilename?: string;
+  fixBase?: boolean;
+  importSites?: boolean;
+  makeInstanceable?: boolean;
+  sourceUpAxis?: "auto" | "X" | "Y" | "Z";
+}): Promise<TrainingMjcfToUsdConversionMeta> {
+  const payload: Record<string, unknown> = {};
+  const outputFilename = String(input.outputFilename ?? "").trim();
+  if (outputFilename) payload.outputFilename = outputFilename;
+  if (typeof input.fixBase === "boolean") payload.fixBase = input.fixBase;
+  if (typeof input.importSites === "boolean") payload.importSites = input.importSites;
+  if (typeof input.makeInstanceable === "boolean") payload.makeInstanceable = input.makeInstanceable;
+  if (typeof input.sourceUpAxis === "string" && input.sourceUpAxis.trim()) {
+    payload.sourceUpAxis = input.sourceUpAxis;
+  }
+
+  const response = await fetch(
+    buildUrl(`/v1/training/assets/${encodeURIComponent(input.assetId)}:convert-mjcf-to-usd`),
+    {
+      method: "POST",
+      headers: buildHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    }
+  );
+  return await parseJson<TrainingMjcfToUsdConversionMeta>(response);
 }
