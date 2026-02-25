@@ -4,11 +4,12 @@ import type { EditorEngine } from "../../EditorEngine";
 import { sceneSnapshotToDoc } from "./snapshotAdapter";
 import { applyTransformToObject, objectToTransform } from "./transformAdapter";
 import { ensureUserInstance, setInitialFromObject } from "../../../assets/assetInstance";
-import type { ProjectDoc, SceneNode, Transform } from "../../document/types";
+import type { ProjectDoc, RobotModelSource, SceneNode, Transform, VisualComponent } from "../../document/types";
 import type { InstancePhysics, PhysicsFields } from "../../../assets/types";
 import type { Pose, UrdfInstance } from "../../../urdf/urdfModel";
 import type { UrdfImportOptions } from "../../../urdf/urdfImportOptions";
 import { applyUrdfToObject } from "./urdfAdapter";
+import { applyRgbaToObject, readRgbaFromObject } from "./visualColor";
 import { scalePhysicsForTransform } from "./scalePhysics";
 import { getDocId } from "../../../scene/docIds";
 import { createPrimitiveObject } from "../../../assets/primitives";
@@ -436,6 +437,20 @@ export class ThreeSceneAdapter {
       if (components?.urdfImportOptions !== undefined) {
         obj.userData.urdfImportOptions = components.urdfImportOptions;
       }
+      if (components?.robotModelSource !== undefined) {
+        obj.userData.robotModelSource = components.robotModelSource;
+      }
+      // Apply visual color override when present
+      if (components?.visual !== undefined) {
+        const prevRgba = obj.userData.visualRgba as VisualComponent["rgba"] | null | undefined;
+        const nextRgba = components.visual?.rgba;
+        const changed =
+          prevRgba !== nextRgba &&
+          JSON.stringify(prevRgba ?? null) !== JSON.stringify(nextRgba ?? null);
+        if (changed) {
+          applyRgbaToObject(obj, nextRgba);
+        }
+      }
     }
     this.viewer.refreshViewportShading?.();
     this.viewer.refreshUrdfDebug?.();
@@ -564,6 +579,15 @@ export class ThreeSceneAdapter {
         urdfSource: obj.userData?.urdfSource as string | undefined,
         urdfKey: obj.userData?.urdfKey as string | undefined,
         urdfImportOptions: obj.userData?.urdfImportOptions as UrdfImportOptions | undefined,
+        robotModelSource: obj.userData?.robotModelSource as RobotModelSource | undefined,
+        // Sync visual rgba: prefer explicit userData (set by user/loader), fallback to reading from mesh material
+        visual: ((): VisualComponent | undefined => {
+          const prev = node.components?.visual;
+          const explicitRgba = obj.userData?.visualRgba as VisualComponent["rgba"] | null | undefined;
+          const rgba = explicitRgba ?? (node.kind === "visual" ? readRgbaFromObject(obj) : undefined) ?? undefined;
+          if (!rgba && !prev) return prev;
+          return { ...(prev ?? {}), rgba: rgba ?? prev?.rgba };
+        })(),
       };
     }
   }

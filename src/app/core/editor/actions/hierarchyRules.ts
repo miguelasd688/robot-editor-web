@@ -13,6 +13,14 @@ export function isAllowedLinkParentKind(kind: SceneNode["kind"] | null | undefin
   return kind === "robot" || kind === "joint";
 }
 
+function isAllowedJointParentKind(kind: SceneNode["kind"] | null | undefined) {
+  return kind === "link";
+}
+
+function isAllowedContainerParentKind(kind: SceneNode["kind"] | null | undefined) {
+  return kind === "link";
+}
+
 export function findNearestAncestorByKinds(
   doc: SceneGraph,
   startId: string | null,
@@ -65,6 +73,26 @@ export function validateReparentTarget(
     if (!isAllowedLinkParentKind(target?.kind ?? null)) {
       return { ok: false, reason: "Links can only be parented to Robot, Joint or scene root." };
     }
+  }
+
+  if (source.kind === "joint" && targetId) {
+    if (!isAllowedJointParentKind(target?.kind ?? null)) {
+      return { ok: false, reason: "Joints can only be parented to Link nodes." };
+    }
+  }
+
+  if ((source.kind === "visual" || source.kind === "collision") && targetId) {
+    if (!isAllowedContainerParentKind(target?.kind ?? null)) {
+      return { ok: false, reason: "Visual/Collision nodes can only be parented to Link nodes." };
+    }
+  }
+
+  if (source.kind === "joint" && targetId === null) {
+    return { ok: false, reason: "Joints must be parented to a Link node." };
+  }
+
+  if ((source.kind === "visual" || source.kind === "collision") && targetId === null) {
+    return { ok: false, reason: "Visual/Collision nodes must be parented to a Link node." };
   }
 
   return { ok: true };

@@ -8,6 +8,7 @@ import { useBrowserStore } from "../../app/core/store/useBrowserStore";
 import { useDockStore } from "../../app/core/store/useDockStore";
 import { useFileViewerStore } from "../../app/core/store/useFileViewerStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
+import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import {
   BROWSER_IMPORT_MIME,
   type BrowserImportPayload,
@@ -264,6 +265,13 @@ function workspaceEntryPreview(name: string, isDir: boolean) {
       caption: "URDF",
     };
   }
+  if ([".usd", ".usda", ".usdc", ".usdz"].some((ext) => lower.endsWith(ext))) {
+    return {
+      top: "rgba(120, 100, 180, 0.58)",
+      bottom: "rgba(55, 35, 95, 0.92)",
+      caption: "USD",
+    };
+  }
   if (lower.endsWith(".stl") || lower.endsWith(".dae") || lower.endsWith(".obj")) {
     return {
       top: "rgba(140, 134, 112, 0.58)",
@@ -282,6 +290,7 @@ function workspaceEntryIcon(name: string, isDir: boolean) {
   if (isDir) return "📁";
   const lower = name.toLowerCase();
   if (lower.endsWith(".urdf")) return "🤖";
+  if ([".usd", ".usda", ".usdc", ".usdz"].some((ext) => lower.endsWith(ext))) return "🔷";
   if (lower.endsWith(".stl") || lower.endsWith(".dae") || lower.endsWith(".obj")) return "🧊";
   return "📄";
 }
@@ -302,6 +311,7 @@ export default function AssetLibraryPanel() {
   const importFiles = useAssetStore((s) => s.importFiles);
   const setURDF = useAssetStore((s) => s.setURDF);
   const requestUrdfImport = useUrdfImportDialogStore((s) => s.requestImport);
+  const requestUsdImport = useUsdImportDialogStore((s) => s.requestImport);
   const setActiveFile = useFileViewerStore((s) => s.setActiveFile);
   const openPanel = useDockStore((s) => s.openPanel);
   const isOpen = useDockStore((s) => s.isOpen);
@@ -355,7 +365,7 @@ export default function AssetLibraryPanel() {
           path: node.path,
           description: isDir ? "Directory" : node.path,
           icon: workspaceEntryIcon(node.name, isDir),
-          actionLabel: isDir ? "Open" : node.name.toLowerCase().endsWith(".urdf") ? "Import" : "Open",
+          actionLabel: isDir ? "Open" : (node.name.toLowerCase().endsWith(".urdf") || [".usd", ".usda", ".usdc", ".usdz"].some((ext) => node.name.toLowerCase().endsWith(ext))) ? "Import" : "Open",
           preview,
         } satisfies WorkspaceEntry;
       });
@@ -402,6 +412,8 @@ export default function AssetLibraryPanel() {
     openPanel(dock, "editor");
   };
 
+  const USD_EXTS = [".usd", ".usda", ".usdc", ".usdz"];
+
   const importWorkspaceFile = (path: string) => {
     const lower = path.toLowerCase();
     if (lower.endsWith(".urdf")) {
@@ -411,6 +423,16 @@ export default function AssetLibraryPanel() {
         source: "browser",
       });
       logInfo("Browser import request: Workspace URDF", { scope: "assets", data: { urdfKey: path } });
+      return;
+    }
+    if (USD_EXTS.some((ext) => lower.endsWith(ext))) {
+      const store = useAssetStore.getState();
+      store.setUSD(path);
+      requestUsdImport({
+        usdKey: path,
+        source: "browser",
+      });
+      logInfo("Browser import request: Workspace USD", { scope: "assets", data: { usdKey: path } });
       return;
     }
     openFileInEditor(path);
@@ -489,8 +511,10 @@ export default function AssetLibraryPanel() {
 
   const dragPayloadFromWorkspaceEntry = (entry: WorkspaceEntry): BrowserImportPayload | null => {
     if (entry.kind !== "file") return null;
-    if (!entry.path.toLowerCase().endsWith(".urdf")) return null;
-    return { kind: "workspace-urdf", path: entry.path, label: entry.name };
+    const lower = entry.path.toLowerCase();
+    if (lower.endsWith(".urdf")) return { kind: "workspace-urdf", path: entry.path, label: entry.name };
+    if (USD_EXTS.some((ext) => lower.endsWith(ext))) return { kind: "workspace-usd", path: entry.path, label: entry.name };
+    return null;
   };
 
   const onCardDragStart = (event: DragEvent<HTMLElement>, payload: BrowserImportPayload | null) => {

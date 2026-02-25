@@ -50,7 +50,7 @@ export function ExplorerToolbar(props: {
           lineHeight: 1.2,
           flex: "0 0 auto",
         }}
-        title="Load selected URDF from workspace"
+        title="Load selected robot file from workspace (URDF, USD2026)"
       >
         Load URDF
       </button>

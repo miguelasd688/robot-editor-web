@@ -3,36 +3,50 @@ import { useAssetStore } from "../../app/core/store/useAssetStore";
 import { useBrowserStore } from "../../app/core/store/useBrowserStore";
 import { useDockStore } from "../../app/core/store/useDockStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
+import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import { ExplorerToolbar } from "./ui/Toolbar";
 import { useWorkspaceImport } from "./services/workspaceImport";
+
+const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
+const isUsdPath = (p: string) => USD_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(ext));
 
 export default function ExplorerPanel() {
   const assets = useAssetStore((s) => s.assets);
   const urdfKey = useAssetStore((s) => s.urdfKey);
+  const usdKey = useAssetStore((s) => s.usdKey);
   const importFiles = useAssetStore((s) => s.importFiles);
   const openPanel = useDockStore((s) => s.openPanel);
   const isOpen = useDockStore((s) => s.isOpen);
   const activeDirectory = useBrowserStore((s) => s.activeDirectory);
   const setActiveDirectory = useBrowserStore((s) => s.setActiveDirectory);
   const requestUrdfImport = useUrdfImportDialogStore((s) => s.requestImport);
+  const requestUsdImport = useUsdImportDialogStore((s) => s.requestImport);
 
   const { fileInputRef, onImportClick, onImportChange } = useWorkspaceImport(importFiles);
 
-  const onLoadURDF = () => {
-    if (!urdfKey) {
-      alert("No URDF selected. Import a folder/files with a .urdf and select it.");
+  /** "Load file" button — handles URDF and USD based on what's selected */
+  const onLoadFile = () => {
+    if (usdKey && isUsdPath(usdKey)) {
+      const entry = assets[usdKey];
+      if (!entry) {
+        alert("Selected USD file not found in workspace.");
+        return;
+      }
+      requestUsdImport({ usdKey, source: "directories" });
       return;
     }
 
-    const entry = assets[urdfKey];
-    if (!entry) {
-      alert("Selected URDF not found in workspace.");
+    if (urdfKey) {
+      const entry = assets[urdfKey];
+      if (!entry) {
+        alert("Selected URDF not found in workspace.");
+        return;
+      }
+      requestUrdfImport({ urdfKey, source: "directories" });
       return;
     }
-    requestUrdfImport({
-      urdfKey,
-      source: "directories",
-    });
+
+    alert("No robot file selected. Import a workspace folder containing a .urdf or .usd file.");
   };
 
   const onDirectoryClick = (directoryId: BrowserDirectoryId) => {
@@ -46,7 +60,7 @@ export default function ExplorerPanel() {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
       <ExplorerToolbar
         onImportClick={onImportClick}
-        onLoadURDF={onLoadURDF}
+        onLoadURDF={onLoadFile}
         fileInput={
           <input
             ref={fileInputRef}

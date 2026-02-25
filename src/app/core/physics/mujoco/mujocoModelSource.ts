@@ -284,6 +284,23 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
         remap = meshRemap;
       }
     }
+    // Build per-link rgba overrides from Three.js userData (set when user edits visual color).
+    const visualRgbaByLinkName: Record<string, [number, number, number, number]> = {};
+    for (const root of roots ?? []) {
+      root.traverse((obj) => {
+        const anyObj = obj as any;
+        if (!anyObj.isURDFLink) return;
+        const linkName: string = typeof anyObj.urdfName === "string" ? anyObj.urdfName : obj.name;
+        obj.traverse((child) => {
+          if (linkName in visualRgbaByLinkName) return;
+          const anyChild = child as any;
+          if (anyChild.isURDFVisual || child.userData?.urdfRole === "visual") {
+            const rgba = child.userData?.visualRgba as [number, number, number, number] | null | undefined;
+            if (rgba) visualRgbaByLinkName[linkName] = rgba;
+          }
+        });
+      });
+    }
     logInfo("MuJoCo: parsing URDF", { scope: "mujoco" });
     const { xml, warnings: urdfWarnings, nameMap } = convertUrdfToMjcf({
       urdf: content,
@@ -305,6 +322,7 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
       defaultJointArmature,
       defaultGeomFriction,
       geomFrictionByLink: geomFrictionByLink ?? undefined,
+      visualRgbaByLinkName: Object.keys(visualRgbaByLinkName).length ? visualRgbaByLinkName : undefined,
     });
     warnings.push(...urdfWarnings);
     if (!xml) {

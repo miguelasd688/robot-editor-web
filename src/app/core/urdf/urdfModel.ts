@@ -10,6 +10,8 @@ export type UrdfCollision = {
   name?: string;
   origin: Pose;
   geom: UrdfGeom;
+  /** RGBA color parsed from <material><color rgba="..."/> — only present on visual elements. */
+  rgba?: [number, number, number, number];
 };
 
 export type UrdfInertia = {
@@ -144,6 +146,19 @@ function readGeom(node: Element | null): UrdfGeom | null {
   return null;
 }
 
+function readVisualRgba(node: Element): [number, number, number, number] | undefined {
+  const colorEl = node.querySelector("material > color");
+  if (!colorEl) return undefined;
+  const parts = (colorEl.getAttribute("rgba") ?? "").trim().split(/\s+/).map(Number);
+  if (parts.length < 3) return undefined;
+  return [
+    Number.isFinite(parts[0]) ? Math.max(0, Math.min(1, parts[0])) : 1,
+    Number.isFinite(parts[1]) ? Math.max(0, Math.min(1, parts[1])) : 1,
+    Number.isFinite(parts[2]) ? Math.max(0, Math.min(1, parts[2])) : 1,
+    Number.isFinite(parts[3]) ? Math.max(0, Math.min(1, parts[3])) : 1,
+  ];
+}
+
 function readCollisions(link: Element, tagName: "collision" | "visual"): UrdfCollision[] {
   const collisions: UrdfCollision[] = [];
   for (const node of Array.from(link.querySelectorAll(tagName))) {
@@ -151,7 +166,8 @@ function readCollisions(link: Element, tagName: "collision" | "visual"): UrdfCol
     const geom = readGeom(node.querySelector("geometry"));
     if (!geom) continue;
     const name = node.getAttribute("name") ?? undefined;
-    collisions.push({ name, origin, geom });
+    const rgba = tagName === "visual" ? readVisualRgba(node) : undefined;
+    collisions.push({ name, origin, geom, rgba });
   }
   return collisions;
 }

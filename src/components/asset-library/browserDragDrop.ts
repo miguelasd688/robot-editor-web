@@ -17,6 +17,11 @@ export type BrowserImportPayload =
       kind: "workspace-urdf";
       path: string;
       label: string;
+    }
+  | {
+      kind: "workspace-usd";
+      path: string;
+      label: string;
     };
 
 export function encodeBrowserImportPayload(payload: BrowserImportPayload) {
@@ -44,6 +49,13 @@ export function decodeBrowserImportPayload(raw: string | null | undefined): Brow
     if (parsed.kind === "workspace-urdf" && typeof parsed.path === "string" && typeof parsed.label === "string") {
       return {
         kind: "workspace-urdf",
+        path: parsed.path,
+        label: parsed.label,
+      };
+    }
+    if (parsed.kind === "workspace-usd" && typeof parsed.path === "string" && typeof parsed.label === "string") {
+      return {
+        kind: "workspace-usd",
         path: parsed.path,
         label: parsed.label,
       };

@@ -21,6 +21,8 @@ export type UrdfToMjcfOptions = {
   defaultGeomFriction?: number;
   geomFrictionByLink?: Record<string, number>;
   meshBounds?: Record<string, { size: [number, number, number]; radius: number; center: [number, number, number] }>;
+  /** Per-link RGBA override [r, g, b, a] in 0–1 range. Applied to all geoms of that link. */
+  visualRgbaByLinkName?: Record<string, [number, number, number, number]>;
 };
 
 export type UrdfToMjcfResult = {

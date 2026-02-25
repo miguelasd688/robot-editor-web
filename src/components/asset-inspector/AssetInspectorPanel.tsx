@@ -3,7 +3,7 @@ import { useAppStore } from "../../app/core/store/useAppStore";
 import { useSceneStore } from "../../app/core/store/useSceneStore";
 import { useAssetInstanceStore } from "../../app/core/store/useAssetInstanceStore";
 import { useMujocoStore } from "../../app/core/store/useMujocoStore";
-import type { SceneNode } from "../../app/core/editor/document/types";
+import type { SceneNode, RgbaColor } from "../../app/core/editor/document/types";
 import type { UrdfInstance, UrdfJoint, UrdfLink } from "../../app/core/urdf/urdfModel";
 import { reparentNode } from "../../app/core/editor/actions/sceneHierarchyActions";
 import { editorEngine } from "../../app/core/editor/engineSingleton";
@@ -44,6 +44,20 @@ const JOINT_AXIS_PRESET_EPSILON = 1e-6;
 function clampNumber(value: string) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function rgbaToHex(rgba: RgbaColor): string {
+  const r = Math.round(Math.min(1, Math.max(0, rgba[0])) * 255).toString(16).padStart(2, "0");
+  const g = Math.round(Math.min(1, Math.max(0, rgba[1])) * 255).toString(16).padStart(2, "0");
+  const b = Math.round(Math.min(1, Math.max(0, rgba[2])) * 255).toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
+}
+
+function hexToRgba(hex: string, alpha: number): RgbaColor {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return [r, g, b, Math.min(1, Math.max(0, alpha))];
 }
 
 function findRobotAncestorId(nodes: Record<string, SceneNode>, startId: string | null | undefined): string | null {
@@ -677,6 +691,13 @@ export default function AssetInspectorPanel() {
     if (changed) markSceneDirty();
   };
 
+  const handleVisualColorChange = (visualNodeId: string, rgba: RgbaColor | undefined) => {
+    const node = nodes[visualNodeId];
+    const current = node?.components?.visual ?? {};
+    editorEngine.setNodeVisual(visualNodeId, { ...current, rgba }, { recordHistory: true, reason: "visual.rgba" });
+    markSceneDirty();
+  };
+
   if (!selectedId) {
     return (
       <div style={{ padding: 12, opacity: 0.7, fontSize: 13 }}>
@@ -1088,19 +1109,71 @@ export default function AssetInspectorPanel() {
                   {urdf.link.visuals.length === 0 && (
                     <div style={{ fontSize: 12, opacity: 0.6 }}>No visual elements.</div>
                   )}
-                  {urdf.link.visuals.map((visual, index) => (
-                    <div key={`visual-${index}`} style={{ marginBottom: 10, paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
-                        Visual {index + 1} • {visual.geom.kind}
+                  {urdf.link.visuals.map((visual, index) => {
+                    const visualNode = linkVisualChildren[index];
+                    const currentRgba = visualNode?.components?.visual?.rgba;
+                    return (
+                      <div key={`visual-${index}`} style={{ marginBottom: 10, paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
+                          Visual {index + 1} • {visual.geom.kind}
+                        </div>
+                        {renderPoseEditor(visual.origin, (nextPose) =>
+                          updateLinkVisual(index, (item) => ({ ...item, origin: nextPose }))
+                        )}
+                        {renderGeomEditor(visual.geom, (nextGeom) =>
+                          updateLinkVisual(index, (item) => ({ ...item, geom: nextGeom }))
+                        )}
+                        {visualNode && (
+                          <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginTop: 4 }}>
+                            <div style={{ fontSize: 12, opacity: 0.75 }}>Color</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input
+                                type="color"
+                                value={currentRgba ? rgbaToHex(currentRgba) : "#888888"}
+                                onChange={(e) => {
+                                  const alpha = currentRgba?.[3] ?? 1;
+                                  handleVisualColorChange(visualNode.id, hexToRgba(e.target.value, alpha));
+                                }}
+                                style={{ width: 32, height: 24, borderRadius: 4, border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", padding: 2, background: "transparent" }}
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.05}
+                                value={(currentRgba?.[3] ?? 1).toFixed(2)}
+                                onChange={(e) => {
+                                  const alpha = Math.min(1, Math.max(0, parseFloat(e.target.value) || 1));
+                                  const hex = currentRgba ? rgbaToHex(currentRgba) : "#888888";
+                                  handleVisualColorChange(visualNode.id, hexToRgba(hex, alpha));
+                                }}
+                                style={{ ...inputStyle, width: 52 }}
+                                title="Opacity (0–1)"
+                              />
+                              {currentRgba && (
+                                <button
+                                  onClick={() => handleVisualColorChange(visualNode.id, undefined)}
+                                  style={{
+                                    height: 24,
+                                    padding: "0 8px",
+                                    borderRadius: 4,
+                                    border: "1px solid rgba(255,255,255,0.12)",
+                                    background: "rgba(255,255,255,0.06)",
+                                    color: "rgba(255,255,255,0.7)",
+                                    cursor: "pointer",
+                                    fontSize: 11,
+                                  }}
+                                  title="Reset to default color"
+                                >
+                                  Reset
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      {renderPoseEditor(visual.origin, (nextPose) =>
-                        updateLinkVisual(index, (item) => ({ ...item, origin: nextPose }))
-                      )}
-                      {renderGeomEditor(visual.geom, (nextGeom) =>
-                        updateLinkVisual(index, (item) => ({ ...item, geom: nextGeom }))
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

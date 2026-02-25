@@ -6,7 +6,10 @@ import { useAssetStore } from "../../app/core/store/useAssetStore";
 import { useSceneStore } from "../../app/core/store/useSceneStore";
 import { useMujocoStore } from "../../app/core/store/useMujocoStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
+import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import { loadWorkspaceURDFIntoViewer } from "../../app/core/loaders/urdfLoader";
+import { loadWorkspaceUSDIntoViewer } from "../../app/core/loaders/usdLoader";
+import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 import { logInfo } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import { DarkSelect } from "../../app/ui/DarkSelect";
@@ -26,6 +29,7 @@ const pointerPointFromRay = (ray: { origin: { x: number; y: number; z: number };
 
 const dropHintFromPayload = (payload: BrowserImportPayload) => {
   if (payload.kind === "workspace-urdf") return `Drop to configure URDF import: ${payload.label}`;
+  if (payload.kind === "workspace-usd") return `Drop to configure USD import: ${payload.label}`;
   if (payload.kind === "sample") return `Drop to configure sample import: ${payload.label}`;
   return `Drop to import: ${payload.label}`;
 };
@@ -178,6 +182,127 @@ function UrdfImportDialogOverlay(props: {
   );
 }
 
+type UsdDialogFormOptions = {
+  floatingBase: boolean;
+  selfCollision: boolean;
+  sourceUpAxis: "auto" | "X" | "Y" | "Z";
+};
+
+function UsdImportDialogOverlay(props: {
+  usdKey: string | null;
+  initialOptions: UsdDialogFormOptions;
+  onCancel: () => void;
+  onConfirm: (options: UsdDialogFormOptions) => void;
+}) {
+  const { usdKey, initialOptions, onCancel, onConfirm } = props;
+  const [floatingBase, setFloatingBase] = useState(initialOptions.floatingBase);
+  const [selfCollision, setSelfCollision] = useState(initialOptions.selfCollision);
+  const [sourceUpAxis, setSourceUpAxis] = useState<"auto" | "X" | "Y" | "Z">(initialOptions.sourceUpAxis);
+
+  return (
+    <div
+      onMouseDown={() => onCancel()}
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(4,8,12,0.52)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 40,
+        padding: 16,
+      }}
+    >
+      <div
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: "min(352px, 100%)",
+          borderRadius: 12,
+          background: "rgba(12,16,22,0.98)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          color: "rgba(255,255,255,0.9)",
+          boxShadow: "0 14px 40px rgba(0,0,0,0.45)",
+          padding: 16,
+          display: "grid",
+          gap: 12,
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Import USD options</div>
+        <div style={{ fontSize: 12, opacity: 0.7 }}>Configure how this USD file is loaded into the editor.</div>
+        <div
+          style={{
+            fontSize: 11,
+            opacity: 0.66,
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 8,
+            padding: "6px 8px",
+            background: "rgba(255,255,255,0.04)",
+          }}
+          title={usdKey ?? undefined}
+        >
+          {usdKey ?? "No USD file selected"}
+        </div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.35 }}>
+          <input type="checkbox" checked={floatingBase} onChange={(e) => setFloatingBase(e.target.checked)} />
+          Floating base (free root joint)
+        </label>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.35 }}>
+          <input type="checkbox" checked={selfCollision} onChange={(e) => setSelfCollision(e.target.checked)} />
+          Enable self-collisions (robot vs robot)
+        </label>
+        <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+          <span>Source up axis</span>
+          <DarkSelect
+            value={sourceUpAxis}
+            onChange={(e) => setSourceUpAxis(e.target.value as "auto" | "X" | "Y" | "Z")}
+            style={{ background: "rgba(12,16,22,0.98)" }}
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="Y">Y-up</option>
+            <option value="Z">Z-up (ROS / Blender)</option>
+            <option value="X">X-up</option>
+          </DarkSelect>
+        </label>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button
+            onClick={() => onCancel()}
+            style={{
+              height: 28,
+              padding: "0 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.12)",
+              background: "rgba(255,255,255,0.06)",
+              color: "rgba(255,255,255,0.9)",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm({ floatingBase, selfCollision, sourceUpAxis })}
+            disabled={!usdKey}
+            style={{
+              height: 28,
+              padding: "0 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(130,90,255,0.4)",
+              background: "rgba(130,90,255,0.25)",
+              color: "rgba(255,255,255,0.95)",
+              cursor: usdKey ? "pointer" : "default",
+              opacity: usdKey ? 1 : 0.5,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            Import USD
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ViewportPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -199,6 +324,14 @@ export default function ViewportPanel() {
   const urdfOptions = useAssetStore((s) => s.urdfOptions);
   const setURDF = useAssetStore((s) => s.setURDF);
   const setURDFOptions = useAssetStore((s) => s.setURDFOptions);
+  const requestUsdImport = useUsdImportDialogStore((s) => s.requestImport);
+  const usdDialogOpen = useUsdImportDialogStore((s) => s.isOpen);
+  const usdDialogKey = useUsdImportDialogStore((s) => s.usdKey);
+  const usdDialogOptionOverrides = useUsdImportDialogStore((s) => s.optionOverrides);
+  const closeUsdImportDialog = useUsdImportDialogStore((s) => s.close);
+  const usdOptions = useAssetStore((s) => s.usdOptions);
+  const setUSD = useAssetStore((s) => s.setUSD);
+  const setUSDOptions = useAssetStore((s) => s.setUSDOptions);
 
   const viewer = useMemo(() => new Viewer(), []);
   const adapterRef = useRef<ThreeSceneAdapter | null>(null);
@@ -309,8 +442,20 @@ export default function ViewportPanel() {
         });
         logInfo(`Viewport drop import request: ${payload.path}`, { scope: "assets", data: { urdfKey: payload.path } });
       }
+
+      if (payload.kind === "workspace-usd") {
+        const assetStore = useAssetStore.getState();
+        const entry = assetStore.assets[payload.path];
+        if (!entry) return;
+        assetStore.setUSD(payload.path);
+        requestUsdImport({
+          usdKey: payload.path,
+          source: "viewport-drop",
+        });
+        logInfo(`Viewport drop USD import request: ${payload.path}`, { scope: "assets", data: { usdKey: payload.path } });
+      }
     },
-    [requestUrdfImport]
+    [requestUrdfImport, requestUsdImport]
   );
 
   const onViewportDragEnter = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
@@ -362,6 +507,32 @@ export default function ViewportPanel() {
       collisionMode: toUiCollisionMode(overrides.collisionMode ?? urdfOptions.collisionMode),
     };
   }, [urdfDialogOptionOverrides, urdfOptions]);
+
+  const usdDialogInitialOptions = useMemo<UsdDialogFormOptions>(() => {
+    const overrides = usdDialogOptionOverrides ?? {};
+    return {
+      floatingBase: overrides.floatingBase ?? usdOptions.floatingBase ?? false,
+      selfCollision: overrides.selfCollision ?? usdOptions.selfCollision ?? false,
+      sourceUpAxis: overrides.sourceUpAxis ?? usdOptions.sourceUpAxis ?? "auto",
+    };
+  }, [usdDialogOptionOverrides, usdOptions]);
+
+  const confirmLoadUSD = useCallback(async (selectedOptions: UsdDialogFormOptions) => {
+    if (!usdDialogKey) return;
+    setUSD(usdDialogKey);
+    setUSDOptions(selectedOptions);
+    closeUsdImportDialog();
+    const assetStore = useAssetStore.getState();
+    await loadWorkspaceUSDIntoViewer({
+      usdKey: usdDialogKey,
+      assets: assetStore.assets,
+      importOptions: selectedOptions satisfies UsdImportOptions,
+    });
+    logInfo("Viewport USD import confirmed", {
+      scope: "assets",
+      data: { usdKey: usdDialogKey, options: selectedOptions },
+    });
+  }, [closeUsdImportDialog, setUSD, setUSDOptions, usdDialogKey]);
 
   const confirmLoadURDF = useCallback(async (selectedOptions: UrdfDialogFormOptions) => {
     if (!urdfDialogKey) return;
@@ -687,6 +858,17 @@ export default function ViewportPanel() {
             onCancel={closeUrdfImportDialog}
             onConfirm={(options) => {
               void confirmLoadURDF(options);
+            }}
+          />
+        )}
+        {usdDialogOpen && (
+          <UsdImportDialogOverlay
+            key={`${usdDialogKey ?? "usd-dialog"}-${usdDialogInitialOptions.floatingBase ? 1 : 0}-${usdDialogInitialOptions.selfCollision ? 1 : 0}-${usdDialogInitialOptions.sourceUpAxis}`}
+            usdKey={usdDialogKey}
+            initialOptions={usdDialogInitialOptions}
+            onCancel={closeUsdImportDialog}
+            onConfirm={(options) => {
+              void confirmLoadUSD(options);
             }}
           />
         )}

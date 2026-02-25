@@ -8,15 +8,18 @@ import { getThreeAdapter } from "../editor/adapters/three/adapterSingleton";
 import { useMujocoStore } from "./useMujocoStore";
 import { logError, logInfo } from "../services/logger";
 
-export type LoaderType = "urdf"; // luego: "mujoco" | "usd" | "gltf" | ...
+export type LoaderType = "urdf" | "usd"; // luego: "mujoco" | "gltf" | ...
 
 export type LoadContext = { viewer: Viewer };
 export type LoaderFn<TParams = unknown> = (ctx: LoadContext, params: TParams) => Promise<THREE.Object3D>;
+export type PostLoadHook = (ctx: LoadContext) => Promise<void>;
 
 type LoaderState = {
   loaders: Partial<Record<LoaderType, LoaderFn<any>>>;
+  postLoadHooks: Partial<Record<LoaderType, PostLoadHook>>;
 
   registerLoader: <TParams>(type: LoaderType, fn: LoaderFn<TParams>) => void;
+  registerPostLoadHook: (type: LoaderType, hook: PostLoadHook) => void;
 
   load: <TParams>(
     type: LoaderType,
@@ -41,7 +44,8 @@ async function loadWithViewer<TParams>(
     return null;
   }
 
-  const loader = useLoaderStore.getState().loaders[type];
+  const { loaders, postLoadHooks } = useLoaderStore.getState();
+  const loader = loaders[type];
   if (!loader) throw new Error(`No loader registered for type "${type}"`);
 
   useLoaderStore.setState({ isLoading: true, lastError: null });
@@ -60,10 +64,9 @@ async function loadWithViewer<TParams>(
     useMujocoStore.getState().markSceneDirty();
     viewer.refreshUrdfDebug?.();
 
-    if (type === "urdf") {
-      useAppStore.getState().pause();
-      await useMujocoStore.getState().reload();
-    }
+    // Run format-specific post-load hook (registered via registerPostLoadHook)
+    const hook = postLoadHooks[type];
+    if (hook) await hook({ viewer });
 
     logInfo(`Loader: ${type} completed`, { scope: "loader", data: { rootId } });
     return { rootId };
@@ -86,10 +89,12 @@ function syncSnapshot(viewer: Viewer | null) {
 
 export const useLoaderStore = create<LoaderState>((set) => ({
   loaders: {},
+  postLoadHooks: {},
   isLoading: false,
   lastError: null,
 
   registerLoader: (type, fn) => set((s) => ({ loaders: { ...s.loaders, [type]: fn } })),
+  registerPostLoadHook: (type, hook) => set((s) => ({ postLoadHooks: { ...s.postLoadHooks, [type]: hook } })),
 
   load: async (type, params, opts) => {
     const viewer = useAppStore.getState().viewer;

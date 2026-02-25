@@ -181,6 +181,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
       ? options.defaultGeomFriction
       : null;
   const geomFrictionByLink = options.geomFrictionByLink ?? null;
+  const visualRgbaByLinkName = options.visualRgbaByLinkName ?? null;
   const rootTransform = options.rootTransform ?? null;
   const meshBounds = options.meshBounds ?? null;
   const debugLog = (message: string, data?: unknown) => {
@@ -499,21 +500,25 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
         rawFriction !== null
           ? ` friction="${Math.max(0, Number.isFinite(frictionValue) ? frictionValue : 0.5).toFixed(6)} 0.005 0.0001"${contactAttr}`
           : "";
+      const linkRgba = visualRgbaByLinkName?.[link.name];
+      const rgbaAttr = linkRgba
+        ? ` rgba="${linkRgba[0].toFixed(4)} ${linkRgba[1].toFixed(4)} ${linkRgba[2].toFixed(4)} ${linkRgba[3].toFixed(4)}"`
+        : "";
       if (geom.kind === "box") {
         const hx = geom.size[0] / 2;
         const hy = geom.size[1] / 2;
         const hz = geom.size[2] / 2;
         worldLines.push(
-          `${pad}  <geom name="${geomName}" type="box" pos="${pos}" quat="${quat}" size="${hx.toFixed(6)} ${hy.toFixed(6)} ${hz.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+          `${pad}  <geom name="${geomName}" type="box" pos="${pos}" quat="${quat}" size="${hx.toFixed(6)} ${hy.toFixed(6)} ${hz.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
         );
       } else if (geom.kind === "sphere") {
         worldLines.push(
-          `${pad}  <geom name="${geomName}" type="sphere" pos="${pos}" quat="${quat}" size="${geom.radius.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+          `${pad}  <geom name="${geomName}" type="sphere" pos="${pos}" quat="${quat}" size="${geom.radius.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
         );
       } else if (geom.kind === "cylinder") {
         const half = geom.length / 2;
         worldLines.push(
-          `${pad}  <geom name="${geomName}" type="cylinder" pos="${pos}" quat="${quat}" size="${geom.radius.toFixed(6)} ${half.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+          `${pad}  <geom name="${geomName}" type="cylinder" pos="${pos}" quat="${quat}" size="${geom.radius.toFixed(6)} ${half.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
         );
       } else if (geom.kind === "mesh") {
         if (meshMode === "mesh") {
@@ -524,7 +529,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
           }
           const meshName = getMeshName(file, geom.scale);
           worldLines.push(
-            `${pad}  <geom name="${geomName}" type="mesh" pos="${pos}" quat="${quat}" mesh="${meshName}"${collisionAttr}${frictionAttr} />`
+            `${pad}  <geom name="${geomName}" type="mesh" pos="${pos}" quat="${quat}" mesh="${meshName}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
           );
         } else {
           const scale = geom.scale ?? [1, 1, 1];
@@ -553,7 +558,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
             worldLines.push(
               `${pad}  <geom name="${geomName}" type="box" pos="${proxyPos}" quat="${quat}" size="${hx.toFixed(
                 6
-              )} ${hy.toFixed(6)} ${hz.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+              )} ${hy.toFixed(6)} ${hz.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
             );
           } else if (proxyMode === "cylinder") {
             const dims = size ?? [radius * 2, radius * 2, radius * 2];
@@ -570,11 +575,11 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
             worldLines.push(
               `${pad}  <geom name="${geomName}" type="cylinder" pos="${proxyPos}" quat="${proxyQuatStr}" size="${cylRadius.toFixed(
                 6
-              )} ${cylHalf.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+              )} ${cylHalf.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
             );
           } else {
             worldLines.push(
-              `${pad}  <geom name="${geomName}" type="sphere" pos="${proxyPos}" quat="${quat}" size="${radius.toFixed(6)}"${collisionAttr}${frictionAttr} />`
+              `${pad}  <geom name="${geomName}" type="sphere" pos="${proxyPos}" quat="${quat}" size="${radius.toFixed(6)}"${collisionAttr}${frictionAttr}${rgbaAttr} />`
             );
           }
         }
