@@ -45,6 +45,40 @@ export type TrainingMjcfToUsdConversionMeta = {
   stderrTail?: string;
 };
 
+export type UsdJointInfo = {
+  name: string;
+  type: "revolute" | "prismatic" | "fixed" | "other";
+  axis: [number, number, number];
+  parentBody?: string | null;
+  childBody?: string | null;
+};
+
+export type UsdIntrospectionMeta = {
+  assetId: string;
+  filename: string;
+  joints: UsdJointInfo[];
+  rootBodies: string[];
+};
+
+export type DerivedTrainingConfig = {
+  slider_dof_name?: string;
+  pole_dof_name?: string;
+  control_mode?: string;
+  dof_count?: number;
+};
+
+export type ConfigDerivationPreview = {
+  assetId: string;
+  introspection: {
+    jointCount: number;
+    joints: UsdJointInfo[];
+    rootBodies: string[];
+  };
+  derivedConfig: DerivedTrainingConfig;
+  taskConfig: Record<string, unknown>;
+  message: string;
+};
+
 export type TrainingPreviewMeta = {
   jobId: string;
   runnerJobId: string | null;
@@ -340,4 +374,37 @@ export async function convertTrainingMjcfAssetToUsdRemote(input: {
     }
   );
   return await parseJson<TrainingMjcfToUsdConversionMeta>(response);
+}
+
+export async function introspectTrainingAssetRemote(
+  assetId: string
+): Promise<UsdIntrospectionMeta> {
+  const response = await fetch(
+    buildUrl(`/v1/training/assets/${encodeURIComponent(assetId)}/introspect`),
+    {
+      method: "GET",
+      headers: buildHeaders({ accept: "application/json" }),
+    }
+  );
+  return await parseJson<UsdIntrospectionMeta>(response);
+}
+
+export async function deriveTrainingConfigRemote(input: {
+  convertedAssetId?: string;
+  assetId?: string;
+  overrides?: Record<string, unknown>;
+}): Promise<ConfigDerivationPreview> {
+  const payload: Record<string, unknown> = {};
+  const assetId = String(input.convertedAssetId ?? input.assetId ?? "").trim();
+  if (assetId) payload.convertedAssetId = assetId;
+  if (input.overrides && typeof input.overrides === "object") {
+    payload.overrides = input.overrides;
+  }
+
+  const response = await fetch(buildUrl("/v1/training/tasks:derive-config"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return await parseJson<ConfigDerivationPreview>(response);
 }
