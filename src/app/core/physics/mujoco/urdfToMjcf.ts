@@ -339,7 +339,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
   const contactAttr = `${contactSolref ? ` solref="${contactSolref}"` : ""}${contactSolimp ? ` solimp="${contactSolimp}"` : ""}`;
   lines.push(`<mujoco model="${modelName}">`);
   lines.push(`  <compiler angle="radian" inertiafromgeom="false" meshdir="/working" />`);
-  lines.push(`  <option gravity="0 -9.81 0" integrator="implicitfast" timestep="0.002" iterations="80" />`);
+  lines.push(`  <option gravity="0 0 -9.81" integrator="implicitfast" timestep="0.002" iterations="80" />`);
 
   const rootOffset = rootTransform
     ? {

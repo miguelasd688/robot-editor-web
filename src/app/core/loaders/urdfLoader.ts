@@ -386,7 +386,6 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
   const parsed = (robot as any).urdfRobotNode
     ? parseUrdfElement((robot as any).urdfRobotNode as Element)
     : parseUrdfString(urdfText);
-  const urdfZUp = importOptions?.urdfZUp ?? false;
   const firstLinkIsWorldReferenceFrame = importOptions?.firstLinkIsWorldReferenceFrame ?? false;
   let root: THREE.Object3D = robot;
   const collisionMode = importOptions?.collisionMode ?? "mesh";
@@ -403,11 +402,6 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
     robotRoot.name = parsed.robot.name || (robot as any).robotName || "Robot";
     (robotRoot as any).isRobot = true;
     robotRoot.userData.editorRobotRoot = true;
-    if (urdfZUp) {
-      // URDFs (ROS) are typically Z-up; the editor world is Y-up.
-      // Rotate the robot root so "up" maps to Y.
-      robotRoot.rotation.x = -Math.PI / 2;
-    }
     robotRoot.add(robot);
     root = robotRoot;
 

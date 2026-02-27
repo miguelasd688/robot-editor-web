@@ -49,6 +49,9 @@ const FLOOR_REFLECTOR_NAME = "__floor_reflector__";
 const FLOOR_SHADOW_CATCHER_KEY = "__floorShadowCatcher";
 const FLOOR_SHADOW_CATCHER_NAME = "__floor_shadow_catcher__";
 const HELPER_LAYER = 1;
+const ORIENTATION_GIZMO_SIZE_MIN_PX = 92;
+const ORIENTATION_GIZMO_SIZE_MAX_PX = 156;
+const ORIENTATION_GIZMO_MARGIN_PX = 14;
 const FLOOR_REFLECTOR_SHADER = {
   name: "FloorReflectorSoftShader",
   uniforms: {
@@ -197,6 +200,10 @@ export class Viewer {
   private pointerMovePos: { x: number; y: number } | null = null;
   private pointerSpringGroup: THREE.Group | null = null;
   private pointerSpringArrow: THREE.ArrowHelper | null = null;
+  private orientationScene: THREE.Scene | null = null;
+  private orientationCamera: THREE.OrthographicCamera | null = null;
+  private orientationAxesRoot: THREE.Group | null = null;
+  private orientationLabelResources: Array<{ texture: THREE.CanvasTexture; material: THREE.SpriteMaterial }> = [];
   private viewportMaterialCache = new WeakMap<THREE.Material, THREE.Material>();
 
   // mapping docId -> Object3D
@@ -256,6 +263,7 @@ export class Viewer {
       baseRoots.find(
         (root): root is THREE.DirectionalLight => (root as any).isDirectionalLight && (root as THREE.DirectionalLight).castShadow
       ) ?? null;
+    this.initOrientationGizmo();
 
     this.selection.attach(scene, transformControls, this.objects, this.getTransformSettings);
     for (const root of baseRoots) registerObject(this.objects, root, getDocId);
@@ -299,6 +307,7 @@ export class Viewer {
     // dispose SOLO user scene (y helpers creados)
     this.clearUserScene();
     this.clearPointerSpringVisual();
+    this.disposeOrientationGizmo();
 
     this.renderer?.dispose();
 
@@ -316,6 +325,10 @@ export class Viewer {
     this.pointerMovePos = null;
     this.pointerSpringGroup = null;
     this.pointerSpringArrow = null;
+    this.orientationScene = null;
+    this.orientationCamera = null;
+    this.orientationAxesRoot = null;
+    this.orientationLabelResources = [];
     this.viewportMaterialCache = new WeakMap<THREE.Material, THREE.Material>();
     this.mainShadowLight = null;
     this.objects.clear();
@@ -1034,6 +1047,164 @@ export class Viewer {
     this.pointerSpringArrow = null;
   }
 
+  private createOrientationLabelSprite(label: string, color: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      const fallbackTexture = new THREE.CanvasTexture(canvas);
+      const fallbackMaterial = new THREE.SpriteMaterial({
+        map: fallbackTexture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const fallback = new THREE.Sprite(fallbackMaterial);
+      fallback.scale.set(0.36, 0.36, 1);
+      this.orientationLabelResources.push({ texture: fallbackTexture, material: fallbackMaterial });
+      return fallback;
+    }
+
+    const colorHex = `#${color.toString(16).padStart(6, "0")}`;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "700 76px 'IBM Plex Sans', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = "rgba(8,12,18,0.9)";
+    ctx.strokeText(label, canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = colorHex;
+    ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(0.36, 0.36, 1);
+    this.orientationLabelResources.push({ texture, material });
+    return sprite;
+  }
+
+  private initOrientationGizmo() {
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1.35, 1.35, 1.35, -1.35, 0.1, 10);
+    camera.position.set(0, 0, 3);
+    // Keep widget camera in canonical camera space (Y-up) to avoid roll artifacts.
+    camera.up.set(0, 1, 0);
+    camera.lookAt(0, 0, 0);
+
+    const root = new THREE.Group();
+    const axisLen = 0.9;
+    const labelRadius = 1.2;
+    const axisSpec = [
+      { label: "X", dir: new THREE.Vector3(1, 0, 0), color: 0xff3b3b },
+      { label: "Y", dir: new THREE.Vector3(0, 1, 0), color: 0x35d06b },
+      { label: "Z", dir: new THREE.Vector3(0, 0, 1), color: 0x3f70ff },
+    ];
+
+    for (const axis of axisSpec) {
+      const arrow = new THREE.ArrowHelper(axis.dir, new THREE.Vector3(), axisLen, axis.color, 0.23, 0.11);
+      const lineMat = arrow.line.material as THREE.LineBasicMaterial;
+      const coneMat = arrow.cone.material as THREE.MeshBasicMaterial;
+      lineMat.depthTest = false;
+      coneMat.depthTest = false;
+      lineMat.toneMapped = false;
+      coneMat.toneMapped = false;
+      lineMat.transparent = true;
+      coneMat.transparent = true;
+      lineMat.opacity = 0.94;
+      coneMat.opacity = 0.94;
+      root.add(arrow);
+
+      const label = this.createOrientationLabelSprite(axis.label, axis.color);
+      label.position.copy(axis.dir).multiplyScalar(labelRadius);
+      root.add(label);
+    }
+
+    const center = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 14, 10),
+      new THREE.MeshBasicMaterial({
+        color: 0xcbd5e1,
+        transparent: true,
+        opacity: 0.9,
+        toneMapped: false,
+        depthTest: false,
+      })
+    );
+    root.add(center);
+
+    scene.add(root);
+    this.orientationScene = scene;
+    this.orientationCamera = camera;
+    this.orientationAxesRoot = root;
+  }
+
+  private disposeOrientationGizmo() {
+    if (this.orientationAxesRoot) {
+      this.orientationAxesRoot.removeFromParent();
+      disposeObject3D(this.orientationAxesRoot);
+    }
+    for (const resource of this.orientationLabelResources) {
+      resource.material.dispose();
+      resource.texture.dispose();
+    }
+    this.orientationScene = null;
+    this.orientationCamera = null;
+    this.orientationAxesRoot = null;
+    this.orientationLabelResources = [];
+  }
+
+  private updateOrientationGizmoFromCamera() {
+    if (!this.camera || !this.orientationAxesRoot) return;
+    this.orientationAxesRoot.quaternion.copy(this.camera.quaternion).invert();
+  }
+
+  private renderOrientationGizmo() {
+    if (!this.renderer || !this.canvas || !this.orientationScene || !this.orientationCamera) return;
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    if (width <= 0 || height <= 0) return;
+
+    this.updateOrientationGizmoFromCamera();
+
+    const idealSize = Math.round(
+      Math.min(ORIENTATION_GIZMO_SIZE_MAX_PX, Math.max(ORIENTATION_GIZMO_SIZE_MIN_PX, Math.min(width, height) * 0.18))
+    );
+    const maxAllowedSize = Math.floor(Math.min(width, height) - ORIENTATION_GIZMO_MARGIN_PX * 2);
+    if (maxAllowedSize < 36) return;
+    const gizmoSize = Math.min(idealSize, maxAllowedSize);
+    const x = Math.max(0, width - gizmoSize - ORIENTATION_GIZMO_MARGIN_PX);
+    const y = ORIENTATION_GIZMO_MARGIN_PX;
+
+    const prevAutoClear = this.renderer.autoClear;
+    const prevScissorTest = this.renderer.getScissorTest();
+    const prevViewport = new THREE.Vector4();
+    const prevScissor = new THREE.Vector4();
+    this.renderer.getViewport(prevViewport);
+    this.renderer.getScissor(prevScissor);
+
+    this.renderer.autoClear = false;
+    this.renderer.clearDepth();
+    this.renderer.setScissorTest(true);
+    this.renderer.setViewport(x, y, gizmoSize, gizmoSize);
+    this.renderer.setScissor(x, y, gizmoSize, gizmoSize);
+    this.renderer.render(this.orientationScene, this.orientationCamera);
+
+    this.renderer.setViewport(prevViewport);
+    this.renderer.setScissor(prevScissor);
+    this.renderer.setScissorTest(prevScissorTest);
+    this.renderer.autoClear = prevAutoClear;
+  }
+
   private markHelper(obj: THREE.Object3D, kind: HelperKind) {
     obj.userData[URDF_HELPER_KEY] = kind;
     obj.userData[NON_PICKABLE_KEY] = true;
@@ -1338,8 +1509,8 @@ export class Viewer {
     bounds.getCenter(center);
     bounds.getSize(size);
 
-    const radius = Math.max(2.5, Math.max(size.x, size.z) * 0.75 + 2.2);
-    const height = Math.max(2.0, size.y + 4.0);
+    const radius = Math.max(2.5, Math.max(size.x, size.y) * 0.75 + 2.2);
+    const height = Math.max(2.0, size.z + 4.0);
     const direction = (
       (this.mainShadowLight.userData?.shadowDirection as THREE.Vector3 | undefined)?.clone() ??
       new THREE.Vector3(0.52, 0.78, 0.34)
@@ -1648,5 +1819,6 @@ export class Viewer {
     this.selection.updateSelectionBox();
 
     this.renderer.render(this.scene, this.camera);
+    this.renderOrientationGizmo();
   };
 }

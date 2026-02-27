@@ -416,7 +416,6 @@ export async function convertTrainingMjcfAssetToUsdRemote(input: {
   fixBase?: boolean;
   importSites?: boolean;
   makeInstanceable?: boolean;
-  sourceUpAxis?: "auto" | "X" | "Y" | "Z";
 }): Promise<TrainingMjcfToUsdConversionMeta> {
   const payload: Record<string, unknown> = {};
   const outputFilename = String(input.outputFilename ?? "").trim();
@@ -424,9 +423,6 @@ export async function convertTrainingMjcfAssetToUsdRemote(input: {
   if (typeof input.fixBase === "boolean") payload.fixBase = input.fixBase;
   if (typeof input.importSites === "boolean") payload.importSites = input.importSites;
   if (typeof input.makeInstanceable === "boolean") payload.makeInstanceable = input.makeInstanceable;
-  if (typeof input.sourceUpAxis === "string" && input.sourceUpAxis.trim()) {
-    payload.sourceUpAxis = input.sourceUpAxis;
-  }
 
   const response = await fetch(
     buildUrl(`/v1/training/assets/${encodeURIComponent(input.assetId)}:convert-mjcf-to-usd`),

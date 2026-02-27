@@ -38,7 +38,6 @@ const isMeshAssetId = (assetId: SceneAssetId) => assetId.startsWith("mesh:");
 const toUiCollisionMode = (mode: string | undefined) => (mode === "mesh" ? "mesh" : "fast");
 
 type UrdfDialogFormOptions = {
-  urdfZUp: boolean;
   floatingBase: boolean;
   firstLinkIsWorldReferenceFrame: boolean;
   selfCollision: boolean;
@@ -52,7 +51,6 @@ function UrdfImportDialogOverlay(props: {
   onConfirm: (options: UrdfDialogFormOptions) => void;
 }) {
   const { urdfKey, initialOptions, onCancel, onConfirm } = props;
-  const [urdfZUp, setUrdfZUp] = useState(initialOptions.urdfZUp);
   const [floatingBase, setFloatingBase] = useState(initialOptions.floatingBase);
   const [firstLinkIsWorldReferenceFrame, setFirstLinkIsWorldReferenceFrame] = useState(
     initialOptions.firstLinkIsWorldReferenceFrame
@@ -104,10 +102,6 @@ function UrdfImportDialogOverlay(props: {
           {urdfKey ?? "No URDF selected"}
         </div>
         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.35 }}>
-          <input type="checkbox" checked={urdfZUp} onChange={(e) => setUrdfZUp(e.target.checked)} />
-          URDF uses Z-up (ROS) and should rotate to editor Y-up
-        </label>
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.35 }}>
           <input type="checkbox" checked={floatingBase} onChange={(e) => setFloatingBase(e.target.checked)} />
           Floating base (free root joint)
         </label>
@@ -153,7 +147,6 @@ function UrdfImportDialogOverlay(props: {
           <button
             onClick={() =>
               onConfirm({
-                urdfZUp,
                 floatingBase,
                 firstLinkIsWorldReferenceFrame,
                 selfCollision,
@@ -185,7 +178,6 @@ function UrdfImportDialogOverlay(props: {
 type UsdDialogFormOptions = {
   floatingBase: boolean;
   selfCollision: boolean;
-  sourceUpAxis: "auto" | "X" | "Y" | "Z";
 };
 
 function UsdImportDialogOverlay(props: {
@@ -197,7 +189,6 @@ function UsdImportDialogOverlay(props: {
   const { usdKey, initialOptions, onCancel, onConfirm } = props;
   const [floatingBase, setFloatingBase] = useState(initialOptions.floatingBase);
   const [selfCollision, setSelfCollision] = useState(initialOptions.selfCollision);
-  const [sourceUpAxis, setSourceUpAxis] = useState<"auto" | "X" | "Y" | "Z">(initialOptions.sourceUpAxis);
 
   return (
     <div
@@ -250,19 +241,6 @@ function UsdImportDialogOverlay(props: {
           <input type="checkbox" checked={selfCollision} onChange={(e) => setSelfCollision(e.target.checked)} />
           Enable self-collisions (robot vs robot)
         </label>
-        <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
-          <span>Source up axis</span>
-          <DarkSelect
-            value={sourceUpAxis}
-            onChange={(e) => setSourceUpAxis(e.target.value as "auto" | "X" | "Y" | "Z")}
-            style={{ background: "rgba(12,16,22,0.98)" }}
-          >
-            <option value="auto">Auto-detect</option>
-            <option value="Y">Y-up</option>
-            <option value="Z">Z-up (ROS / Blender)</option>
-            <option value="X">X-up</option>
-          </DarkSelect>
-        </label>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button
             onClick={() => onCancel()}
@@ -280,7 +258,7 @@ function UsdImportDialogOverlay(props: {
             Cancel
           </button>
           <button
-            onClick={() => onConfirm({ floatingBase, selfCollision, sourceUpAxis })}
+            onClick={() => onConfirm({ floatingBase, selfCollision })}
             disabled={!usdKey}
             style={{
               height: 28,
@@ -499,7 +477,6 @@ export default function ViewportPanel() {
   const urdfDialogInitialOptions = useMemo<UrdfDialogFormOptions>(() => {
     const overrides = urdfDialogOptionOverrides ?? {};
     return {
-      urdfZUp: overrides.urdfZUp ?? urdfOptions.urdfZUp,
       floatingBase: overrides.floatingBase ?? urdfOptions.floatingBase,
       firstLinkIsWorldReferenceFrame:
         overrides.firstLinkIsWorldReferenceFrame ?? urdfOptions.firstLinkIsWorldReferenceFrame,
@@ -513,7 +490,6 @@ export default function ViewportPanel() {
     return {
       floatingBase: overrides.floatingBase ?? usdOptions.floatingBase ?? false,
       selfCollision: overrides.selfCollision ?? usdOptions.selfCollision ?? false,
-      sourceUpAxis: overrides.sourceUpAxis ?? usdOptions.sourceUpAxis ?? "auto",
     };
   }, [usdDialogOptionOverrides, usdOptions]);
 
@@ -852,7 +828,7 @@ export default function ViewportPanel() {
         )}
         {urdfDialogOpen && (
           <UrdfImportDialogOverlay
-            key={`${urdfDialogKey ?? "dialog"}-${urdfDialogInitialOptions.urdfZUp ? 1 : 0}-${urdfDialogInitialOptions.floatingBase ? 1 : 0}-${urdfDialogInitialOptions.firstLinkIsWorldReferenceFrame ? 1 : 0}-${urdfDialogInitialOptions.selfCollision ? 1 : 0}-${urdfDialogInitialOptions.collisionMode}`}
+            key={`${urdfDialogKey ?? "dialog"}-${urdfDialogInitialOptions.floatingBase ? 1 : 0}-${urdfDialogInitialOptions.firstLinkIsWorldReferenceFrame ? 1 : 0}-${urdfDialogInitialOptions.selfCollision ? 1 : 0}-${urdfDialogInitialOptions.collisionMode}`}
             urdfKey={urdfDialogKey}
             initialOptions={urdfDialogInitialOptions}
             onCancel={closeUrdfImportDialog}
@@ -863,7 +839,7 @@ export default function ViewportPanel() {
         )}
         {usdDialogOpen && (
           <UsdImportDialogOverlay
-            key={`${usdDialogKey ?? "usd-dialog"}-${usdDialogInitialOptions.floatingBase ? 1 : 0}-${usdDialogInitialOptions.selfCollision ? 1 : 0}-${usdDialogInitialOptions.sourceUpAxis}`}
+            key={`${usdDialogKey ?? "usd-dialog"}-${usdDialogInitialOptions.floatingBase ? 1 : 0}-${usdDialogInitialOptions.selfCollision ? 1 : 0}`}
             usdKey={usdDialogKey}
             initialOptions={usdDialogInitialOptions}
             onCancel={closeUsdImportDialog}

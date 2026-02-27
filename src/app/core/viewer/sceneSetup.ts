@@ -124,12 +124,13 @@ export function createSceneBundle(
 
   const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 2000);
   camera.layers.enable(1);
-  camera.position.set(2.5, 2.0, 3.5);
-  camera.lookAt(0, 0, 0);
+  camera.up.set(0, 0, 1);
+  camera.position.set(3.2, -3.2, 2.4);
+  camera.lookAt(0, 0, 0.75);
 
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
-  controls.target.set(0, 0.75, 0);
+  controls.target.set(0, 0, 0.75);
 
   const transformControls = new TransformControls(camera, canvas);
   transformControls.setMode(settings.mode);

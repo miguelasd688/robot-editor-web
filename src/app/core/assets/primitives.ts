@@ -187,7 +187,6 @@ export function createPrimitiveObject(shape: PrimitiveShape): THREE.Object3D {
     envMapIntensity: 0.62,
   });
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.rotation.x = -Math.PI / 2;
   mesh.receiveShadow = true;
   mesh.castShadow = false;
   return mesh;

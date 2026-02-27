@@ -13,7 +13,7 @@ export const CARTPOLE_SAMPLE_URDF = `<?xml version="1.0"?>
 <robot name="Cartpole_robot">
   <link name="base_link">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <origin xyz="0 0 0" rpy="-1.570796 0 0" />
       <mass value="0.0032" />
       <inertia ixx="0.004267" ixy="0" ixz="0" iyy="0.004267" iyz="0" izz="0.000002" />
     </inertial>
@@ -51,18 +51,18 @@ export const CARTPOLE_SAMPLE_URDF = `<?xml version="1.0"?>
   </link>
   <link name="pole">
     <inertial>
-      <origin xyz="-0.007251 0.447668 -0.132443" rpy="0 0 0" />
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
       <mass value="1.222793" />
       <inertia ixx="0.102522" ixy="0" ixz="0" iyy="0.001246" iyz="0" izz="0.102522" />
     </inertial>
     <visual name="Cube_2">
-      <origin xyz="-0.007251 0.447668 -0.132443" rpy="0 0 0" />
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
       <geometry>
         <box size="0.078192 1 0.078192" />
       </geometry>
     </visual>
     <collision name="Cube_2">
-      <origin xyz="-0.007251 0.447668 -0.132443" rpy="0 0 0" />
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
       <geometry>
         <box size="0.078192 1 0.078192" />
       </geometry>
@@ -80,9 +80,10 @@ export const CARTPOLE_SAMPLE_URDF = `<?xml version="1.0"?>
     <origin xyz="0.005007 0.00204 0" rpy="0 0 0" />
     <parent link="cart" />
     <child link="pole" />
-    <axis xyz="0 0 1" />
+    <axis xyz="0 1 0" />
     <limit lower="-180" upper="180" effort="60" velocity="100" />
     <dynamics damping="0.05" friction="0.01" />
+    <actuator stiffness="120" damping="4" />
   </joint>
 </robot>
 `;

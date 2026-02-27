@@ -64,7 +64,7 @@ export function mergeMjcfSources(input: MjcfMergeInput): { source: MujocoModelSo
     `<compiler angle="radian" inertiafromgeom="false" meshdir="/working" />`;
   const option =
     mjcfSources.map((s) => extractSingleTag(s.content, "option")).find(Boolean) ??
-    `<option gravity="0 -9.81 0" integrator="implicitfast" timestep="0.002" iterations="80" />`;
+    `<option gravity="0 0 -9.81" integrator="implicitfast" timestep="0.002" iterations="80" />`;
 
   const assets: string[] = [];
   const worldbody: string[] = [];

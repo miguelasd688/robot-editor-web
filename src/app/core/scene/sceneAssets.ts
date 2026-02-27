@@ -312,7 +312,6 @@ export function createSceneAssetTree(
 
   if (assetId === "floor") {
     const floorTransform = defaultTransform({
-      rotation: { x: -90, y: 0, z: 0 },
       position: { x: 0, y: 0, z: -1.5 },
     });
 

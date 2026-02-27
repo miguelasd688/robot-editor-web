@@ -835,7 +835,6 @@ const convertUsdToMjcf = async (params: {
   const query = new URLSearchParams();
   query.set("floating_base", String(params.importOptions?.floatingBase ?? false));
   query.set("self_collision", String(params.importOptions?.selfCollision ?? false));
-  query.set("source_up_axis", params.importOptions?.sourceUpAxis ?? "auto");
 
   const convertRes = await fetch(
     buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(converterAssetId)}:convert-usd-to-mjcf?${query.toString()}`),

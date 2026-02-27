@@ -16,7 +16,6 @@ type AssetState = {
   assets: Record<string, AssetEntry>; // key -> entry
   urdfKey: string | null;
   urdfOptions: {
-    urdfZUp: boolean;
     floatingBase: boolean;
     firstLinkIsWorldReferenceFrame: boolean;
     selfCollision: boolean;
@@ -40,7 +39,6 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   assets: {},
   urdfKey: null,
   urdfOptions: {
-    urdfZUp: String(import.meta.env.VITE_URDF_Z_UP ?? "false").toLowerCase() === "true",
     floatingBase: false,
     firstLinkIsWorldReferenceFrame: false,
     selfCollision: String(import.meta.env.VITE_URDF_SELF_COLLIDE ?? "false").toLowerCase() === "true",
@@ -55,7 +53,6 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   usdOptions: {
     floatingBase: false,
     selfCollision: false,
-    sourceUpAxis: "auto",
   },
 
   importFiles: (files) => {

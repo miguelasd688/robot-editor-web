@@ -93,11 +93,11 @@ The project combines:
 - Import an entire workspace folder (`.urdf` + meshes) from the Explorer panel.
 - Select and load a URDF from imported files.
 - URDF load options:
-- `urdfZUp` (ROS Z-up -> editor Y-up mapping).
 - `floatingBase` (free root joint behavior).
 - `firstLinkIsWorldReferenceFrame` (ignore world-reference root link).
 - `selfCollision` toggle.
 - Collision mode selection (`mesh` or `fast`).
+- Editor/simulation coordinate system: strict `Z-up` (gravity on `-Z`).
 - Robust asset resolution for common URDF path styles (`package://`, relative paths, basename fallback).
 
 ### Scene authoring and editing

@@ -96,12 +96,12 @@ const DEFAULT_SCENE_JOINT_ARMATURE = Number(import.meta.env.VITE_MUJOCO_SCENE_JO
 const DEFAULT_CONTACT_SOLREF = String(import.meta.env.VITE_MUJOCO_CONTACT_SOLREF ?? "0.02 1.2");
 const DEFAULT_CONTACT_SOLIMP = String(import.meta.env.VITE_MUJOCO_CONTACT_SOLIMP ?? "0.9 0.95 0.001");
 const POINTER_CURSOR_BODY_NAME = "__pointer_cursor_body";
-const POINTER_CURSOR_PARK_Y_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_PARK_Y ?? "-1000");
+const POINTER_CURSOR_PARK_Z_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_PARK_Z ?? "-1000");
 const POINTER_CURSOR_RADIUS_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_RADIUS ?? "0.06");
 const POINTER_DRAG_STIFFNESS_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_DRAG_STIFFNESS ?? "200");
 const POINTER_DRAG_MAX_FORCE_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_DRAG_MAX_FORCE ?? "160");
 const POINTER_DRAG_DAMPING_RATIO_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_DRAG_DAMPING_RATIO ?? "1");
-const POINTER_CURSOR_PARK_Y = Number.isFinite(POINTER_CURSOR_PARK_Y_RAW) ? POINTER_CURSOR_PARK_Y_RAW : -1000;
+const POINTER_CURSOR_PARK_Z = Number.isFinite(POINTER_CURSOR_PARK_Z_RAW) ? POINTER_CURSOR_PARK_Z_RAW : -1000;
 const POINTER_CURSOR_RADIUS = Number.isFinite(POINTER_CURSOR_RADIUS_RAW) ? POINTER_CURSOR_RADIUS_RAW : 0.06;
 const POINTER_DRAG_STIFFNESS = Number.isFinite(POINTER_DRAG_STIFFNESS_RAW) ? POINTER_DRAG_STIFFNESS_RAW : 200;
 const POINTER_DRAG_MAX_FORCE = Number.isFinite(POINTER_DRAG_MAX_FORCE_RAW) ? POINTER_DRAG_MAX_FORCE_RAW : 160;
@@ -236,7 +236,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const contactAttr = `${contactSolref ? ` solref="${contactSolref}"` : ""}${contactSolimp ? ` solimp="${contactSolimp}"` : ""}`;
 
   lines.push(`<mujoco model="scene">`);
-  lines.push(`  <option gravity="0 -9.81 0" integrator="implicitfast" timestep="0.002" iterations="80" />`);
+  lines.push(`  <option gravity="0 0 -9.81" integrator="implicitfast" timestep="0.002" iterations="80" />`);
   lines.push(`  <worldbody>`);
 
   const tmpPos = new THREE.Vector3();
@@ -800,9 +800,9 @@ function mergeActuator(xml: string, extraActuator: string) {
 
 function buildPointerCursorWorldbody() {
   const radius = Number.isFinite(POINTER_CURSOR_RADIUS) && POINTER_CURSOR_RADIUS > 0 ? POINTER_CURSOR_RADIUS : 0.06;
-  const parkedY = Number.isFinite(POINTER_CURSOR_PARK_Y) ? POINTER_CURSOR_PARK_Y : -1000;
+  const parkedZ = Number.isFinite(POINTER_CURSOR_PARK_Z) ? POINTER_CURSOR_PARK_Z : -1000;
   return [
-    `<body name="${POINTER_CURSOR_BODY_NAME}" mocap="true" pos="0 ${parkedY.toFixed(3)} 0">`,
+    `<body name="${POINTER_CURSOR_BODY_NAME}" mocap="true" pos="0 0 ${parkedZ.toFixed(3)}">`,
     `  <geom name="${POINTER_CURSOR_BODY_NAME}_geom" type="sphere" size="${radius.toFixed(4)}"`,
     `        density="1" contype="8" conaffinity="65535" friction="0.001 0.0001 0.0001"`,
     `        solref="0.002 1.2" solimp="0.95 0.995 0.0001" rgba="1 0.3 0.3 0.15" />`,
@@ -1118,8 +1118,8 @@ export function createMujocoRuntime(): MujocoRuntime {
     const basePos = pointerCursorMocapId * 3;
     if (basePos + 2 < mocapPosView.length) {
       mocapPosView[basePos] = 0;
-      mocapPosView[basePos + 1] = POINTER_CURSOR_PARK_Y;
-      mocapPosView[basePos + 2] = 0;
+      mocapPosView[basePos + 1] = 0;
+      mocapPosView[basePos + 2] = POINTER_CURSOR_PARK_Z;
     }
     const baseQuat = pointerCursorMocapId * 4;
     if (baseQuat + 3 < mocapQuatView.length) {
@@ -1342,7 +1342,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       data = new mujoco.MjData(model);
       if (!data) throw new Error("Failed to create MuJoCo data.");
 
-      setGravity(model, [0, -9.81, 0]);
+      setGravity(model, [0, 0, -9.81]);
       mujoco.mj_forward(model, data);
 
       debugLog("model stats", {
