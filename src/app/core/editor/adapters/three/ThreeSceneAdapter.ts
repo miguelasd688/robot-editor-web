@@ -566,6 +566,20 @@ export class ThreeSceneAdapter {
   }
 
   private populateComponents(nodes: Record<string, SceneNode>) {
+    const defaultCollisionSyncVisualIds = new Set<string>();
+    for (const node of Object.values(nodes)) {
+      if (node.kind !== "link") continue;
+      const visualChildren = node.children
+        .map((childId) => nodes[childId])
+        .filter((child): child is SceneNode => !!child && child.kind === "visual");
+      if (!visualChildren.length) continue;
+      const alreadyConfigured = visualChildren.some(
+        (visual) => typeof visual.components?.visual?.attachCollisions === "boolean"
+      );
+      if (alreadyConfigured) continue;
+      defaultCollisionSyncVisualIds.add(visualChildren[0].id);
+    }
+
     for (const node of Object.values(nodes)) {
       const obj = this.viewer.getObjectById(node.id);
       if (!obj) continue;
@@ -585,8 +599,17 @@ export class ThreeSceneAdapter {
           const prev = node.components?.visual;
           const explicitRgba = obj.userData?.visualRgba as VisualComponent["rgba"] | null | undefined;
           const rgba = explicitRgba ?? (node.kind === "visual" ? readRgbaFromObject(obj) : undefined) ?? undefined;
-          if (!rgba && !prev) return prev;
-          return { ...(prev ?? {}), rgba: rgba ?? prev?.rgba };
+          const attachCollisions =
+            typeof prev?.attachCollisions === "boolean"
+              ? prev.attachCollisions
+              : node.kind === "visual" && defaultCollisionSyncVisualIds.has(node.id)
+                ? true
+                : undefined;
+          if (!rgba && !prev && attachCollisions === undefined) return prev;
+          const next: VisualComponent = { ...(prev ?? {}) };
+          if (attachCollisions !== undefined) next.attachCollisions = attachCollisions;
+          if (rgba !== undefined) next.rgba = rgba;
+          return next;
         })(),
       };
     }

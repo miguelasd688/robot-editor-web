@@ -8,7 +8,7 @@ import DockArea from "../ui/DockArea";
 import { copySelection, deleteSelection, duplicateSelection, pasteSelection, redo, undo } from "../core/editor/actions/editorActions";
 import { editorEngine } from "../core/editor/engineSingleton";
 import { exportRobotToUrdf } from "../core/urdf/urdfExport";
-import type { UrdfImportOptions } from "../core/urdf/urdfImportOptions";
+import { resolveUrdfImportOptionsFromSources } from "../core/urdf/urdfImportOptions";
 import type { SceneNode } from "../core/editor/document/types";
 import { exportRobotToMjcf, exportSceneToMjcf } from "../core/physics/mujoco/mjcfExport";
 
@@ -88,11 +88,15 @@ export default function EditorLayout() {
   const resolveRuntimeRobotData = (robotId: string) => {
     const viewer = useAppStore.getState().viewer;
     const root = viewer?.getObjectById(robotId) ?? null;
+    const importOptions = root
+      ? resolveUrdfImportOptionsFromSources({
+          urdfImportOptions: root.userData?.urdfImportOptions,
+          robotModelSource: root.userData?.robotModelSource,
+        })
+      : undefined;
     return {
       urdfKey: root ? ((root.userData?.urdfKey as string | undefined) ?? null) : null,
-      importOptions: root
-        ? ((root.userData?.urdfImportOptions as UrdfImportOptions | undefined) ?? undefined)
-        : undefined,
+      importOptions,
       root,
     };
   };

@@ -48,6 +48,25 @@ export type UsdJointInfo = {
 };
 
 export type StageUpAxis = "X" | "Y" | "Z" | "unknown";
+export type ConversionProfile = "cartpole_direct" | "generic";
+
+export type MassByBodyEntry = {
+  path: string;
+  mass: number;
+};
+
+export type InvalidRootJointEntry = {
+  path: string;
+  reason: string;
+};
+
+export type PhysicsDiagnostics = {
+  totalMass: number;
+  massByBody: MassByBodyEntry[];
+  invalidRootJoints: InvalidRootJointEntry[];
+  articulationRootCount: number;
+  hasCloneRisk: boolean;
+};
 
 export type UsdIntrospectionMeta = {
   assetId: string;
@@ -55,6 +74,11 @@ export type UsdIntrospectionMeta = {
   joints: UsdJointInfo[];
   rootBodies: string[];
   stageUpAxis?: StageUpAxis;
+  totalMass?: number;
+  massByBody?: MassByBodyEntry[];
+  invalidRootJoints?: InvalidRootJointEntry[];
+  articulationRootCount?: number;
+  hasCloneRisk?: boolean;
 };
 
 export type DerivedTrainingConfig = {
@@ -74,6 +98,7 @@ export type ConfigDerivationPreview = {
   };
   derivedConfig: DerivedTrainingConfig;
   taskConfig: Record<string, unknown>;
+  physicsDiagnostics?: PhysicsDiagnostics;
   message: string;
 };
 
@@ -99,6 +124,8 @@ export type TaskAutocompleteRequest = {
   seed?: number;
   policy?: Record<string, unknown>;
   policyRules?: Record<string, unknown>;
+  baseConstraintMode?: "fix_base" | "source_weld";
+  userModelMetadata?: Record<string, unknown>;
   environment?: Record<string, unknown>;
   extraArgs?: string[];
   overrides?: Record<string, unknown>;
@@ -121,6 +148,7 @@ export type TaskAutocompletePreview = {
   };
   derivedConfig: DerivedTrainingConfig;
   taskConfig: Record<string, unknown>;
+  physicsDiagnostics?: PhysicsDiagnostics;
   environmentPreview: Record<string, unknown>;
   message: string;
 };
@@ -405,16 +433,24 @@ export async function getTrainingAssetMetaRemote(assetId: string): Promise<Train
 export async function convertTrainingMjcfAssetToUsdRemote(input: {
   assetId: string;
   outputFilename?: string;
+  conversionProfile?: ConversionProfile;
   fixBase?: boolean;
   importSites?: boolean;
   makeInstanceable?: boolean;
+  sanitizeRootJointArtifacts?: boolean;
 }): Promise<TrainingMjcfToUsdConversionMeta> {
   const payload: Record<string, unknown> = {};
   const outputFilename = String(input.outputFilename ?? "").trim();
   if (outputFilename) payload.outputFilename = outputFilename;
+  if (input.conversionProfile === "cartpole_direct" || input.conversionProfile === "generic") {
+    payload.conversionProfile = input.conversionProfile;
+  }
   if (typeof input.fixBase === "boolean") payload.fixBase = input.fixBase;
   if (typeof input.importSites === "boolean") payload.importSites = input.importSites;
   if (typeof input.makeInstanceable === "boolean") payload.makeInstanceable = input.makeInstanceable;
+  if (typeof input.sanitizeRootJointArtifacts === "boolean") {
+    payload.sanitizeRootJointArtifacts = input.sanitizeRootJointArtifacts;
+  }
 
   const response = await fetch(
     buildUrl(`/v1/training/assets/${encodeURIComponent(input.assetId)}:convert-mjcf-to-usd`),
@@ -514,6 +550,12 @@ export async function submitTrainingTaskRemote(
 
   if (input.policy && typeof input.policy === "object") payload.policy = input.policy;
   if (input.policyRules && typeof input.policyRules === "object") payload.policyRules = input.policyRules;
+  if (input.baseConstraintMode === "fix_base" || input.baseConstraintMode === "source_weld") {
+    payload.baseConstraintMode = input.baseConstraintMode;
+  }
+  if (input.userModelMetadata && typeof input.userModelMetadata === "object") {
+    payload.userModelMetadata = input.userModelMetadata;
+  }
   if (input.environment && typeof input.environment === "object") payload.environment = input.environment;
   if (input.overrides && typeof input.overrides === "object") payload.overrides = input.overrides;
   if (Array.isArray(input.extraArgs)) payload.extraArgs = input.extraArgs.map((item) => String(item));

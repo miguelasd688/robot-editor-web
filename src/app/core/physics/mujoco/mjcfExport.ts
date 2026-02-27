@@ -1,7 +1,7 @@
 import type { Object3D } from "three";
 import type { AssetEntry } from "../../assets/assetRegistryTypes";
 import type { ProjectDoc, RobotModelSource, SceneNode } from "../../editor/document/types";
-import type { UrdfImportOptions } from "../../urdf/urdfImportOptions";
+import { resolveUrdfImportOptionsFromSources, type UrdfImportOptions } from "../../urdf/urdfImportOptions";
 import { exportRobotToUrdf } from "../../urdf/urdfExport";
 import type { MujocoModelSource } from "./MujocoRuntime";
 import type { MjcfNameMap } from "./mjcfNames";
@@ -75,6 +75,18 @@ function resolveUrdfOptions(defaults: MjcfExportUrdfOptions, overrides?: UrdfImp
   };
 }
 
+function resolveRuntimeUrdfImportOptions(robot: SceneNode, runtime?: RobotRuntimeExportData | null) {
+  const runtimeOptions = resolveUrdfImportOptionsFromSources({
+    urdfImportOptions: runtime?.importOptions ?? runtime?.root?.userData?.urdfImportOptions,
+    robotModelSource: runtime?.root?.userData?.robotModelSource,
+  });
+  const componentOptions = resolveUrdfImportOptionsFromSources({
+    urdfImportOptions: robot.components?.urdfImportOptions,
+    robotModelSource: robot.components?.robotModelSource,
+  });
+  return runtimeOptions ?? componentOptions;
+}
+
 type DirectRobotMjcfSource = {
   mjcf: string;
   mjcfKey: string | null;
@@ -139,7 +151,7 @@ export async function exportRobotToMjcf(input: ExportRobotMjcfInput): Promise<Ex
   const { doc, robotId, assets, defaultUrdfOptions, runtime } = input;
   const robot = resolveRobotNode(doc, robotId);
   const urdfKey = runtime?.urdfKey ?? robot.components?.urdfKey ?? null;
-  const urdfOptions = resolveUrdfOptions(defaultUrdfOptions, runtime?.importOptions ?? robot.components?.urdfImportOptions);
+  const urdfOptions = resolveUrdfOptions(defaultUrdfOptions, resolveRuntimeUrdfImportOptions(robot, runtime));
   const roots = runtime?.root ? [runtime.root] : undefined;
 
   const directSource = await resolveDirectRobotMjcfSource({ robot, runtime, assets });
@@ -209,7 +221,7 @@ export async function exportSceneToMjcf(input: ExportSceneMjcfInput): Promise<Ex
     warnings.push(...exported.warnings.map((warning) => `${warnPrefix} ${warning}`));
 
     const urdfKey = runtime?.urdfKey ?? robot.components?.urdfKey ?? null;
-    const urdfOptions = resolveUrdfOptions(defaultUrdfOptions, runtime?.importOptions ?? robot.components?.urdfImportOptions);
+    const urdfOptions = resolveUrdfOptions(defaultUrdfOptions, resolveRuntimeUrdfImportOptions(robot, runtime));
     const roots = runtime?.root ? [runtime.root] : undefined;
     const converted = await buildModelSource({
       assets,

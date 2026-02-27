@@ -20,7 +20,7 @@ import type { ProjectDoc, SceneNode, Transform } from "../editor/document/types"
 import { applyPose, mapPoseByRobot } from "../physics/mujoco/PoseBufferService";
 import { NameRegistry, sanitizeMjcfName } from "../physics/mujoco/mjcfNames";
 import { buildActuatorRegistry, type ActuatorDescriptor } from "../physics/mujoco/ActuatorRegistry";
-import type { UrdfImportOptions } from "../urdf/urdfImportOptions";
+import { resolveUrdfImportOptionsFromSources } from "../urdf/urdfImportOptions";
 import { exportRobotToUrdf } from "../urdf/urdfExport";
 
 type MujocoState = {
@@ -705,9 +705,10 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
                 });
               }
             }
-            const importOptions =
-              node.components?.urdfImportOptions ??
-              (root.userData?.urdfImportOptions as UrdfImportOptions | undefined);
+            const importOptions = resolveUrdfImportOptionsFromSources({
+              urdfImportOptions: node.components?.urdfImportOptions ?? root.userData?.urdfImportOptions,
+              robotModelSource: node.components?.robotModelSource ?? root.userData?.robotModelSource,
+            });
             const perRobotUrdfOptions = {
               floatingBase: importOptions?.floatingBase ?? urdfOptions.floatingBase,
               firstLinkIsWorldReferenceFrame:

@@ -13,6 +13,7 @@ import {
   type UrdfRobot,
 } from "../urdf/urdfModel";
 import type { UrdfImportOptions } from "../urdf/urdfImportOptions";
+import type { UrdfModelSource } from "../editor/document/types";
 import { useLoaderStore } from "../store/useLoaderStore";
 import { logInfo, logWarn } from "../services/logger";
 
@@ -221,6 +222,7 @@ const applyUrdfMetadata = (
   root: THREE.Object3D,
   links: Map<string, UrdfLink>,
   joints: UrdfJoint[],
+  fixedBaseRootLinks: ReadonlySet<string> | null,
   collisionMode: "mesh" | "box" | "sphere" | "cylinder" | "fast",
   collisionMaterial: CollisionMaterial
 ) => {
@@ -235,18 +237,20 @@ const applyUrdfMetadata = (
       if (link) {
         const data: UrdfInstance = { kind: "link", link: cloneLink(link) };
         obj.userData.urdf = data;
+        const physicsData = { ...(obj.userData.physics ?? {}) };
 
         if (link.inertial) {
-          obj.userData.physics = {
-            ...(obj.userData.physics ?? {}),
-            mass: link.inertial.mass,
-            inertia: {
-              x: link.inertial.inertia.ixx,
-              y: link.inertial.inertia.iyy,
-              z: link.inertial.inertia.izz,
-            },
+          physicsData.mass = link.inertial.mass;
+          physicsData.inertia = {
+            x: link.inertial.inertia.ixx,
+            y: link.inertial.inertia.iyy,
+            z: link.inertial.inertia.izz,
           };
         }
+        if (fixedBaseRootLinks?.has(urdfName)) {
+          physicsData.fixed = true;
+        }
+        obj.userData.physics = physicsData;
       }
     } else if (anyObj.isURDFJoint) {
       const joint = jointMap.get(urdfName);
@@ -290,6 +294,26 @@ const findRootLinkName = (robot: UrdfRobot) => {
     if (!children.has(name)) return name;
   }
   return robot.links.keys().next().value ?? "base_link";
+};
+
+const findRootLinkNames = (robot: UrdfRobot) => {
+  const children = new Set(robot.joints.map((joint) => joint.child));
+  const roots = Array.from(robot.links.keys()).filter((name) => !children.has(name));
+  if (roots.length) return roots;
+  const fallback = robot.links.keys().next().value;
+  return fallback ? [fallback] : [];
+};
+
+const resolveFixedBaseRootLinkNames = (
+  robot: UrdfRobot,
+  firstLinkIsWorldReferenceFrame: boolean
+) => {
+  const roots = findRootLinkNames(robot);
+  if (!firstLinkIsWorldReferenceFrame) return roots;
+  const worldLink = roots[0];
+  if (!worldLink) return [];
+  const nextRoots = robot.joints.filter((joint) => joint.parent === worldLink).map((joint) => joint.child);
+  return nextRoots.length ? nextRoots : roots;
 };
 
 const resolveUrdfName = (obj: THREE.Object3D) => String((obj as any).urdfName ?? obj.name ?? "");
@@ -408,7 +432,18 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
     if (firstLinkIsWorldReferenceFrame) stripWorldReferenceFrame(robotRoot, parsed.robot);
 
     collisionMaterial = createCollisionMaterial();
-    applyUrdfMetadata(root, parsed.robot.links, parsed.robot.joints, collisionMode, collisionMaterial);
+    const fixedBaseRootLinks =
+      importOptions?.floatingBase === false
+        ? new Set(resolveFixedBaseRootLinkNames(parsed.robot, firstLinkIsWorldReferenceFrame))
+        : null;
+    applyUrdfMetadata(
+      root,
+      parsed.robot.links,
+      parsed.robot.joints,
+      fixedBaseRootLinks,
+      collisionMode,
+      collisionMaterial
+    );
   }
 
   if (resourcesCompleted) {
@@ -425,10 +460,16 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
     await resourcesLoaded;
   }
 
+  const resolvedImportOptions = { ...(importOptions ?? {}) } satisfies UrdfImportOptions;
+  const modelSource: UrdfModelSource = {
+    kind: "urdf",
+    source: urdfText,
+    key: urdfKey ?? null,
+    importOptions: resolvedImportOptions,
+  };
   root.userData.urdfSource = urdfText;
-  if (importOptions) {
-    root.userData.urdfImportOptions = { ...importOptions } satisfies UrdfImportOptions;
-  }
+  root.userData.urdfImportOptions = resolvedImportOptions;
+  root.userData.robotModelSource = modelSource;
   if (urdfKey) root.userData.urdfKey = urdfKey;
   root.position.set(0, 0, 0);
   return root;
