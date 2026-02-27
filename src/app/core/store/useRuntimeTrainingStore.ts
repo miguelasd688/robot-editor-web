@@ -12,7 +12,6 @@ import type {
 import {
   cancelTrainingJobRemote,
   getTrainingRunnerLogsRemote,
-  submitCartpoleDirectJobRemote,
   submitTrainingTaskRemote,
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
@@ -301,6 +300,17 @@ function isCartpoleDirectProfile(config: unknown) {
   return typeof profile === "string" && profile.trim().toLowerCase() === "cartpole_direct_mvp";
 }
 
+function isTaskFactoryConfig(config: unknown) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+  const record = config as Record<string, unknown>;
+  if (isCartpoleDirectProfile(record)) return true;
+  if (typeof record.recipeId === "string" && record.recipeId.trim().length > 0) return true;
+  if (record.executionMode === "recipe" || record.executionMode === "generic") return true;
+  if (typeof record.taskSpecId === "string" && record.taskSpecId.trim().length > 0) return true;
+  if (record.taskSpec && typeof record.taskSpec === "object" && !Array.isArray(record.taskSpec)) return true;
+  return false;
+}
+
 function toTextOrEmpty(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -412,58 +422,42 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const environmentValues = toObjectOrEmpty(configValues.environment);
       const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
       const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
-      const submissionPromise = isCartpoleDirectProfile(configObject)
+      const submissionPromise = isTaskFactoryConfig(configObject)
         ? robotAssetId
           ? submitTrainingTaskRemote({
-              taskTemplate: toTextOrEmpty(configValues.taskTemplate) || taskTemplate || "cartpole_direct",
-              task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
-              robotAssetId,
-              sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
-              tenantId: input.tenantId,
-              experimentName,
-              maxSteps,
-              numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
-              checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
-              stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
-              videoLengthSec:
-                toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
-                toPositiveIntOrUndefined(configValues.videoLengthSec),
-              videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
-              videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
-              videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
-              seed: input.seed,
-              policy: toObjectOrUndefined(configValues.policy),
-              policyRules: toObjectOrUndefined(configValues.policyRules),
-              environment: toObjectOrUndefined(configValues.environment),
-              extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
-              overrides: toObjectOrUndefined(configValues.overrides),
-            }).then((taskResponse) => {
-              if (!("job" in taskResponse)) {
-                throw new Error("Task autocomplete returned preview payload during launch");
-              }
-              return taskResponse.job;
-            })
-          : submitCartpoleDirectJobRemote({
-              tenantId: input.tenantId,
-              experimentName,
-              task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
-              robotAssetId: undefined,
-              sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
-              maxSteps,
-              numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
-              checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
-              stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
-              videoLengthSec:
-                toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
-                toPositiveIntOrUndefined(configValues.videoLengthSec),
-              videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
-              videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
-              videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
-              policy: toObjectOrUndefined(configValues.policy),
-              policyRules: toObjectOrUndefined(configValues.policyRules),
-              environment: toObjectOrUndefined(configValues.environment),
-              extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
-            })
+            recipeId: toTextOrEmpty(configValues.recipeId) || undefined,
+            executionMode: toTextOrEmpty(configValues.executionMode) === "generic" ? "generic" : "recipe",
+            taskSpecId: toTextOrEmpty(configValues.taskSpecId) || undefined,
+            taskSpec: toObjectOrUndefined(configValues.taskSpec),
+            taskTemplate: toTextOrEmpty(configValues.taskTemplate) || taskTemplate || "cartpole_direct",
+            task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
+            robotAssetId,
+            sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
+            tenantId: input.tenantId,
+            experimentName,
+            maxSteps,
+            numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
+            checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
+            stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
+            videoLengthSec:
+              toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
+              toPositiveIntOrUndefined(configValues.videoLengthSec),
+            videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
+            videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
+            videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
+            seed: input.seed,
+            policy: toObjectOrUndefined(configValues.policy),
+            policyRules: toObjectOrUndefined(configValues.policyRules),
+            environment: toObjectOrUndefined(configValues.environment),
+            extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
+            overrides: toObjectOrUndefined(configValues.overrides),
+          }).then((taskResponse) => {
+            if (!("job" in taskResponse)) {
+              throw new Error("Task autocomplete returned preview payload during launch");
+            }
+            return taskResponse.job;
+          })
+          : Promise.reject(new Error("robotAssetId is required to launch /v1/training/tasks"))
         : submitTrainingJobRemote({
             modelName,
             dataset,

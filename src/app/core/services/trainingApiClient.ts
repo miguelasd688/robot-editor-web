@@ -11,12 +11,6 @@ type TrainingJobListResponse = {
   items: TrainingJobSummary[];
 };
 
-type CartpoleDirectLaunchResponse = {
-  recipeId: string;
-  job: TrainingJobSummary;
-  policy: Record<string, unknown>;
-};
-
 type TrainingArtifactListResponse = {
   items: TrainingArtifactSummary[];
 };
@@ -84,6 +78,10 @@ export type ConfigDerivationPreview = {
 };
 
 export type TaskAutocompleteRequest = {
+  recipeId?: string;
+  executionMode?: "recipe" | "generic";
+  taskSpecId?: string;
+  taskSpec?: Record<string, unknown>;
   taskTemplate?: string;
   task?: string;
   robotAssetId: string;
@@ -109,6 +107,10 @@ export type TaskAutocompleteRequest = {
 
 export type TaskAutocompletePreview = {
   dryRun: true;
+  recipeId?: string;
+  executionMode?: "recipe" | "generic";
+  taskSpecId?: string;
+  taskSpec?: Record<string, unknown>;
   taskTemplate: string;
   assetId: string;
   introspection: {
@@ -124,7 +126,9 @@ export type TaskAutocompletePreview = {
 };
 
 export type TaskAutocompleteLaunchResponse = {
-  recipeId: string;
+  recipeId?: string;
+  executionMode?: "recipe" | "generic";
+  taskSpecId?: string;
   job: TrainingJobSummary;
   task: string;
   policy: Record<string, unknown>;
@@ -140,6 +144,22 @@ export type TaskAutocompleteLaunchResponse = {
     };
     derivedConfig: DerivedTrainingConfig;
   };
+};
+
+export type TrainingTaskCatalogEntry = {
+  id: string;
+  type: "example" | "template";
+  executionMode: "recipe" | "generic";
+  recipeId?: string;
+  taskTemplate: string;
+  task: string;
+  title: string;
+  description?: string;
+  defaults: Record<string, unknown>;
+};
+
+type TrainingTaskCatalogResponse = {
+  items: TrainingTaskCatalogEntry[];
 };
 
 export type TrainingPreviewMeta = {
@@ -241,34 +261,6 @@ export async function submitTrainingJobRemote(input: SubmitTrainingJobInput): Pr
     body: JSON.stringify(input),
   });
   return await parseJson<TrainingJobSummary>(response);
-}
-
-export async function submitCartpoleDirectJobRemote(input: {
-  tenantId?: string;
-  experimentName?: string;
-  task?: string;
-  robotAssetId?: string;
-  sceneAssetId?: string;
-  maxSteps?: number;
-  numEnvs?: number;
-  checkpoint?: number;
-  stepsPerEpoch?: number;
-  videoLengthSec?: number;
-  videoLengthMs?: number;
-  videoLength?: number;
-  videoInterval?: number;
-  policy?: Record<string, unknown>;
-  policyRules?: Record<string, unknown>;
-  environment?: Record<string, unknown>;
-  extraArgs?: string[];
-}): Promise<TrainingJobSummary> {
-  const response = await fetch(buildUrl("/v1/training/recipes/cartpole-direct/jobs"), {
-    method: "POST",
-    headers: buildHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(input),
-  });
-  const payload = await parseJson<CartpoleDirectLaunchResponse>(response);
-  return payload.job;
 }
 
 export async function listTrainingJobsRemote(): Promise<TrainingJobSummary[]> {
@@ -468,12 +460,30 @@ export async function deriveTrainingConfigRemote(input: {
   return await parseJson<ConfigDerivationPreview>(response);
 }
 
+export async function listTrainingTaskCatalogRemote(): Promise<TrainingTaskCatalogEntry[]> {
+  const response = await fetch(buildUrl("/v1/training/tasks/catalog"), {
+    method: "GET",
+    headers: buildHeaders({ accept: "application/json" }),
+  });
+  const payload = await parseJson<TrainingTaskCatalogResponse>(response);
+  return Array.isArray(payload.items) ? payload.items : [];
+}
+
 export async function submitTrainingTaskRemote(
   input: TaskAutocompleteRequest
 ): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse> {
   const payload: Record<string, unknown> = {
     robotAssetId: String(input.robotAssetId ?? "").trim(),
   };
+
+  const recipeId = String(input.recipeId ?? "").trim();
+  if (recipeId) payload.recipeId = recipeId;
+  if (input.executionMode === "recipe" || input.executionMode === "generic") {
+    payload.executionMode = input.executionMode;
+  }
+  const taskSpecId = String(input.taskSpecId ?? "").trim();
+  if (taskSpecId) payload.taskSpecId = taskSpecId;
+  if (input.taskSpec && typeof input.taskSpec === "object") payload.taskSpec = input.taskSpec;
 
   const taskTemplate = String(input.taskTemplate ?? "").trim();
   if (taskTemplate) payload.taskTemplate = taskTemplate;
