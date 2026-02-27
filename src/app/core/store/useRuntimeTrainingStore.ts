@@ -13,6 +13,7 @@ import {
   cancelTrainingJobRemote,
   getTrainingRunnerLogsRemote,
   submitCartpoleDirectJobRemote,
+  submitTrainingTaskRemote,
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
   listTrainingJobsRemote,
@@ -410,28 +411,59 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const previewValues = toObjectOrEmpty(configValues.preview);
       const environmentValues = toObjectOrEmpty(configValues.environment);
       const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
+      const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
       const submissionPromise = isCartpoleDirectProfile(configObject)
-        ? submitCartpoleDirectJobRemote({
-            tenantId: input.tenantId,
-            experimentName,
-            task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
-            robotAssetId: toTextOrEmpty(configValues.robotAssetId) || undefined,
-            sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
-            maxSteps,
-            numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
-            checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
-            stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
-            videoLengthSec:
-              toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
-              toPositiveIntOrUndefined(configValues.videoLengthSec),
-            videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
-            videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
-            videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
-            policy: toObjectOrUndefined(configValues.policy),
-            policyRules: toObjectOrUndefined(configValues.policyRules),
-            environment: toObjectOrUndefined(configValues.environment),
-            extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
-          })
+        ? robotAssetId
+          ? submitTrainingTaskRemote({
+              taskTemplate: toTextOrEmpty(configValues.taskTemplate) || taskTemplate || "cartpole_direct",
+              task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
+              robotAssetId,
+              sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
+              tenantId: input.tenantId,
+              experimentName,
+              maxSteps,
+              numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
+              checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
+              stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
+              videoLengthSec:
+                toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
+                toPositiveIntOrUndefined(configValues.videoLengthSec),
+              videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
+              videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
+              videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
+              seed: input.seed,
+              policy: toObjectOrUndefined(configValues.policy),
+              policyRules: toObjectOrUndefined(configValues.policyRules),
+              environment: toObjectOrUndefined(configValues.environment),
+              extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
+              overrides: toObjectOrUndefined(configValues.overrides),
+            }).then((taskResponse) => {
+              if (!("job" in taskResponse)) {
+                throw new Error("Task autocomplete returned preview payload during launch");
+              }
+              return taskResponse.job;
+            })
+          : submitCartpoleDirectJobRemote({
+              tenantId: input.tenantId,
+              experimentName,
+              task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
+              robotAssetId: undefined,
+              sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
+              maxSteps,
+              numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
+              checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
+              stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
+              videoLengthSec:
+                toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
+                toPositiveIntOrUndefined(configValues.videoLengthSec),
+              videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
+              videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
+              videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
+              policy: toObjectOrUndefined(configValues.policy),
+              policyRules: toObjectOrUndefined(configValues.policyRules),
+              environment: toObjectOrUndefined(configValues.environment),
+              extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
+            })
         : submitTrainingJobRemote({
             modelName,
             dataset,

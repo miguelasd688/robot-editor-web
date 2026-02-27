@@ -1,6 +1,6 @@
 import type { Object3D } from "three";
 import type { AssetEntry } from "../../assets/assetRegistryTypes";
-import type { ProjectDoc, SceneNode } from "../../editor/document/types";
+import type { ProjectDoc, RobotModelSource, SceneNode } from "../../editor/document/types";
 import type { UrdfImportOptions } from "../../urdf/urdfImportOptions";
 import { exportRobotToUrdf } from "../../urdf/urdfExport";
 import type { MujocoModelSource } from "./MujocoRuntime";
@@ -75,19 +75,105 @@ function resolveUrdfOptions(defaults: MjcfExportUrdfOptions, overrides?: UrdfImp
   };
 }
 
+type DirectRobotMjcfSource = {
+  mjcf: string;
+  mjcfKey: string | null;
+  warnings: string[];
+};
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function resolveDirectRobotMjcfSource(params: {
+  robot: SceneNode;
+  runtime: RobotRuntimeExportData | null | undefined;
+  assets: Record<string, AssetEntry>;
+}): Promise<DirectRobotMjcfSource | null> {
+  const { robot, runtime, assets } = params;
+  const rootUserData = runtime?.root?.userData;
+  const runtimeModelSource = rootUserData?.robotModelSource as RobotModelSource | undefined;
+  const componentModelSource = robot.components?.robotModelSource;
+  const modelSource = runtimeModelSource ?? componentModelSource;
+  const directMjcf = asNonEmptyString(rootUserData?.mjcfSource);
+
+  if (directMjcf) {
+    const mjcfKeyFromModel = modelSource?.kind === "usd" ? asNonEmptyString(modelSource.mjcfKey) : null;
+    return {
+      mjcf: directMjcf,
+      mjcfKey: mjcfKeyFromModel,
+      warnings: ["Using direct MJCF source from scene model for Isaac Lab conversion."],
+    };
+  }
+
+  const candidateKeys: string[] = [];
+  if (modelSource?.kind === "usd") {
+    const modelMjcfKey = asNonEmptyString(modelSource.mjcfKey);
+    if (modelMjcfKey) candidateKeys.push(modelMjcfKey);
+  }
+  const runtimeMjcfAssetId = asNonEmptyString(rootUserData?.mjcfAssetId);
+  if (runtimeMjcfAssetId) candidateKeys.push(runtimeMjcfAssetId);
+
+  for (const key of candidateKeys) {
+    const entry = assets[key];
+    if (!entry) continue;
+    try {
+      const content = (await entry.file.text()).trim();
+      if (!content) continue;
+      return {
+        mjcf: content,
+        mjcfKey: key,
+        warnings: [`Using MJCF asset '${key}' from scene model source for Isaac Lab conversion.`],
+      };
+    } catch {
+      // Keep searching candidates; fallback to URDF export if none are readable.
+    }
+  }
+
+  return null;
+}
+
 export async function exportRobotToMjcf(input: ExportRobotMjcfInput): Promise<ExportRobotMjcfResult> {
   const { doc, robotId, assets, defaultUrdfOptions, runtime } = input;
   const robot = resolveRobotNode(doc, robotId);
-  const exported = exportRobotToUrdf(doc, robotId);
   const urdfKey = runtime?.urdfKey ?? robot.components?.urdfKey ?? null;
   const urdfOptions = resolveUrdfOptions(defaultUrdfOptions, runtime?.importOptions ?? robot.components?.urdfImportOptions);
+  const roots = runtime?.root ? [runtime.root] : undefined;
 
+  const directSource = await resolveDirectRobotMjcfSource({ robot, runtime, assets });
+  if (directSource) {
+    const converted = await buildModelSource({
+      assets,
+      urdfKey: null,
+      urdfSource: null,
+      mjcfKey: directSource.mjcfKey,
+      mjcfSource: directSource.mjcf,
+      urdfOptions,
+      roots,
+    });
+    if (converted.source.kind !== "mjcf") {
+      throw new Error("Failed to generate MJCF from selected scene model source.");
+    }
+    return {
+      robotId,
+      robotName: robot.name || "robot",
+      mjcf: converted.source.content,
+      warnings: [...directSource.warnings, ...converted.warnings],
+    };
+  }
+
+  const exported = exportRobotToUrdf(doc, robotId);
   // Keep robot-local coordinates for per-robot export (same behavior as URDF export).
   const converted = await buildModelSource({
     assets,
     urdfKey,
     urdfSource: exported.urdf,
+    mjcfKey: null,
+    mjcfSource: null,
     urdfOptions,
+    roots,
   });
 
   if (converted.source.kind !== "mjcf") {

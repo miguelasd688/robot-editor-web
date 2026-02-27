@@ -53,11 +53,14 @@ export type UsdJointInfo = {
   childBody?: string | null;
 };
 
+export type StageUpAxis = "X" | "Y" | "Z" | "unknown";
+
 export type UsdIntrospectionMeta = {
   assetId: string;
   filename: string;
   joints: UsdJointInfo[];
   rootBodies: string[];
+  stageUpAxis?: StageUpAxis;
 };
 
 export type DerivedTrainingConfig = {
@@ -73,10 +76,70 @@ export type ConfigDerivationPreview = {
     jointCount: number;
     joints: UsdJointInfo[];
     rootBodies: string[];
+    stageUpAxis?: StageUpAxis;
   };
   derivedConfig: DerivedTrainingConfig;
   taskConfig: Record<string, unknown>;
   message: string;
+};
+
+export type TaskAutocompleteRequest = {
+  taskTemplate?: string;
+  task?: string;
+  robotAssetId: string;
+  sceneAssetId?: string;
+  tenantId?: string;
+  experimentName?: string;
+  maxSteps?: number;
+  numEnvs?: number;
+  checkpoint?: number;
+  stepsPerEpoch?: number;
+  videoLengthSec?: number;
+  videoLengthMs?: number;
+  videoLength?: number;
+  videoInterval?: number;
+  seed?: number;
+  policy?: Record<string, unknown>;
+  policyRules?: Record<string, unknown>;
+  environment?: Record<string, unknown>;
+  extraArgs?: string[];
+  overrides?: Record<string, unknown>;
+  dryRun?: boolean;
+};
+
+export type TaskAutocompletePreview = {
+  dryRun: true;
+  taskTemplate: string;
+  assetId: string;
+  introspection: {
+    jointCount: number;
+    joints: UsdJointInfo[];
+    rootBodies: string[];
+    stageUpAxis?: StageUpAxis;
+  };
+  derivedConfig: DerivedTrainingConfig;
+  taskConfig: Record<string, unknown>;
+  environmentPreview: Record<string, unknown>;
+  message: string;
+};
+
+export type TaskAutocompleteLaunchResponse = {
+  recipeId: string;
+  job: TrainingJobSummary;
+  task: string;
+  policy: Record<string, unknown>;
+  deduplicated?: boolean;
+  taskTemplate: string;
+  autoConfig: {
+    assetId: string;
+    introspection: {
+      jointCount: number;
+      joints: UsdJointInfo[];
+      rootBodies: string[];
+      stageUpAxis?: StageUpAxis;
+    };
+    derivedConfig: DerivedTrainingConfig;
+  };
 };
 
 export type TrainingPreviewMeta = {
@@ -407,4 +470,53 @@ export async function deriveTrainingConfigRemote(input: {
     body: JSON.stringify(payload),
   });
   return await parseJson<ConfigDerivationPreview>(response);
+}
+
+export async function submitTrainingTaskRemote(
+  input: TaskAutocompleteRequest
+): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse> {
+  const payload: Record<string, unknown> = {
+    robotAssetId: String(input.robotAssetId ?? "").trim(),
+  };
+
+  const taskTemplate = String(input.taskTemplate ?? "").trim();
+  if (taskTemplate) payload.taskTemplate = taskTemplate;
+  const task = String(input.task ?? "").trim();
+  if (task) payload.task = task;
+  const sceneAssetId = String(input.sceneAssetId ?? "").trim();
+  if (sceneAssetId) payload.sceneAssetId = sceneAssetId;
+  const tenantId = String(input.tenantId ?? "").trim();
+  if (tenantId) payload.tenantId = tenantId;
+  const experimentName = String(input.experimentName ?? "").trim();
+  if (experimentName) payload.experimentName = experimentName;
+
+  for (const [key, value] of Object.entries({
+    maxSteps: input.maxSteps,
+    numEnvs: input.numEnvs,
+    checkpoint: input.checkpoint,
+    stepsPerEpoch: input.stepsPerEpoch,
+    videoLengthSec: input.videoLengthSec,
+    videoLengthMs: input.videoLengthMs,
+    videoLength: input.videoLength,
+    videoInterval: input.videoInterval,
+    seed: input.seed,
+  })) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      payload[key] = value;
+    }
+  }
+
+  if (input.policy && typeof input.policy === "object") payload.policy = input.policy;
+  if (input.policyRules && typeof input.policyRules === "object") payload.policyRules = input.policyRules;
+  if (input.environment && typeof input.environment === "object") payload.environment = input.environment;
+  if (input.overrides && typeof input.overrides === "object") payload.overrides = input.overrides;
+  if (Array.isArray(input.extraArgs)) payload.extraArgs = input.extraArgs.map((item) => String(item));
+  if (input.dryRun === true) payload.dryRun = true;
+
+  const response = await fetch(buildUrl("/v1/training/tasks"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return await parseJson<TaskAutocompletePreview | TaskAutocompleteLaunchResponse>(response);
 }

@@ -12,6 +12,8 @@ export type MujocoModelBuildInput = {
   assets: Record<string, AssetEntry>;
   urdfKey: string | null;
   urdfSource?: string | null;
+  mjcfKey?: string | null;
+  mjcfSource?: string | null;
   namePrefix?: string;
   urdfOptions: {
     floatingBase: boolean;
@@ -194,7 +196,7 @@ function buildLinkFrictionOverrides(roots: THREE.Object3D[]) {
 }
 
 export async function buildModelSource(input: MujocoModelBuildInput): Promise<MujocoModelBuildResult> {
-  const { assets, urdfKey, urdfSource, namePrefix, urdfOptions, roots } = input;
+  const { assets, urdfKey, urdfSource, mjcfKey, mjcfSource, namePrefix, urdfOptions, roots } = input;
   const keys = Object.keys(assets);
   const warnings: string[] = [];
   const debug = String(import.meta.env.VITE_MUJOCO_DEBUG ?? "").toLowerCase() === "true";
@@ -217,7 +219,42 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
     if (debug) logDebug(message, { scope: "mujoco", data });
   };
 
-  if ((urdfSource && typeof urdfSource === "string") || (urdfKey && assets[urdfKey])) {
+  const inlineMjcf = typeof mjcfSource === "string" ? mjcfSource.trim() : "";
+  const explicitMjcfKey = typeof mjcfKey === "string" ? mjcfKey.trim() : "";
+  if (inlineMjcf || (explicitMjcfKey && assets[explicitMjcfKey])) {
+    const sourceKey = explicitMjcfKey || null;
+    const content =
+      inlineMjcf ||
+      (sourceKey && assets[sourceKey] ? await assets[sourceKey].file.text() : "");
+    if (!content) {
+      throw new Error("Failed to resolve MJCF source for export.");
+    }
+    const label = sourceKey ?? "inline";
+    logInfo(`MuJoCo: loading MJCF (${label})`, { scope: "mujoco" });
+    const meshRefs = findMeshRefs(content, "file");
+    const { files, remap, missing, convertedWarnings } = await convertMeshesForMujoco(
+      assets,
+      sourceKey ?? "",
+      meshRefs
+    );
+    warnings.push(...convertedWarnings);
+    if (missing.length) {
+      throw new Error(`Missing mesh files referenced by MJCF: ${missing.join(", ")}`);
+    }
+    const rewritten = rewriteAssetPaths(content, assets, sourceKey ?? "", "file", remap);
+    return {
+      source: {
+        kind: "mjcf",
+        filename: sourceKey || "inline.mjcf",
+        content: rewritten,
+        files,
+      },
+      warnings,
+    };
+  }
+
+  const urdfKeyLooksLikeMjcf = Boolean(urdfKey && (urdfKey.toLowerCase().endsWith(".xml") || urdfKey.toLowerCase().endsWith(".mjcf")));
+  if ((urdfSource && typeof urdfSource === "string") || (urdfKey && assets[urdfKey] && !urdfKeyLooksLikeMjcf)) {
     let content = urdfSource && typeof urdfSource === "string" ? urdfSource : await assets[urdfKey as string].file.text();
     const label = urdfKey ?? "inline";
     logInfo(`MuJoCo: loading URDF (${label})`, { scope: "mujoco" });
