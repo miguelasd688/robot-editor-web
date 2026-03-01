@@ -155,12 +155,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
   const warnings: string[] = [];
   const meshMode = options.meshMode ?? "mesh";
   const warn = (message: string) => warnings.push(message);
-  // When the user requests a fixed base, we still add a root freejoint and weld it to the world.
-  // This avoids root-link special cases and keeps kinematics consistent across robots.
-  const fixedBaseWeld = rootFreeJoint === false;
-  // MuJoCo equality constraints are soft by default; tune weld params to behave like a rigid attachment.
-  const fixedBaseWeldSolref = "0.001 1";
-  const fixedBaseWeldSolimp = "0.999 0.9999 0.001 0.5 2";
+  const fixedBase = rootFreeJoint === false;
   const debug = options.debug === true;
   const forceDiagonalInertia = options.forceDiagonalInertia === true;
   const selfCollision = options.selfCollision === true;
@@ -372,7 +367,7 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
     const bodyAttr = `name="${mjcfLinkName}" pos="${formatVec([posVec.x, posVec.y, posVec.z])}" quat="${formatQuat(quat)}"`;
     worldLines.push(`${pad}<body ${bodyAttr}>`);
 
-    if (isRoot && (rootFreeJoint || fixedBaseWeld)) {
+    if (isRoot && rootFreeJoint) {
       worldLines.push(`${pad}  <freejoint />`);
     }
 
@@ -610,14 +605,10 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
   lines.push(...worldLines);
   lines.push(`  </worldbody>`);
 
-  if (fixedBaseWeld && rootBodyNames.length) {
-    lines.push(`  <equality>`);
-    for (const bodyName of rootBodyNames) {
-      lines.push(
-        `    <weld body1="${bodyName}" body2="world" solref="${fixedBaseWeldSolref}" solimp="${fixedBaseWeldSolimp}" />`
-      );
-    }
-    lines.push(`  </equality>`);
+  if (fixedBase && rootBodyNames.length > 1) {
+    warnings.push(
+      `Detected ${rootBodyNames.length} root links in fixed-base mode; each root will remain statically attached to world.`
+    );
   }
 
   const jointActuators: string[] = [];

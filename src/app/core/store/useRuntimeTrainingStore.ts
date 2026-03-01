@@ -422,6 +422,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const environmentValues = toObjectOrEmpty(configValues.environment);
       const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
       const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
+      const baseConstraintModeToken = toTextOrEmpty(configValues.baseConstraintMode);
       const submissionPromise = isTaskFactoryConfig(configObject)
         ? robotAssetId
           ? submitTrainingTaskRemote({
@@ -448,6 +449,13 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             seed: input.seed,
             policy: toObjectOrUndefined(configValues.policy),
             policyRules: toObjectOrUndefined(configValues.policyRules),
+            baseConstraintMode:
+              baseConstraintModeToken === "fix_base"
+                ? "fix_base"
+                : baseConstraintModeToken === "source_weld"
+                  ? "source_weld"
+                  : undefined,
+            userModelMetadata: toObjectOrUndefined(configValues.userModelMetadata),
             environment: toObjectOrUndefined(configValues.environment),
             extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
             overrides: toObjectOrUndefined(configValues.overrides),
