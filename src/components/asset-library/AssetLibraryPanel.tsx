@@ -9,12 +9,17 @@ import { useDockStore } from "../../app/core/store/useDockStore";
 import { useFileViewerStore } from "../../app/core/store/useFileViewerStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
 import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
+import { isUrdfLikePath } from "../../app/core/urdf/urdfFileTypes";
 import {
   BROWSER_IMPORT_MIME,
   type BrowserImportPayload,
   encodeBrowserImportPayload,
 } from "./browserDragDrop";
-import { CARTPOLE_SAMPLE_URDF, CARTPOLE_SAMPLE_NAME, findCartpoleSampleKey } from "./cartpoleSample";
+import {
+  ensureLibrarySampleImported,
+  getLibrarySampleById,
+  LIBRARY_SAMPLES,
+} from "./librarySamples";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
 
 type LibrarySectionId = Exclude<BrowserDirectoryId, "workspace">;
@@ -27,7 +32,7 @@ type BrowserItem = {
   icon: string;
   badge?: string;
   assetId?: SceneAssetId;
-  action?: "sample-cartpole";
+  sampleId?: string;
   importLabel?: string;
   preview: {
     top: string;
@@ -66,6 +71,27 @@ type NavigationSelection<TValue> = {
   navigationVersion: number;
 };
 
+const USD_EXTS = [".usd", ".usda", ".usdc", ".usdz"];
+
+const isUsdPath = (path: string) => {
+  const lower = path.toLowerCase();
+  return USD_EXTS.some((ext) => lower.endsWith(ext));
+};
+
+const xacroCaption = (path: string) => (path.toLowerCase().endsWith(".xacro") ? "XACRO" : "URDF");
+
+const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
+  id: `robot-sample-${sample.id}`,
+  label: sample.label,
+  pathName: sample.label.replace(/\s+/g, ""),
+  description: sample.description,
+  icon: sample.icon ?? (sample.kind === "usd" ? "🔷" : "🧪"),
+  badge: sample.badge ?? sample.kind.toUpperCase(),
+  sampleId: sample.id,
+  importLabel: sample.importLabel ?? "Load sample",
+  preview: sample.preview,
+}));
+
 const LIBRARY_SECTIONS: BrowserSection[] = [
   {
     id: "floors",
@@ -103,21 +129,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           caption: "ROBOT",
         },
       },
-      {
-        id: "robot-cartpole",
-        label: "Cartpole Sample",
-        pathName: "CartpoleSample",
-        description: "Imports the Cartpole sample URDF into workspace and loads it.",
-        icon: "🧪",
-        badge: "URDF",
-        action: "sample-cartpole",
-        importLabel: "Load sample",
-        preview: {
-          top: "rgba(101, 148, 117, 0.55)",
-          bottom: "rgba(38, 74, 57, 0.9)",
-          caption: "CARTPOLE",
-        },
-      },
+      ...LIBRARY_SAMPLE_ITEMS,
     ],
   },
   {
@@ -257,21 +269,21 @@ function workspaceEntryPreview(name: string, isDir: boolean) {
     };
   }
 
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".urdf")) {
+  if (isUrdfLikePath(name)) {
     return {
       top: "rgba(94, 150, 111, 0.58)",
       bottom: "rgba(37, 74, 53, 0.92)",
-      caption: "URDF",
+      caption: xacroCaption(name),
     };
   }
-  if ([".usd", ".usda", ".usdc", ".usdz"].some((ext) => lower.endsWith(ext))) {
+  if (isUsdPath(name)) {
     return {
       top: "rgba(120, 100, 180, 0.58)",
       bottom: "rgba(55, 35, 95, 0.92)",
       caption: "USD",
     };
   }
+  const lower = name.toLowerCase();
   if (lower.endsWith(".stl") || lower.endsWith(".dae") || lower.endsWith(".obj")) {
     return {
       top: "rgba(140, 134, 112, 0.58)",
@@ -288,9 +300,9 @@ function workspaceEntryPreview(name: string, isDir: boolean) {
 
 function workspaceEntryIcon(name: string, isDir: boolean) {
   if (isDir) return "📁";
+  if (isUrdfLikePath(name)) return name.toLowerCase().endsWith(".xacro") ? "🧩" : "🤖";
+  if (isUsdPath(name)) return "🔷";
   const lower = name.toLowerCase();
-  if (lower.endsWith(".urdf")) return "🤖";
-  if ([".usd", ".usda", ".usdc", ".usdz"].some((ext) => lower.endsWith(ext))) return "🔷";
   if (lower.endsWith(".stl") || lower.endsWith(".dae") || lower.endsWith(".obj")) return "🧊";
   return "📄";
 }
@@ -365,7 +377,7 @@ export default function AssetLibraryPanel() {
           path: node.path,
           description: isDir ? "Directory" : node.path,
           icon: workspaceEntryIcon(node.name, isDir),
-          actionLabel: isDir ? "Open" : (node.name.toLowerCase().endsWith(".urdf") || [".usd", ".usda", ".usdc", ".usdz"].some((ext) => node.name.toLowerCase().endsWith(ext))) ? "Import" : "Open",
+          actionLabel: isDir ? "Open" : isUrdfLikePath(node.name) || isUsdPath(node.name) ? "Import" : "Open",
           preview,
         } satisfies WorkspaceEntry;
       });
@@ -412,11 +424,8 @@ export default function AssetLibraryPanel() {
     openPanel(dock, "editor");
   };
 
-  const USD_EXTS = [".usd", ".usda", ".usdc", ".usdz"];
-
   const importWorkspaceFile = (path: string) => {
-    const lower = path.toLowerCase();
-    if (lower.endsWith(".urdf")) {
+    if (isUrdfLikePath(path)) {
       setURDF(path);
       requestUrdfImport({
         urdfKey: path,
@@ -425,7 +434,7 @@ export default function AssetLibraryPanel() {
       logInfo("Browser import request: Workspace URDF", { scope: "assets", data: { urdfKey: path } });
       return;
     }
-    if (USD_EXTS.some((ext) => lower.endsWith(ext))) {
+    if (isUsdPath(path)) {
       const store = useAssetStore.getState();
       store.setUSD(path);
       requestUsdImport({
@@ -438,23 +447,46 @@ export default function AssetLibraryPanel() {
     openFileInEditor(path);
   };
 
-  const importCartpoleSample = () => {
-    const hasSample = Boolean(findCartpoleSampleKey(Object.keys(assets)));
-    if (!hasSample) {
-      const sampleFile = new File([CARTPOLE_SAMPLE_URDF], CARTPOLE_SAMPLE_NAME, { type: "application/xml" });
-      importFiles([sampleFile]);
-    }
-    const store = useAssetStore.getState();
-    const sampleKey = findCartpoleSampleKey(Object.keys(store.assets));
-    if (!sampleKey) return;
-    setURDF(sampleKey);
-    requestUrdfImport({
-      urdfKey: sampleKey,
-      source: "browser",
-      optionOverrides: { floatingBase: false },
-    });
-    logInfo("Browser import request: Cartpole sample URDF", { scope: "assets", data: { urdfKey: sampleKey } });
-  };
+  const importLibrarySample = useCallback(
+    async (sampleId: string) => {
+      const sample = getLibrarySampleById(sampleId);
+      if (!sample) return;
+
+      const sampleKey = await ensureLibrarySampleImported(
+        sample,
+        () => useAssetStore.getState().assets,
+        importFiles
+      );
+      if (!sampleKey) return;
+
+      const store = useAssetStore.getState();
+      if (sample.kind === "urdf") {
+        store.setURDF(sampleKey);
+        requestUrdfImport({
+          urdfKey: sampleKey,
+          source: "browser",
+          optionOverrides: sample.defaultImportOptions?.urdf,
+        });
+        logInfo(`Browser import request: Library sample ${sample.id} (URDF)`, {
+          scope: "assets",
+          data: { sampleId: sample.id, urdfKey: sampleKey },
+        });
+        return;
+      }
+
+      store.setUSD(sampleKey);
+      requestUsdImport({
+        usdKey: sampleKey,
+        source: "browser",
+        optionOverrides: sample.defaultImportOptions?.usd,
+      });
+      logInfo(`Browser import request: Library sample ${sample.id} (USD)`, {
+        scope: "assets",
+        data: { sampleId: sample.id, usdKey: sampleKey },
+      });
+    },
+    [importFiles, requestUrdfImport, requestUsdImport]
+  );
 
   const importAssetItem = (item: BrowserItem | null) => {
     if (!item) return;
@@ -462,8 +494,8 @@ export default function AssetLibraryPanel() {
       importSceneAsset(item.assetId, item.label);
       return;
     }
-    if (item.action === "sample-cartpole") {
-      importCartpoleSample();
+    if (item.sampleId) {
+      void importLibrarySample(item.sampleId);
     }
   };
 
@@ -503,17 +535,16 @@ export default function AssetLibraryPanel() {
     if (item.assetId) {
       return { kind: "asset", assetId: item.assetId, label: item.label };
     }
-    if (item.action === "sample-cartpole") {
-      return { kind: "sample", sample: "cartpole", label: item.label };
+    if (item.sampleId) {
+      return { kind: "sample", sampleId: item.sampleId, label: item.label };
     }
     return null;
   };
 
   const dragPayloadFromWorkspaceEntry = (entry: WorkspaceEntry): BrowserImportPayload | null => {
     if (entry.kind !== "file") return null;
-    const lower = entry.path.toLowerCase();
-    if (lower.endsWith(".urdf")) return { kind: "workspace-urdf", path: entry.path, label: entry.name };
-    if (USD_EXTS.some((ext) => lower.endsWith(ext))) return { kind: "workspace-usd", path: entry.path, label: entry.name };
+    if (isUrdfLikePath(entry.path)) return { kind: "workspace-urdf", path: entry.path, label: entry.name };
+    if (isUsdPath(entry.path)) return { kind: "workspace-usd", path: entry.path, label: entry.name };
     return null;
   };
 

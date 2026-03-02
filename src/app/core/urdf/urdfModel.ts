@@ -68,6 +68,7 @@ export type UrdfInstance =
   | { kind: "joint"; joint: UrdfJoint };
 
 export type UrdfParseResult = { robot: UrdfRobot | null; warnings: string[] };
+type UrdfRgba = [number, number, number, number];
 
 const defaultPose = (): Pose => ({ xyz: [0, 0, 0], rpy: [0, 0, 0] });
 
@@ -146,10 +147,8 @@ function readGeom(node: Element | null): UrdfGeom | null {
   return null;
 }
 
-function readVisualRgba(node: Element): [number, number, number, number] | undefined {
-  const colorEl = node.querySelector("material > color");
-  if (!colorEl) return undefined;
-  const parts = (colorEl.getAttribute("rgba") ?? "").trim().split(/\s+/).map(Number);
+function parseRgbaAttr(value: string | null | undefined): UrdfRgba | undefined {
+  const parts = (value ?? "").trim().split(/\s+/).map(Number);
   if (parts.length < 3) return undefined;
   return [
     Number.isFinite(parts[0]) ? Math.max(0, Math.min(1, parts[0])) : 1,
@@ -159,14 +158,46 @@ function readVisualRgba(node: Element): [number, number, number, number] | undef
   ];
 }
 
-function readCollisions(link: Element, tagName: "collision" | "visual"): UrdfCollision[] {
+function readMaterialColor(materialNode: Element | null): UrdfRgba | undefined {
+  if (!materialNode) return undefined;
+  const colorEl = materialNode.querySelector("color");
+  if (!colorEl) return undefined;
+  return parseRgbaAttr(colorEl.getAttribute("rgba"));
+}
+
+function extractRobotMaterialColors(robotEl: Element): Map<string, UrdfRgba> {
+  const map = new Map<string, UrdfRgba>();
+  for (const child of Array.from(robotEl.children)) {
+    if (child.tagName.toLowerCase() !== "material") continue;
+    const name = (child.getAttribute("name") ?? "").trim();
+    if (!name) continue;
+    const rgba = readMaterialColor(child);
+    if (rgba) map.set(name, rgba);
+  }
+  return map;
+}
+
+function readVisualRgba(node: Element, materialMap: ReadonlyMap<string, UrdfRgba>): UrdfRgba | undefined {
+  const materialEl = node.querySelector("material");
+  const inline = readMaterialColor(materialEl);
+  if (inline) return inline;
+  const materialName = (materialEl?.getAttribute("name") ?? "").trim();
+  if (!materialName) return undefined;
+  return materialMap.get(materialName);
+}
+
+function readCollisions(
+  link: Element,
+  tagName: "collision" | "visual",
+  materialMap: ReadonlyMap<string, UrdfRgba>
+): UrdfCollision[] {
   const collisions: UrdfCollision[] = [];
   for (const node of Array.from(link.querySelectorAll(tagName))) {
     const origin = readPose(node.querySelector("origin"));
     const geom = readGeom(node.querySelector("geometry"));
     if (!geom) continue;
     const name = node.getAttribute("name") ?? undefined;
-    const rgba = tagName === "visual" ? readVisualRgba(node) : undefined;
+    const rgba = tagName === "visual" ? readVisualRgba(node, materialMap) : undefined;
     collisions.push({ name, origin, geom, rgba });
   }
   return collisions;
@@ -240,14 +271,15 @@ export function parseUrdfElement(robotEl: Element | null): UrdfParseResult {
   }
 
   const robotName = robotEl.getAttribute("name") || "urdf_robot";
+  const robotMaterialMap = extractRobotMaterialColors(robotEl);
 
   const links = new Map<string, UrdfLink>();
   for (const link of Array.from(robotEl.querySelectorAll("link"))) {
     const name = link.getAttribute("name");
     if (!name) continue;
     const inertial = readInertial(link);
-    const collisions = readCollisions(link, "collision");
-    const visuals = readCollisions(link, "visual");
+    const collisions = readCollisions(link, "collision", robotMaterialMap);
+    const visuals = readCollisions(link, "visual", robotMaterialMap);
     links.set(name, { name, inertial, collisions, visuals });
   }
 

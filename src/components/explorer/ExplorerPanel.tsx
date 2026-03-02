@@ -46,7 +46,7 @@ export default function ExplorerPanel() {
       return;
     }
 
-    alert("No robot file selected. Import a workspace folder containing a .urdf or .usd file.");
+    alert("No robot file selected. Import a workspace folder containing a .urdf/.xacro or .usd file.");
   };
 
   const onDirectoryClick = (directoryId: BrowserDirectoryId) => {

@@ -7,6 +7,7 @@ import type { MujocoModelSource } from "./MujocoRuntime";
 import type { MjcfNameMap } from "./mjcfNames";
 import { convertUrdfToMjcf } from "./urdfToMjcf";
 import { logDebug, logInfo, logWarn } from "../../services/logger";
+import { expandXacroIfConfigured, hasXacroTags, stripXacroTags } from "../../urdf/xacro";
 
 export type MujocoModelBuildInput = {
   assets: Record<string, AssetEntry>;
@@ -259,9 +260,13 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
     const label = urdfKey ?? "inline";
     logInfo(`MuJoCo: loading URDF (${label})`, { scope: "mujoco" });
     debugLog("urdf bytes", { bytes: content.length });
-    if (/<\s*xacro:/i.test(content)) {
+    if (hasXacroTags(content)) {
       try {
-        const expanded = await expandXacroIfConfigured(content, assets, urdfKey ?? "");
+        const expanded = await expandXacroIfConfigured({
+          content,
+          assets,
+          urdfKey: urdfKey ?? "",
+        });
         if (expanded) {
           content = expanded;
           logInfo("MuJoCo: xacro expanded", { scope: "mujoco" });
@@ -406,59 +411,6 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
   }
 
   return { source: { kind: "generated" }, warnings };
-}
-
-async function readAllAssets(assets: Record<string, AssetEntry>): Promise<Record<string, Uint8Array>> {
-  const entries = await Promise.all(
-    Object.values(assets).map(async (entry) => [entry.key, new Uint8Array(await entry.file.arrayBuffer())] as const)
-  );
-  return Object.fromEntries(entries);
-}
-
-function encodeBase64(data: Uint8Array) {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < data.length; i += chunk) {
-    binary += String.fromCharCode(...data.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-async function expandXacroIfConfigured(
-  content: string,
-  assets: Record<string, AssetEntry>,
-  urdfKey: string
-): Promise<string | null> {
-  const endpoint = import.meta.env.VITE_XACRO_ENDPOINT as string | undefined;
-  if (!endpoint) return null;
-  const files = await readAllAssets(assets);
-  const payload = {
-    urdfKey,
-    urdf: content,
-    files: Object.fromEntries(Object.entries(files).map(([key, data]) => [key, encodeBase64(data)])),
-  };
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Xacro endpoint failed: ${res.status} ${res.statusText}`);
-  }
-  const data = (await res.json()) as { urdf?: string };
-  if (!data?.urdf) {
-    throw new Error("Xacro endpoint did not return expanded URDF.");
-  }
-  return String(data.urdf);
-}
-
-function stripXacroTags(content: string) {
-  let next = content;
-  next = next.replace(/\sxmlns:xacro="[^"]*"/gi, "");
-  next = next.replace(/<\s*xacro:[^>]*\/\s*>/gi, "");
-  next = next.replace(/<\s*xacro:[^>]*>/gi, "");
-  next = next.replace(/<\/\s*xacro:[^>]*>/gi, "");
-  return next;
 }
 
 type MeshBounds = { size: [number, number, number]; radius: number; center: [number, number, number] };

@@ -19,7 +19,7 @@ import { editorEngine } from "../../app/core/editor/engineSingleton";
 import { ThreeSceneAdapter } from "../../app/core/editor/adapters/three/ThreeSceneAdapter";
 import { setThreeAdapter } from "../../app/core/editor/adapters/three/adapterSingleton";
 import { hasBrowserImportPayload, payloadFromDataTransfer, type BrowserImportPayload } from "../asset-library/browserDragDrop";
-import { CARTPOLE_SAMPLE_URDF, CARTPOLE_SAMPLE_NAME, findCartpoleSampleKey } from "../asset-library/cartpoleSample";
+import { ensureLibrarySampleImported, getLibrarySampleById } from "../asset-library/librarySamples";
 
 const pointerPointFromRay = (ray: { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }, depth: number) => ({
   x: ray.origin.x + ray.direction.x * depth,
@@ -369,7 +369,7 @@ export default function ViewportPanel() {
   }, []);
 
   const importDroppedPayload = useCallback(
-    (payload: BrowserImportPayload) => {
+    async (payload: BrowserImportPayload) => {
       if (payload.kind === "asset") {
         const assetId = payload.assetId;
         const isMesh = isMeshAssetId(assetId);
@@ -386,25 +386,41 @@ export default function ViewportPanel() {
         return;
       }
 
-      if (payload.kind === "sample" && payload.sample === "cartpole") {
-        let assetStore = useAssetStore.getState();
-        let sampleKey = findCartpoleSampleKey(Object.keys(assetStore.assets));
-        if (!sampleKey) {
-          const sampleFile = new File([CARTPOLE_SAMPLE_URDF], CARTPOLE_SAMPLE_NAME, { type: "application/xml" });
-          assetStore.importFiles([sampleFile]);
-          assetStore = useAssetStore.getState();
-          sampleKey = findCartpoleSampleKey(Object.keys(assetStore.assets));
-        }
+      if (payload.kind === "sample") {
+        const sample = getLibrarySampleById(payload.sampleId);
+        if (!sample) return;
+
+        const sampleKey = await ensureLibrarySampleImported(
+          sample,
+          () => useAssetStore.getState().assets,
+          useAssetStore.getState().importFiles
+        );
         if (!sampleKey) return;
-        assetStore.setURDF(sampleKey);
-        requestUrdfImport({
-          urdfKey: sampleKey,
+
+        const assetStore = useAssetStore.getState();
+        if (sample.kind === "urdf") {
+          assetStore.setURDF(sampleKey);
+          requestUrdfImport({
+            urdfKey: sampleKey,
+            source: "viewport-drop",
+            optionOverrides: sample.defaultImportOptions?.urdf,
+          });
+          logInfo(`Viewport drop import request: Library sample ${sample.id} (URDF)`, {
+            scope: "assets",
+            data: { sampleId: sample.id, urdfKey: sampleKey },
+          });
+          return;
+        }
+
+        assetStore.setUSD(sampleKey);
+        requestUsdImport({
+          usdKey: sampleKey,
           source: "viewport-drop",
-          optionOverrides: { floatingBase: false },
+          optionOverrides: sample.defaultImportOptions?.usd,
         });
-        logInfo("Viewport drop import request: Cartpole sample URDF", {
+        logInfo(`Viewport drop import request: Library sample ${sample.id} (USD)`, {
           scope: "assets",
-          data: { urdfKey: sampleKey },
+          data: { sampleId: sample.id, usdKey: sampleKey },
         });
         return;
       }

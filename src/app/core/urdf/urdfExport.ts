@@ -29,6 +29,11 @@ const cloneInertial = (item: UrdfInertial): UrdfInertial => ({
   inertia: { ...item.inertia },
 });
 
+const cloneRgba = (
+  rgba: [number, number, number, number] | undefined
+): [number, number, number, number] | undefined =>
+  rgba ? ([...rgba] as [number, number, number, number]) : undefined;
+
 const finiteOr = (value: number | undefined | null, fallback: number) =>
   Number.isFinite(value) ? Number(value) : fallback;
 
@@ -261,10 +266,12 @@ const withSceneOrigins = (
   return items.map((item, index) => {
     const source = nodesByKind[index];
     const transform = resolveTransform(source);
+    const sceneOverrideRgba = kind === "visual" ? source?.components?.visual?.rgba : undefined;
     return {
       name: item.name,
       geom: cloneGeom(item.geom),
       origin: source ? poseFromTransform(transform) : clonePose(item.origin),
+      rgba: cloneRgba(sceneOverrideRgba ?? item.rgba),
     };
   });
 };
@@ -322,6 +329,7 @@ const transformCollision = (
     name: item.name,
     origin: poseFromMatrix(matrix),
     geom: scaleGeom(item.geom, scale),
+    rgba: cloneRgba(item.rgba),
   };
 };
 
@@ -436,6 +444,14 @@ const formatNumber = (value: number) => {
 const formatVec3 = (vec: [number, number, number]) =>
   `${formatNumber(vec[0])} ${formatNumber(vec[1])} ${formatNumber(vec[2])}`;
 
+const formatRgba = (rgba: [number, number, number, number]) => {
+  const safe = rgba.map((value) => {
+    if (!Number.isFinite(value)) return 1;
+    return Math.max(0, Math.min(1, value));
+  }) as [number, number, number, number];
+  return `${formatNumber(safe[0])} ${formatNumber(safe[1])} ${formatNumber(safe[2])} ${formatNumber(safe[3])}`;
+};
+
 const appendGeometry = (lines: string[], indent: string, geom: UrdfGeom) => {
   if (geom.kind === "box") {
     lines.push(`${indent}<box size="${formatVec3(geom.size)}" />`);
@@ -463,6 +479,11 @@ const appendCollisionLike = (lines: string[], tag: "visual" | "collision", item:
   lines.push(`${indent}  <geometry>`);
   appendGeometry(lines, `${indent}    `, item.geom);
   lines.push(`${indent}  </geometry>`);
+  if (tag === "visual" && item.rgba) {
+    lines.push(`${indent}  <material>`);
+    lines.push(`${indent}    <color rgba="${formatRgba(item.rgba)}" />`);
+    lines.push(`${indent}  </material>`);
+  }
   lines.push(`${indent}</${tag}>`);
 };
 

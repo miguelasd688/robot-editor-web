@@ -3,6 +3,7 @@ import * as THREE from "three";
 import URDFLoader from "urdf-loader";
 import type { Viewer } from "../viewer/Viewer";
 import { createAssetResolver } from "./assetResolver";
+import type { AssetEntry } from "../assets/assetRegistryTypes";
 import {
   parseUrdfElement,
   parseUrdfString,
@@ -16,10 +17,12 @@ import type { UrdfImportOptions } from "../urdf/urdfImportOptions";
 import type { UrdfModelSource } from "../editor/document/types";
 import { useLoaderStore } from "../store/useLoaderStore";
 import { logInfo, logWarn } from "../services/logger";
+import { expandXacroIfConfigured, hasXacroTags, stripXacroTags } from "../urdf/xacro";
 
 export type URDFLoaderParams = {
   urdfUrl: string;
   urdfKey?: string | null;
+  assets?: Record<string, AssetEntry>;
   resolveResource?: (resourceUrl: string) => string | null;
   importOptions?: UrdfImportOptions;
 };
@@ -52,6 +55,7 @@ const cloneCollision = (item: UrdfLink["collisions"][number]) => ({
   name: item.name,
   origin: clonePose(item.origin),
   geom: cloneGeom(item.geom),
+  rgba: item.rgba ? ([...item.rgba] as [number, number, number, number]) : undefined,
 });
 
 const cloneLink = (link: UrdfLink): UrdfLink => ({
@@ -364,7 +368,7 @@ const stripWorldReferenceFrame = (robotObj: THREE.Object3D, parsed: UrdfRobot) =
 };
 
 export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Object3D> {
-  const { urdfUrl, urdfKey, resolveResource, importOptions } = params;
+  const { urdfUrl, urdfKey, assets, resolveResource, importOptions } = params;
 
   const manager = new THREE.LoadingManager();
   let resourcesStarted = false;
@@ -404,7 +408,32 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
   if (!response.ok) {
     throw new Error(`Failed to load URDF (${response.status} ${response.statusText})`);
   }
-  const urdfText = await response.text();
+  let urdfText = await response.text();
+  if (hasXacroTags(urdfText)) {
+    try {
+      const expanded = await expandXacroIfConfigured({
+        content: urdfText,
+        assets: assets ?? {},
+        urdfKey: urdfKey ?? "",
+      });
+      if (expanded) {
+        urdfText = expanded;
+        logInfo("URDF: xacro expanded.", { scope: "urdf", data: { urdfKey: urdfKey ?? null } });
+      } else {
+        urdfText = stripXacroTags(urdfText);
+        logWarn("URDF: xacro endpoint not configured; stripping xacro tags.", {
+          scope: "urdf",
+          data: { urdfKey: urdfKey ?? null },
+        });
+      }
+    } catch (error) {
+      urdfText = stripXacroTags(urdfText);
+      logWarn("URDF: xacro expansion failed; stripping xacro tags.", {
+        scope: "urdf",
+        data: { urdfKey: urdfKey ?? null, error: String((error as Error)?.message ?? error) },
+      });
+    }
+  }
   const robot = loader.parse(urdfText);
 
   const parsed = (robot as any).urdfRobotNode
@@ -478,7 +507,7 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
 export type URDFImportDeps = {
   viewer: Viewer | null;
   urdfKey: string | null;
-  assets: Record<string, { url: string; key: string }>;
+  assets: Record<string, AssetEntry>;
   importOptions?: URDFLoaderParams["importOptions"];
 };
 
@@ -487,7 +516,7 @@ export async function loadWorkspaceURDFIntoViewer(deps: URDFImportDeps) {
 
   if (!urdfKey) {
     logWarn("URDF load requested but no URDF selected.", { scope: "urdf" });
-    alert("No URDF selected. Import a folder/files with a .urdf and select it.");
+    alert("No URDF selected. Import a folder/files with a .urdf/.xacro and select it.");
     return;
   }
 
@@ -504,6 +533,6 @@ export async function loadWorkspaceURDFIntoViewer(deps: URDFImportDeps) {
   // ✅ aquí ya usas el store (viewer lo coge de useAppStore dentro del store)
   await useLoaderStore.getState().load(
     "urdf",
-    { urdfUrl: entry.url, urdfKey, resolveResource, importOptions } satisfies URDFLoaderParams
+    { urdfUrl: entry.url, urdfKey, assets, resolveResource, importOptions } satisfies URDFLoaderParams
   );
 }

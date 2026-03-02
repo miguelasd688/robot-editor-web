@@ -10,7 +10,7 @@ export type BrowserImportPayload =
     }
   | {
       kind: "sample";
-      sample: "cartpole";
+      sampleId: string;
       label: string;
     }
   | {
@@ -31,7 +31,7 @@ export function encodeBrowserImportPayload(payload: BrowserImportPayload) {
 export function decodeBrowserImportPayload(raw: string | null | undefined): BrowserImportPayload | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<BrowserImportPayload>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.kind === "asset" && typeof parsed.assetId === "string" && typeof parsed.label === "string") {
       return {
         kind: "asset",
@@ -39,10 +39,18 @@ export function decodeBrowserImportPayload(raw: string | null | undefined): Brow
         label: parsed.label,
       };
     }
+    if (parsed.kind === "sample" && typeof parsed.sampleId === "string" && typeof parsed.label === "string") {
+      return {
+        kind: "sample",
+        sampleId: parsed.sampleId,
+        label: parsed.label,
+      };
+    }
+    // Backward compatibility with older payloads: { kind: "sample", sample: "cartpole", ... }
     if (parsed.kind === "sample" && parsed.sample === "cartpole" && typeof parsed.label === "string") {
       return {
         kind: "sample",
-        sample: "cartpole",
+        sampleId: "cartpole",
         label: parsed.label,
       };
     }

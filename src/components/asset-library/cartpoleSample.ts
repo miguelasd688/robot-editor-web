@@ -1,89 +1,38 @@
-export const CARTPOLE_SAMPLE_KEY = "samples/cartpole/Cartpole_robot.urdf";
-export const CARTPOLE_SAMPLE_NAME = "Cartpole_robot.urdf";
+import {
+  buildLibrarySampleEntryKey,
+  findLibrarySampleKey,
+  getLibrarySampleById,
+  type LibrarySample,
+} from "./librarySamples";
+
+const CARTPOLE_SAMPLE_ID = "cartpole";
+
+const FALLBACK_SAMPLE: LibrarySample = {
+  id: CARTPOLE_SAMPLE_ID,
+  label: "Cartpole Sample",
+  description: "Cartpole URDF sample.",
+  kind: "urdf",
+  entry: "Cartpole_robot.urdf",
+  files: ["Cartpole_robot.urdf"],
+  badge: "URDF",
+  preview: {
+    top: "rgba(101, 148, 117, 0.55)",
+    bottom: "rgba(38, 74, 57, 0.9)",
+    caption: "CARTPOLE",
+  },
+};
+
+export const CARTPOLE_SAMPLE = getLibrarySampleById(CARTPOLE_SAMPLE_ID) ?? FALLBACK_SAMPLE;
+export const CARTPOLE_SAMPLE_NAME = CARTPOLE_SAMPLE.entry;
+export const CARTPOLE_SAMPLE_KEY = buildLibrarySampleEntryKey(CARTPOLE_SAMPLE);
+export const CARTPOLE_SAMPLE_LEGACY_KEY = "samples/cartpole/Cartpole_robot.urdf";
 
 export function findCartpoleSampleKey(keys: string[]) {
+  const found = findLibrarySampleKey(keys, CARTPOLE_SAMPLE);
+  if (found) return found;
   return (
-    keys.find((key) => key === CARTPOLE_SAMPLE_KEY || key.endsWith(`/${CARTPOLE_SAMPLE_NAME}`)) ??
+    keys.find((key) => key === CARTPOLE_SAMPLE_LEGACY_KEY || key.endsWith(`/${CARTPOLE_SAMPLE_NAME}`)) ??
     keys.find((key) => key === CARTPOLE_SAMPLE_NAME) ??
     null
   );
 }
-
-export const CARTPOLE_SAMPLE_URDF = `<?xml version="1.0"?>
-<robot name="Cartpole_robot">
-  <link name="base_link">
-    <inertial>
-      <origin xyz="0 0 0" rpy="-1.570796 0 0" />
-      <mass value="0.0032" />
-      <inertia ixx="0.004267" ixy="0" ixz="0" iyy="0.004267" iyz="0" izz="0.000002" />
-    </inertial>
-    <visual name="Cube">
-      <origin xyz="0 0 0" rpy="0 1.570796 0" />
-      <geometry>
-        <box size="0.02 0.02 4" />
-      </geometry>
-    </visual>
-    <collision name="Cube">
-      <origin xyz="0 0 0" rpy="0 1.570796 0" />
-      <geometry>
-        <box size="0.02 0.02 4" />
-      </geometry>
-    </collision>
-  </link>
-  <link name="cart">
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <mass value="0.4608" />
-      <inertia ixx="0.001536" ixy="0" ixz="0" iyy="0.001536" iyz="0" izz="0.001106" />
-    </inertial>
-    <visual name="Cube_1">
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry>
-        <box size="0.12 0.12 0.16" />
-      </geometry>
-    </visual>
-    <collision name="Cube_1">
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <geometry>
-        <box size="0.12 0.12 0.16" />
-      </geometry>
-    </collision>
-  </link>
-  <link name="pole">
-    <inertial>
-      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
-      <mass value="1.222793" />
-      <inertia ixx="0.102522" ixy="0" ixz="0" iyy="0.001246" iyz="0" izz="0.102522" />
-    </inertial>
-    <visual name="Cube_2">
-      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
-      <geometry>
-        <box size="0.078192 1 0.078192" />
-      </geometry>
-    </visual>
-    <collision name="Cube_2">
-      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
-      <geometry>
-        <box size="0.078192 1 0.078192" />
-      </geometry>
-    </collision>
-  </link>
-  <joint name="slider_to_cart" type="prismatic">
-    <origin xyz="0.000035 0 -0.000008" rpy="0 0 0" />
-    <parent link="base_link" />
-    <child link="cart" />
-    <axis xyz="1 0 0" />
-    <limit lower="-1" upper="1" effort="60" velocity="100" />
-    <dynamics damping="0.05" friction="0.01" />
-  </joint>
-  <joint name="cart_to_pole" type="revolute">
-    <origin xyz="0.005007 0.00204 0" rpy="0 0 0" />
-    <parent link="cart" />
-    <child link="pole" />
-    <axis xyz="0 1 0" />
-    <limit lower="-180" upper="180" effort="60" velocity="100" />
-    <dynamics damping="0.05" friction="0.01" />
-    <actuator stiffness="120" damping="4" />
-  </joint>
-</robot>
-`;

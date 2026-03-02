@@ -1,3 +1,5 @@
+import { isUrdfLikePath } from "../../../app/core/urdf/urdfFileTypes";
+
 export function isURDF(path: string) {
-  return path.toLowerCase().endsWith(".urdf");
+  return isUrdfLikePath(path);
 }

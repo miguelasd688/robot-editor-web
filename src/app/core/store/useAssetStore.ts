@@ -4,6 +4,7 @@ import { normPath, resolveAssetUrl } from "../loaders/assetResolver";
 import type { AssetEntry } from "../assets/assetRegistryTypes";
 import type { UsdImportOptions } from "../usd/usdImportOptions";
 import { logInfo } from "../services/logger";
+import { isUrdfLikePath } from "../urdf/urdfFileTypes";
 
 const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
 
@@ -70,7 +71,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     // auto-detect urdf si no hay
     let urdfKey = get().urdfKey;
     if (!urdfKey) {
-      const found = Object.keys(next).find((k) => k.toLowerCase().endsWith(".urdf"));
+      const found = Object.keys(next).find((k) => isUrdfLikePath(k));
       if (found) urdfKey = found;
     }
 

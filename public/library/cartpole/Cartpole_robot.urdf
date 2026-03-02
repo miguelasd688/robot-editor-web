@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<robot name="Cartpole_robot">
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="-1.570796 0 0" />
+      <mass value="0.0032" />
+      <inertia ixx="0.004267" ixy="0" ixz="0" iyy="0.004267" iyz="0" izz="0.000002" />
+    </inertial>
+    <visual name="Cube">
+      <origin xyz="0 0 0" rpy="0 1.570796 0" />
+      <geometry>
+        <box size="0.02 0.02 4" />
+      </geometry>
+      <material>
+        <color rgba="0.945098 0.913725 0.035294 1" />
+      </material>
+    </visual>
+    <collision name="Cube">
+      <origin xyz="0 0 0" rpy="0 1.570796 0" />
+      <geometry>
+        <box size="0.02 0.02 4" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="cart">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.4608" />
+      <inertia ixx="0.001536" ixy="0" ixz="0" iyy="0.001536" iyz="0" izz="0.001106" />
+    </inertial>
+    <visual name="Cube_1">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.12 0.12 0.16" />
+      </geometry>
+      <material>
+        <color rgba="0.027451 0.368627 0.811765 1" />
+      </material>
+    </visual>
+    <collision name="Cube_1">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.12 0.12 0.16" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="pole">
+    <inertial>
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
+      <mass value="1.222793" />
+      <inertia ixx="0.102522" ixy="0" ixz="0" iyy="0.001246" iyz="0" izz="0.102522" />
+    </inertial>
+    <visual name="Cube_2">
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
+      <geometry>
+        <box size="0.078192 1 0.078192" />
+      </geometry>
+      <material>
+        <color rgba="0.960784 0.058824 0.058824 1" />
+      </material>
+    </visual>
+    <collision name="Cube_2">
+      <origin xyz="-0.007251 0.132443 0.447668" rpy="1.570796 0 0" />
+      <geometry>
+        <box size="0.078192 1 0.078192" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="slider_to_cart" type="prismatic">
+    <origin xyz="0.000035 0 -0.000008" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="cart" />
+    <axis xyz="1 0 0" />
+    <limit lower="-1" upper="1" effort="60" velocity="100" />
+    <dynamics damping="0.05" friction="0.01" />
+  </joint>
+  <joint name="cart_to_pole" type="revolute">
+    <origin xyz="0.005007 0.00204 0" rpy="0 0 0" />
+    <parent link="cart" />
+    <child link="pole" />
+    <axis xyz="0 1 0" />
+    <limit lower="-180" upper="180" effort="60" velocity="100" />
+    <dynamics damping="0.05" friction="0.01" />
+    <actuator stiffness="120" damping="4" />
+  </joint>
+</robot>
