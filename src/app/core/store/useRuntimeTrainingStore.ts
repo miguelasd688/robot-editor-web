@@ -294,18 +294,17 @@ function scheduleTrainingProgress(jobId: string) {
   runningIntervals.set(jobId, timer);
 }
 
-function isCartpoleDirectProfile(config: unknown) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
-  const profile = (config as Record<string, unknown>).profile;
-  return typeof profile === "string" && profile.trim().toLowerCase() === "cartpole_direct_mvp";
-}
-
 function isTaskFactoryConfig(config: unknown) {
   if (!config || typeof config !== "object" || Array.isArray(config)) return false;
   const record = config as Record<string, unknown>;
-  if (isCartpoleDirectProfile(record)) return true;
   if (typeof record.recipeId === "string" && record.recipeId.trim().length > 0) return true;
-  if (record.executionMode === "recipe" || record.executionMode === "generic") return true;
+  if (
+    record.executionMode === "manager" ||
+    record.executionMode === "recipe" ||
+    record.executionMode === "generic"
+  ) {
+    return true;
+  }
   if (typeof record.taskSpecId === "string" && record.taskSpecId.trim().length > 0) return true;
   if (record.taskSpec && typeof record.taskSpec === "object" && !Array.isArray(record.taskSpec)) return true;
   return false;
@@ -443,7 +442,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         ? robotAssetId
           ? submitTrainingTaskRemote({
             recipeId: toTextOrEmpty(configValues.recipeId) || undefined,
-            executionMode: toTextOrEmpty(configValues.executionMode) === "generic" ? "generic" : "recipe",
+            executionMode: "manager",
             taskSpecId: toTextOrEmpty(configValues.taskSpecId) || undefined,
             taskSpec: toObjectOrUndefined(configValues.taskSpec),
             agentId: toTextOrEmpty(configValues.agentId) || undefined,

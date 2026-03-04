@@ -63,10 +63,10 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       urdf: { floatingBase: false },
     },
     trainingDefaults: {
-      templateId: "isaaclab.cartpole.sample.v1",
-      recipeId: "isaaclab.cartpole.sample.v1",
-      taskTemplate: "cartpole_direct",
-      task: "Isaac-Cartpole-Direct-v0",
+      templateId: "isaaclab.cartpole.manager.v1",
+      recipeId: "isaaclab.cartpole.manager.v1",
+      taskTemplate: "cartpole_manager",
+      task: "Isaac-Cartpole-v0",
     },
   },
   {
@@ -99,10 +99,10 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       },
     },
     trainingDefaults: {
-      templateId: "isaaclab.ant.direct.v1",
-      recipeId: "isaaclab.ant.direct.v1",
-      taskTemplate: "ant_direct",
-      task: "Isaac-Ant-Direct-v0",
+      templateId: "isaaclab.ant.manager.v1",
+      recipeId: "isaaclab.ant.manager.v1",
+      taskTemplate: "ant_manager",
+      task: "Isaac-Ant-v0",
     },
   },
   {
@@ -133,10 +133,10 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       },
     },
     trainingDefaults: {
-      templateId: "isaaclab.humanoid.direct.v1",
-      recipeId: "isaaclab.humanoid.direct.v1",
-      taskTemplate: "humanoid_direct",
-      task: "Isaac-Humanoid-Direct-v0",
+      templateId: "isaaclab.humanoid.manager.v1",
+      recipeId: "isaaclab.humanoid.manager.v1",
+      taskTemplate: "humanoid_manager",
+      task: "Isaac-Humanoid-v0",
     },
   },
   {
@@ -203,9 +203,9 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       },
     },
     trainingDefaults: {
-      templateId: "isaaclab.anymal_c.rough.manager.v1",
-      recipeId: "isaaclab.anymal_c.rough.manager.v1",
-      taskTemplate: "anymal_c_rough_manager",
+      templateId: "isaaclab.anymal_c.manager.v1",
+      recipeId: "isaaclab.anymal_c.manager.v1",
+      taskTemplate: "anymal_c_manager",
       task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
   },

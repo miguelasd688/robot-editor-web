@@ -91,7 +91,8 @@ export type UsdMuscleInfo = {
 };
 
 export type StageUpAxis = "X" | "Y" | "Z" | "unknown";
-export type ConversionProfile = "cartpole_direct" | "generic";
+export type ConversionProfile = "generic" | "manager";
+export type TrainingExecutionMode = "manager";
 
 export type MassByBodyEntry = {
   path: string;
@@ -147,7 +148,7 @@ export type ConfigDerivationPreview = {
 
 export type TaskAutocompleteRequest = {
   recipeId?: string;
-  executionMode?: "recipe" | "generic";
+  executionMode?: TrainingExecutionMode;
   taskSpecId?: string;
   taskSpec?: Record<string, unknown>;
   agentId?: string;
@@ -181,7 +182,7 @@ export type TaskAutocompleteRequest = {
 export type TaskAutocompletePreview = {
   dryRun: true;
   recipeId?: string;
-  executionMode?: "recipe" | "generic";
+  executionMode?: TrainingExecutionMode;
   taskSpecId?: string;
   taskSpec?: Record<string, unknown>;
   taskTemplate: string;
@@ -204,7 +205,7 @@ export type TaskAutocompletePreview = {
 
 export type TaskAutocompleteLaunchResponse = {
   recipeId?: string;
-  executionMode?: "recipe" | "generic";
+  executionMode?: TrainingExecutionMode;
   taskSpecId?: string;
   job: TrainingJobSummary;
   task: string;
@@ -229,7 +230,7 @@ export type TaskAutocompleteLaunchResponse = {
 export type TrainingTaskCatalogEntry = {
   id: string;
   type: "example" | "template";
-  executionMode: "recipe" | "generic";
+  executionMode: "manager";
   recipeId?: string;
   taskTemplate: string;
   task: string;
@@ -278,7 +279,7 @@ export type AgentCatalogEnvironment = {
   taskTemplate: string;
   task: string;
   recipeId: string;
-  executionMode: "recipe" | "generic";
+  executionMode: "manager";
   defaults: Record<string, unknown>;
   agents: AgentVariant[];
   policyTermsStatus: "full" | "partial" | "none";
@@ -615,8 +616,8 @@ export async function convertTrainingMjcfAssetToUsdRemote(input: {
   const payload: Record<string, unknown> = {};
   const outputFilename = String(input.outputFilename ?? "").trim();
   if (outputFilename) payload.outputFilename = outputFilename;
-  if (input.conversionProfile === "cartpole_direct" || input.conversionProfile === "generic") {
-    payload.conversionProfile = input.conversionProfile;
+  if (input.conversionProfile === "generic" || input.conversionProfile === "manager") {
+    payload.conversionProfile = "generic";
   }
   if (typeof input.fixBase === "boolean") payload.fixBase = input.fixBase;
   if (typeof input.importSites === "boolean") payload.importSites = input.importSites;
@@ -710,7 +711,7 @@ export async function submitTrainingTaskRemote(
 
   const recipeId = String(input.recipeId ?? "").trim();
   if (recipeId) payload.recipeId = recipeId;
-  if (input.executionMode === "recipe" || input.executionMode === "generic") {
+  if (input.executionMode === "manager") {
     payload.executionMode = input.executionMode;
   }
   const taskSpecId = String(input.taskSpecId ?? "").trim();
