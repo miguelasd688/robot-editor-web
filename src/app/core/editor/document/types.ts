@@ -21,6 +21,13 @@ export type VisualComponent = {
   attachCollisions?: boolean;
   /** Per-visual override color. When set, replaces the default Three.js + MJCF material color. */
   rgba?: RgbaColor;
+  /** Optional metadata for imported non-trivial materials (for example textured USD materials). */
+  materialInfo?: {
+    source?: string;
+    materialName?: string | null;
+    texturePath?: string | null;
+    editable?: boolean;
+  };
 };
 
 export type MirrorComponent = {
@@ -38,8 +45,17 @@ export type UrdfModelSource = {
 
 export type UsdModelSource = {
   kind: "usd";
-  /** assetId on the usd-converter service */
+  /**
+   * Backward compatibility field.
+   * For new code prefer workspaceKey/converterAssetId/trainingAssetId.
+   */
   usdKey: string;
+  /** Workspace asset key/path of the source USD entry file. */
+  workspaceKey?: string | null;
+  /** Source USD assetId on usd-converter service. */
+  converterAssetId?: string | null;
+  /** Source USD assetId on training-runner service. */
+  trainingAssetId?: string | null;
   /** assetId of the derived MJCF (set after conversion) */
   mjcfKey?: string;
   importOptions: UsdImportOptions;

@@ -10,6 +10,7 @@ export type SceneAssetId =
   | "joint"
   | "joint:free"
   | "joint:actuator"
+  | "joint:muscle"
   | "visual"
   | "collision"
   | "mesh:cube"
@@ -195,6 +196,13 @@ export const sceneAssetCatalog: SceneAssetDefinition[] = [
     category: "robotics",
   },
   {
+    id: "joint:muscle",
+    name: "Muscle Joint",
+    description: "Joint with tendon+muscle actuator mode",
+    icon: "🫀",
+    category: "robotics",
+  },
+  {
     id: "mesh:cube",
     name: "Cube",
     description: "Link with cube mesh (Visual + Collision are auto-managed)",
@@ -249,8 +257,15 @@ export function createSceneAssetTree(
     return createLinkTree(rootId, parentId);
   }
 
-  if (assetId === "joint" || assetId === "joint:free" || assetId === "joint:actuator") {
-    const jointName = assetId === "joint:actuator" ? "Actuator Joint" : assetId === "joint:free" ? "Free Joint" : "Joint";
+  if (assetId === "joint" || assetId === "joint:free" || assetId === "joint:actuator" || assetId === "joint:muscle") {
+    const jointName =
+      assetId === "joint:actuator"
+        ? "Actuator Joint"
+        : assetId === "joint:free"
+          ? "Free Joint"
+          : assetId === "joint:muscle"
+            ? "Muscle Joint"
+            : "Joint";
     return {
       rootId,
       nodes: [
@@ -322,7 +337,7 @@ export function createSceneAssetTree(
           id: rootId,
           name: "Floor",
           kind: "mesh",
-          ...base,
+          parentId: null,
           source: { kind: "primitive", shape: "plane" },
           components: {
             transform: floorTransform,

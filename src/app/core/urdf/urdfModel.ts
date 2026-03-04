@@ -53,7 +53,32 @@ export type UrdfJoint = {
     stiffness?: number;
     damping?: number;
     initialPosition?: number;
-    type?: "position" | "velocity" | "torque";
+    name?: string;
+    sourceType?: string;
+    type?: "position" | "velocity" | "torque" | "muscle";
+  };
+  sourceFrames?: {
+    frame0Local?: { position: [number, number, number]; quaternion: [number, number, number, number] };
+    frame1Local?: { position: [number, number, number]; quaternion: [number, number, number, number] };
+    frame0World?: { position: [number, number, number]; quaternion: [number, number, number, number] };
+    frame1World?: { position: [number, number, number]; quaternion: [number, number, number, number] };
+    axisLocal?: [number, number, number];
+    axisWorld?: [number, number, number];
+    sourceUpAxis?: "X" | "Y" | "Z" | "unknown";
+    normalizedToZUp?: boolean;
+    frameMismatchDistance?: number;
+    frameMismatchWarning?: string;
+  };
+  muscle?: {
+    enabled?: boolean;
+    endA: { body: string; localPos: [number, number, number] };
+    endB: { body: string; localPos: [number, number, number] };
+    range?: [number, number];
+    force?: number;
+    scale?: number;
+    damping?: number;
+    showLine?: boolean;
+    showTube?: boolean;
   };
 };
 
@@ -237,32 +262,120 @@ function readJoint(node: Element): UrdfJoint | null {
           armature: parseNumber(dynamicsNode.getAttribute("armature"), undefined),
         }
       : undefined;
+  const parseTuple = (value: string | null | undefined, size: number): number[] | undefined => {
+    if (!value) return undefined;
+    const parts = value
+      .trim()
+      .split(/\s+/)
+      .map((item) => Number(item))
+      .slice(0, size);
+    if (parts.length !== size || parts.some((item) => !Number.isFinite(item))) return undefined;
+    return parts;
+  };
   const actuatorNode = node.querySelector("actuator");
   const actuatorTypeRaw = actuatorNode?.getAttribute("type")?.trim().toLowerCase();
-  let actuatorType: "position" | "velocity" | "torque" | undefined;
-  if (actuatorTypeRaw === "position" || actuatorTypeRaw === "velocity" || actuatorTypeRaw === "torque") {
+  let actuatorType: "position" | "velocity" | "torque" | "muscle" | undefined;
+  if (actuatorTypeRaw === "position" || actuatorTypeRaw === "velocity" || actuatorTypeRaw === "torque" || actuatorTypeRaw === "muscle") {
     actuatorType = actuatorTypeRaw;
   }
   const actuatorEnabled = parseBoolean(actuatorNode?.getAttribute("enabled"));
   const actuatorStiffness = parseNumber(actuatorNode?.getAttribute("stiffness"), undefined);
   const actuatorDamping = parseNumber(actuatorNode?.getAttribute("damping"), undefined);
   const actuatorInitialPosition = parseNumber(actuatorNode?.getAttribute("initialPosition"), undefined);
+  const actuatorName = actuatorNode?.getAttribute("name")?.trim() || undefined;
+  const actuatorSourceType = actuatorNode?.getAttribute("sourceType")?.trim() || undefined;
   const actuator =
     actuatorNode &&
     (actuatorEnabled !== undefined ||
       Number.isFinite(actuatorStiffness) ||
       Number.isFinite(actuatorDamping) ||
       Number.isFinite(actuatorInitialPosition) ||
+      actuatorName ||
+      actuatorSourceType ||
       actuatorType)
       ? {
           enabled: actuatorEnabled,
           stiffness: actuatorStiffness,
           damping: actuatorDamping,
           initialPosition: actuatorInitialPosition,
+          name: actuatorName,
+          sourceType: actuatorSourceType,
           type: actuatorType,
         }
       : undefined;
-  return { name, type, parent, child, origin, axis, limit, dynamics, actuator };
+  const sourceFramesNode = node.querySelector("sourceFrames");
+  const readFrame = (frameName: string) => {
+    const frameNode = sourceFramesNode?.querySelector(frameName);
+    const pos = parseTuple(frameNode?.getAttribute("position"), 3) as [number, number, number] | undefined;
+    const quat = parseTuple(frameNode?.getAttribute("quaternion"), 4) as [number, number, number, number] | undefined;
+    if (!pos || !quat) return undefined;
+    return { position: pos, quaternion: quat };
+  };
+  const readAxis = (key: "axisLocal" | "axisWorld") => {
+    const parsed = parseTuple(sourceFramesNode?.getAttribute(key), 3) as [number, number, number] | undefined;
+    return parsed;
+  };
+  const sourceFrames =
+    sourceFramesNode &&
+    (
+      readFrame("frame0Local") ||
+      readFrame("frame1Local") ||
+      readFrame("frame0World") ||
+      readFrame("frame1World") ||
+      readAxis("axisLocal") ||
+      readAxis("axisWorld") ||
+      sourceFramesNode.getAttribute("sourceUpAxis") ||
+      sourceFramesNode.getAttribute("normalizedToZUp") ||
+      sourceFramesNode.getAttribute("frameMismatchDistance") ||
+      sourceFramesNode.getAttribute("frameMismatchWarning")
+    )
+      ? {
+          frame0Local: readFrame("frame0Local"),
+          frame1Local: readFrame("frame1Local"),
+          frame0World: readFrame("frame0World"),
+          frame1World: readFrame("frame1World"),
+          axisLocal: readAxis("axisLocal"),
+          axisWorld: readAxis("axisWorld"),
+          sourceUpAxis:
+            sourceFramesNode.getAttribute("sourceUpAxis") === "X" ||
+            sourceFramesNode.getAttribute("sourceUpAxis") === "Y" ||
+            sourceFramesNode.getAttribute("sourceUpAxis") === "Z" ||
+            sourceFramesNode.getAttribute("sourceUpAxis") === "unknown"
+              ? (sourceFramesNode.getAttribute("sourceUpAxis") as "X" | "Y" | "Z" | "unknown")
+              : undefined,
+          normalizedToZUp: parseBoolean(sourceFramesNode.getAttribute("normalizedToZUp")),
+          frameMismatchDistance: parseNumber(sourceFramesNode.getAttribute("frameMismatchDistance"), undefined),
+          frameMismatchWarning: sourceFramesNode.getAttribute("frameMismatchWarning") ?? undefined,
+        }
+      : undefined;
+  const muscleNode = node.querySelector("muscle");
+  const readMuscleEndpoint = (tagName: "endA" | "endB", fallbackBody: string) => {
+    const endpointNode = muscleNode?.querySelector(tagName);
+    const localPos = parseTuple(endpointNode?.getAttribute("localPos"), 3) as [number, number, number] | undefined;
+    if (!localPos) return undefined;
+    return {
+      body: endpointNode?.getAttribute("body")?.trim() || fallbackBody,
+      localPos,
+    };
+  };
+  const muscleRange = parseTuple(muscleNode?.getAttribute("range"), 2) as [number, number] | undefined;
+  const muscleEndA = readMuscleEndpoint("endA", parent);
+  const muscleEndB = readMuscleEndpoint("endB", child);
+  const muscle =
+    muscleNode && muscleEndA && muscleEndB
+      ? {
+          enabled: parseBoolean(muscleNode.getAttribute("enabled")),
+          endA: muscleEndA,
+          endB: muscleEndB,
+          range: muscleRange,
+          force: parseNumber(muscleNode.getAttribute("force"), undefined),
+          scale: parseNumber(muscleNode.getAttribute("scale"), undefined),
+          damping: parseNumber(muscleNode.getAttribute("damping"), undefined),
+          showLine: parseBoolean(muscleNode.getAttribute("showLine")),
+          showTube: parseBoolean(muscleNode.getAttribute("showTube")),
+        }
+      : undefined;
+  return { name, type, parent, child, origin, axis, limit, dynamics, actuator, sourceFrames, muscle };
 }
 
 export function parseUrdfElement(robotEl: Element | null): UrdfParseResult {

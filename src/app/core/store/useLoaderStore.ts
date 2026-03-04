@@ -61,7 +61,7 @@ async function loadWithViewer<TParams>(
       useSceneStore.getState().replaceFromSnapshot(snap);
     }
     useSceneStore.getState().setSelected(rootId);
-    useMujocoStore.getState().markSceneDirty();
+    useMujocoStore.getState().markSceneDirty({ markUsdSourceDirty: false });
     viewer.refreshUrdfDebug?.();
 
     // Run format-specific post-load hook (registered via registerPostLoadHook)

@@ -81,6 +81,59 @@ const cloneJoint = (joint: UrdfJoint): UrdfJoint => ({
   limit: joint.limit ? { ...joint.limit } : undefined,
   dynamics: joint.dynamics ? { ...joint.dynamics } : undefined,
   actuator: joint.actuator ? { ...joint.actuator } : undefined,
+  sourceFrames: joint.sourceFrames
+    ? {
+        frame0Local: joint.sourceFrames.frame0Local
+          ? {
+              position: [...joint.sourceFrames.frame0Local.position] as [number, number, number],
+              quaternion: [...joint.sourceFrames.frame0Local.quaternion] as [number, number, number, number],
+            }
+          : undefined,
+        frame1Local: joint.sourceFrames.frame1Local
+          ? {
+              position: [...joint.sourceFrames.frame1Local.position] as [number, number, number],
+              quaternion: [...joint.sourceFrames.frame1Local.quaternion] as [number, number, number, number],
+            }
+          : undefined,
+        frame0World: joint.sourceFrames.frame0World
+          ? {
+              position: [...joint.sourceFrames.frame0World.position] as [number, number, number],
+              quaternion: [...joint.sourceFrames.frame0World.quaternion] as [number, number, number, number],
+            }
+          : undefined,
+        frame1World: joint.sourceFrames.frame1World
+          ? {
+              position: [...joint.sourceFrames.frame1World.position] as [number, number, number],
+              quaternion: [...joint.sourceFrames.frame1World.quaternion] as [number, number, number, number],
+            }
+          : undefined,
+        axisLocal: joint.sourceFrames.axisLocal ? ([...joint.sourceFrames.axisLocal] as [number, number, number]) : undefined,
+        axisWorld: joint.sourceFrames.axisWorld ? ([...joint.sourceFrames.axisWorld] as [number, number, number]) : undefined,
+        sourceUpAxis: joint.sourceFrames.sourceUpAxis,
+        normalizedToZUp: joint.sourceFrames.normalizedToZUp,
+        frameMismatchDistance: joint.sourceFrames.frameMismatchDistance,
+        frameMismatchWarning: joint.sourceFrames.frameMismatchWarning,
+      }
+    : undefined,
+  muscle: joint.muscle
+    ? {
+        enabled: joint.muscle.enabled,
+        endA: {
+          body: joint.muscle.endA.body,
+          localPos: [...joint.muscle.endA.localPos] as [number, number, number],
+        },
+        endB: {
+          body: joint.muscle.endB.body,
+          localPos: [...joint.muscle.endB.localPos] as [number, number, number],
+        },
+        range: joint.muscle.range ? ([...joint.muscle.range] as [number, number]) : undefined,
+        force: joint.muscle.force,
+        scale: joint.muscle.scale,
+        damping: joint.muscle.damping,
+        showLine: joint.muscle.showLine,
+        showTube: joint.muscle.showTube,
+      }
+    : undefined,
 });
 
 const applyCollisionMaterial = (root: THREE.Object3D, material: CollisionMaterial) => {

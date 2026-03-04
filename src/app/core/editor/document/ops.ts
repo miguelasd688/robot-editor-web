@@ -778,7 +778,19 @@ function syncJointMetadata(doc: ProjectDoc): ProjectDoc {
     if (parent?.kind === "link") {
       const parentName = resolveLinkLabel(parent);
       if (nextJoint.parent !== parentName) {
-        nextJoint = { ...nextJoint, parent: parentName };
+        nextJoint = {
+          ...nextJoint,
+          parent: parentName,
+          muscle: nextJoint.muscle
+            ? {
+                ...nextJoint.muscle,
+                endA: {
+                  ...nextJoint.muscle.endA,
+                  body: parentName,
+                },
+              }
+            : nextJoint.muscle,
+        };
         jointChanged = true;
       }
     }
@@ -788,7 +800,19 @@ function syncJointMetadata(doc: ProjectDoc): ProjectDoc {
       const child = nodes[childId];
       const childName = child ? resolveLinkLabel(child) : "";
       if (childName && nextJoint.child !== childName) {
-        nextJoint = { ...nextJoint, child: childName };
+        nextJoint = {
+          ...nextJoint,
+          child: childName,
+          muscle: nextJoint.muscle
+            ? {
+                ...nextJoint.muscle,
+                endB: {
+                  ...nextJoint.muscle.endB,
+                  body: childName,
+                },
+              }
+            : nextJoint.muscle,
+        };
         jointChanged = true;
       }
     }

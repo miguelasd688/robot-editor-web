@@ -77,7 +77,7 @@ type MujocoState = {
   getPointerSpringDebugState: () => PointerSpringDebugState | null;
   getLastMJCF: () => string | null;
   updateInitialFromScene: () => void;
-  markSceneDirty: () => void;
+  markSceneDirty: (options?: { markUsdSourceDirty?: boolean }) => void;
   captureCurrentPoseAsTargets: () => void;
   preview: () => void;
   applyInitialPose: () => void;
@@ -170,7 +170,8 @@ function resolveMjcfKey(
   const jointName = resolveJointName(jointId);
   if (!jointName) return null;
   const nameMap = nameMapsByRobot[robotId];
-  return nameMap?.joints?.[jointName] ?? `${sanitizeMjcfName(robotId)}_${sanitizeMjcfName(jointName)}`;
+  if (!nameMap) return jointName;
+  return nameMap.joints?.[jointName] ?? `${sanitizeMjcfName(robotId)}_${sanitizeMjcfName(jointName)}`;
 }
 
 function mapTargetsToMjcf<T>(
@@ -302,6 +303,54 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
     const { simState } = useAppStore.getState();
     const { isLoading, isReady } = get();
     return simState === "paused" && isReady && !isLoading;
+  };
+
+  const markSelectedUsdModelSourceDirty = () => {
+    const doc = editorEngine.getDoc();
+    const selectedId = doc.scene.selectedId;
+    if (!selectedId) return;
+    const robotId = findRobotAncestorId(doc.scene.nodes, selectedId);
+    if (!robotId) return;
+    const robotNode = doc.scene.nodes[robotId];
+    if (!robotNode || robotNode.kind !== "robot") return;
+
+    const viewer = useAppStore.getState().viewer;
+    const root = viewer?.getObjectById(robotId) ?? null;
+    const runtimeSource = root?.userData?.robotModelSource;
+    const componentSource = robotNode.components?.robotModelSource;
+    const source = (runtimeSource ?? componentSource) as Record<string, unknown> | undefined;
+    if (!source || source.kind !== "usd" || source.isDirty === true) return;
+
+    const nextSource = {
+      ...source,
+      isDirty: true,
+    };
+
+    if (root?.userData) {
+      root.userData.robotModelSource = nextSource;
+    }
+
+    const nextDoc: ProjectDoc = {
+      ...doc,
+      scene: {
+        ...doc.scene,
+        nodes: {
+          ...doc.scene.nodes,
+          [robotId]: {
+            ...robotNode,
+            components: {
+              ...(robotNode.components ?? {}),
+              robotModelSource: nextSource as any,
+            },
+          },
+        },
+      },
+      metadata: {
+        ...doc.metadata,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    editorEngine.setDoc(nextDoc, "mujoco:usd-source-dirty");
   };
 
   const scheduleReload = () => {
@@ -578,7 +627,10 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
     }
     set({ isDirty: true });
   },
-  markSceneDirty: () => {
+  markSceneDirty: (options) => {
+    if ((options?.markUsdSourceDirty ?? true) === true) {
+      markSelectedUsdModelSourceDirty();
+    }
     set({ isDirty: true });
     scheduleReload();
   },
@@ -685,7 +737,22 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
             let urdfSource = sourceUrdf;
             const urdfKeyForRobot =
               node.components?.urdfKey ?? (root.userData?.urdfKey as string | undefined) ?? null;
-            const shouldRegenerateUrdf = Boolean(sourceUrdf) || Boolean(urdfKeyForRobot);
+            const modelSource =
+              node.components?.robotModelSource ??
+              (root.userData?.robotModelSource as Record<string, unknown> | undefined);
+            const sourceIsCleanUsd = modelSource?.kind === "usd" && modelSource?.isDirty !== true;
+            const shouldRegenerateUrdf =
+              Boolean(sourceUrdf) ||
+              Boolean(urdfKeyForRobot) ||
+              (modelSource?.kind === "usd" && sourceIsCleanUsd !== true);
+            const directMjcfSource =
+              sourceIsCleanUsd && typeof root.userData?.mjcfSource === "string" && root.userData.mjcfSource.trim()
+                ? (root.userData.mjcfSource as string)
+                : null;
+            const directMjcfKey =
+              sourceIsCleanUsd && typeof root.userData?.mjcfAssetId === "string" && root.userData.mjcfAssetId.trim()
+                ? (root.userData.mjcfAssetId as string)
+                : null;
             if (shouldRegenerateUrdf) {
               try {
                 const exported = exportRobotToUrdf(doc, node.id);
@@ -721,6 +788,8 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
               assets,
               urdfKey: urdfKeyForRobot,
               urdfSource,
+              mjcfKey: directMjcfKey,
+              mjcfSource: directMjcfSource,
               namePrefix: node.id,
               urdfOptions: perRobotUrdfOptions,
               roots: [root],

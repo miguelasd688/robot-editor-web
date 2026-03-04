@@ -19,7 +19,11 @@ import { editorEngine } from "../../app/core/editor/engineSingleton";
 import { ThreeSceneAdapter } from "../../app/core/editor/adapters/three/ThreeSceneAdapter";
 import { setThreeAdapter } from "../../app/core/editor/adapters/three/adapterSingleton";
 import { hasBrowserImportPayload, payloadFromDataTransfer, type BrowserImportPayload } from "../asset-library/browserDragDrop";
-import { ensureLibrarySampleImported, getLibrarySampleById } from "../asset-library/librarySamples";
+import {
+  ensureLibrarySampleImported,
+  findLibrarySampleByWorkspaceKey,
+  getLibrarySampleById,
+} from "../asset-library/librarySamples";
 
 const pointerPointFromRay = (ray: { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }, depth: number) => ({
   x: ray.origin.x + ray.direction.x * depth,
@@ -306,6 +310,7 @@ export default function ViewportPanel() {
   const usdDialogOpen = useUsdImportDialogStore((s) => s.isOpen);
   const usdDialogKey = useUsdImportDialogStore((s) => s.usdKey);
   const usdDialogOptionOverrides = useUsdImportDialogStore((s) => s.optionOverrides);
+  const usdDialogBundleHintPaths = useUsdImportDialogStore((s) => s.bundleHintPaths);
   const closeUsdImportDialog = useUsdImportDialogStore((s) => s.close);
   const usdOptions = useAssetStore((s) => s.usdOptions);
   const setUSD = useAssetStore((s) => s.setUSD);
@@ -417,6 +422,7 @@ export default function ViewportPanel() {
           usdKey: sampleKey,
           source: "viewport-drop",
           optionOverrides: sample.defaultImportOptions?.usd,
+          bundleHintPaths: sample.files,
         });
         logInfo(`Viewport drop import request: Library sample ${sample.id} (USD)`, {
           scope: "assets",
@@ -442,9 +448,12 @@ export default function ViewportPanel() {
         const entry = assetStore.assets[payload.path];
         if (!entry) return;
         assetStore.setUSD(payload.path);
+        const sample = findLibrarySampleByWorkspaceKey(payload.path);
         requestUsdImport({
           usdKey: payload.path,
           source: "viewport-drop",
+          optionOverrides: sample?.defaultImportOptions?.usd,
+          bundleHintPaths: sample?.files,
         });
         logInfo(`Viewport drop USD import request: ${payload.path}`, { scope: "assets", data: { usdKey: payload.path } });
       }
@@ -519,12 +528,13 @@ export default function ViewportPanel() {
       usdKey: usdDialogKey,
       assets: assetStore.assets,
       importOptions: selectedOptions satisfies UsdImportOptions,
+      bundleHintPaths: usdDialogBundleHintPaths ?? undefined,
     });
     logInfo("Viewport USD import confirmed", {
       scope: "assets",
       data: { usdKey: usdDialogKey, options: selectedOptions },
     });
-  }, [closeUsdImportDialog, setUSD, setUSDOptions, usdDialogKey]);
+  }, [closeUsdImportDialog, setUSD, setUSDOptions, usdDialogBundleHintPaths, usdDialogKey]);
 
   const confirmLoadURDF = useCallback(async (selectedOptions: UrdfDialogFormOptions) => {
     if (!urdfDialogKey) return;

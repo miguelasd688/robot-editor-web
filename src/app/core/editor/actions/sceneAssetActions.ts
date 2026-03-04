@@ -9,7 +9,7 @@ import { createSceneAssetTree, type SceneAssetId } from "../../scene/sceneAssets
 import type { UrdfInstance } from "../../urdf/urdfModel";
 import { resolveNearestLinkAncestor, resolveNearestRobotAncestor } from "./hierarchyRules";
 
-const jointAssetIds = new Set<SceneAssetId>(["joint", "joint:free", "joint:actuator"]);
+const jointAssetIds = new Set<SceneAssetId>(["joint", "joint:free", "joint:actuator", "joint:muscle"]);
 
 function mergePosition(current: Vec3, next?: Vec3): Vec3 {
   if (!next) return current;
@@ -80,6 +80,10 @@ function resolveParentForAsset(doc: ReturnType<typeof editorEngine.getDoc>, asse
   const nearestLink = resolveNearestLinkAncestor(doc, selectedId);
 
   if (assetId === "robot") {
+    return { parentId: null, parentKind: null as string | null };
+  }
+
+  if (assetId === "floor") {
     return { parentId: null, parentKind: null as string | null };
   }
 
@@ -176,7 +180,26 @@ export function addSceneAsset(assetId: SceneAssetId, options?: { position?: Vec3
                 stiffness: 50,
                 damping: 5,
               }
+            : effectiveAssetId === "joint:muscle"
+              ? {
+                  enabled: false,
+                  type: "muscle" as const,
+                }
             : undefined;
+      const muscle =
+        effectiveAssetId === "joint:muscle"
+          ? {
+              enabled: false,
+              endA: { body: parentName, localPos: [0, 0, 0] as [number, number, number] },
+              endB: { body: "", localPos: [0, 0, 0] as [number, number, number] },
+              range: [0, 1] as [number, number],
+              force: 1,
+              scale: 1,
+              damping: 0,
+              showLine: true,
+              showTube: false,
+            }
+          : undefined;
       const urdf: UrdfInstance = {
         kind: "joint",
         joint: {
@@ -188,6 +211,7 @@ export function addSceneAsset(assetId: SceneAssetId, options?: { position?: Vec3
           axis: [0, 0, 1],
           limit: { lower: -180, upper: 180 },
           actuator,
+          muscle,
         },
       };
       tree.nodes[rootIndex] = {

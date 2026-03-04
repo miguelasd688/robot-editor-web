@@ -6,6 +6,7 @@ import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDial
 import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import { ExplorerToolbar } from "./ui/Toolbar";
 import { useWorkspaceImport } from "./services/workspaceImport";
+import { findLibrarySampleByWorkspaceKey } from "../asset-library/librarySamples";
 
 const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
 const isUsdPath = (p: string) => USD_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(ext));
@@ -32,7 +33,13 @@ export default function ExplorerPanel() {
         alert("Selected USD file not found in workspace.");
         return;
       }
-      requestUsdImport({ usdKey, source: "directories" });
+      const sample = findLibrarySampleByWorkspaceKey(usdKey);
+      requestUsdImport({
+        usdKey,
+        source: "directories",
+        optionOverrides: sample?.defaultImportOptions?.usd,
+        bundleHintPaths: sample?.files,
+      });
       return;
     }
 

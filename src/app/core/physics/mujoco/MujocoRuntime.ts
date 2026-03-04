@@ -18,9 +18,10 @@ export type JointActuatorConfig = {
   damping: number;
   velocityGain?: number;
   maxForce?: number;
+  actuatorName?: string;
   continuous?: boolean;
   angular?: boolean;
-  mode?: "position" | "velocity" | "torque";
+  mode?: "position" | "velocity" | "torque" | "muscle";
 };
 
 export type MujocoModelSource =
@@ -997,26 +998,32 @@ export function createMujocoRuntime(): MujocoRuntime {
     return id;
   };
 
-  const resolveActuatorId = (rawName: string) => {
-    const cached = actuatorIdCache.get(rawName);
+  const buildActuatorCandidates = (rawName: string, preferredName?: string) => {
+    const candidates: string[] = [];
+    if (preferredName) candidates.push(preferredName);
+    candidates.push(rawName, `${rawName}_motor`, `${rawName}_act`);
+    const mappedJoint = jointNameMap?.joints?.[rawName];
+    if (mappedJoint) {
+      candidates.push(mappedJoint, `${mappedJoint}_motor`, `${mappedJoint}_act`);
+    }
+    return candidates;
+  };
+
+  const resolveActuatorId = (rawName: string, preferredName?: string) => {
+    const cacheKey = preferredName ? `${rawName}|${preferredName}` : rawName;
+    const cached = actuatorIdCache.get(cacheKey);
     if (cached !== undefined) return cached;
-    let actuatorName = rawName;
-    if (!actuatorByName.has(actuatorName)) {
-      const rawCandidate = `${rawName}_motor`;
-      if (actuatorByName.has(rawCandidate)) {
-        actuatorName = rawCandidate;
-      } else {
-      const mappedJoint = jointNameMap?.joints?.[rawName];
-      if (mappedJoint) {
-        const candidate = `${mappedJoint}_motor`;
-        if (actuatorByName.has(candidate)) actuatorName = candidate;
-        else if (actuatorByName.has(mappedJoint)) actuatorName = mappedJoint;
-      }
+    let resolved: number | undefined;
+    for (const candidate of buildActuatorCandidates(rawName, preferredName)) {
+      const id = actuatorByName.get(candidate);
+      if (id !== undefined) {
+        resolved = id;
+        break;
       }
     }
-    const id = actuatorByName.get(actuatorName);
-    actuatorIdCache.set(rawName, id ?? -1);
-    return id ?? -1;
+    const id = resolved ?? -1;
+    actuatorIdCache.set(cacheKey, id);
+    return id;
   };
 
   const applyActuatorTargets = () => {
@@ -1041,6 +1048,7 @@ export function createMujocoRuntime(): MujocoRuntime {
         ? Math.max(0, config.velocityGain as number)
         : Math.max(0.1, DEFAULT_ACTUATOR_VELOCITY_GAIN);
       const mode = config.mode ?? "position";
+      if (mode === "muscle") continue;
       const angular = config.angular ?? false;
       const usePos = mode === "position" || mode === "torque";
       const useVel = mode === "velocity" || mode === "torque";
@@ -1087,7 +1095,7 @@ export function createMujocoRuntime(): MujocoRuntime {
         torque = Math.max(-maxForce, Math.min(maxForce, torque));
       }
       torque *= actuatorArmBlend;
-      const actuatorId = resolveActuatorId(jointName);
+      const actuatorId = resolveActuatorId(jointName, config.actuatorName);
       if (actuatorId < 0) continue;
       const prevTorque = filteredActuatorCtrl.get(actuatorId) ?? 0;
       const filteredTorque = prevTorque + (torque - prevTorque) * filterAlpha;
@@ -1512,17 +1520,8 @@ export function createMujocoRuntime(): MujocoRuntime {
 
       for (const [rawName, value] of Object.entries(controls)) {
         if (!Number.isFinite(value)) continue;
-        let actuatorName = rawName;
-        if (!actuatorByName.has(actuatorName)) {
-          const mappedJoint = jointNameMap?.joints?.[rawName];
-          if (mappedJoint) {
-            const candidate = `${mappedJoint}_motor`;
-            if (actuatorByName.has(candidate)) actuatorName = candidate;
-            else if (actuatorByName.has(mappedJoint)) actuatorName = mappedJoint;
-          }
-        }
-        const id = actuatorByName.get(actuatorName);
-        if (id === undefined) continue;
+        const id = resolveActuatorId(rawName);
+        if (id < 0) continue;
         ctrlView[id] = value;
       }
     },
@@ -1548,6 +1547,12 @@ export function createMujocoRuntime(): MujocoRuntime {
         const prevMode = previousConfigs[jointName]?.mode ?? "position";
         const nextMode = config.mode ?? "position";
         if (prevMode === nextMode) continue;
+        if (nextMode === "muscle") {
+          actuatorTargets[jointName] = 0;
+          actuatorVelocityTargets[jointName] = 0;
+          actuatorTorqueTargets[jointName] = 0;
+          continue;
+        }
         if (nextMode !== "velocity") {
           const jointId = resolveJointId(jointName);
           if (jointId >= 0) {
@@ -1582,7 +1587,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       for (const [jointName, config] of Object.entries(actuatorConfigs)) {
         if (!config) continue;
         const mode = config.mode ?? "position";
-        if (mode === "velocity") continue;
+        if (mode === "velocity" || mode === "muscle") continue;
         const jointId = resolveJointId(jointName);
         if (jointId < 0) continue;
         const qposAdr = jntQposAdr[jointId];

@@ -263,17 +263,47 @@ const withSceneOrigins = (
   items: UrdfCollision[]
 ) => {
   const nodesByKind = collectDirectChildrenByKind(nodes, linkId, kind);
-  return items.map((item, index) => {
-    const source = nodesByKind[index];
-    const transform = resolveTransform(source);
-    const sceneOverrideRgba = kind === "visual" ? source?.components?.visual?.rgba : undefined;
-    return {
+  if (nodesByKind.length === 0) {
+    return items.map((item) => ({
       name: item.name,
       geom: cloneGeom(item.geom),
-      origin: source ? poseFromTransform(transform) : clonePose(item.origin),
+      origin: clonePose(item.origin),
+      rgba: cloneRgba(item.rgba),
+    }));
+  }
+
+  if (nodesByKind.length === items.length) {
+    return items.map((item, index) => {
+      const source = nodesByKind[index];
+      const transform = resolveTransform(source);
+      const sceneOverrideRgba = kind === "visual" ? source?.components?.visual?.rgba : undefined;
+      return {
+        name: item.name,
+        geom: cloneGeom(item.geom),
+        origin: poseFromTransform(transform),
+        rgba: cloneRgba(sceneOverrideRgba ?? item.rgba),
+      };
+    });
+  }
+
+  if (nodesByKind.length === 1) {
+    const source = nodesByKind[0];
+    const sourceMatrix = matrixFromTransform(resolveTransform(source));
+    const sceneOverrideRgba = kind === "visual" ? source?.components?.visual?.rgba : undefined;
+    return items.map((item) => ({
+      name: item.name,
+      geom: cloneGeom(item.geom),
+      origin: poseFromMatrix(sourceMatrix.clone().multiply(matrixFromPose(item.origin))),
       rgba: cloneRgba(sceneOverrideRgba ?? item.rgba),
-    };
-  });
+    }));
+  }
+
+  return items.map((item) => ({
+    name: item.name,
+    geom: cloneGeom(item.geom),
+    origin: clonePose(item.origin),
+    rgba: cloneRgba(item.rgba),
+  }));
 };
 
 const scaleGeom = (geom: UrdfGeom, scale: THREE.Vector3): UrdfGeom => {
@@ -553,10 +583,68 @@ const serializeUrdf = (robotName: string, links: Array<{ name: string; inertial?
       if (Number.isFinite(joint.actuator.initialPosition)) {
         attrs.push(`initialPosition="${formatNumber(Number(joint.actuator.initialPosition))}"`);
       }
+      if (joint.actuator.name) {
+        attrs.push(`name="${escapeAttr(joint.actuator.name)}"`);
+      }
+      if (joint.actuator.sourceType) {
+        attrs.push(`sourceType="${escapeAttr(joint.actuator.sourceType)}"`);
+      }
       if (joint.actuator.type) {
         attrs.push(`type="${escapeAttr(joint.actuator.type)}"`);
       }
       if (attrs.length) lines.push(`    <actuator ${attrs.join(" ")} />`);
+    }
+    if (joint.sourceFrames) {
+      const attrs: string[] = [];
+      if (joint.sourceFrames.sourceUpAxis) attrs.push(`sourceUpAxis="${escapeAttr(joint.sourceFrames.sourceUpAxis)}"`);
+      if (typeof joint.sourceFrames.normalizedToZUp === "boolean") {
+        attrs.push(`normalizedToZUp="${joint.sourceFrames.normalizedToZUp ? "true" : "false"}"`);
+      }
+      if (Number.isFinite(joint.sourceFrames.frameMismatchDistance)) {
+        attrs.push(`frameMismatchDistance="${formatNumber(Number(joint.sourceFrames.frameMismatchDistance))}"`);
+      }
+      if (joint.sourceFrames.frameMismatchWarning) {
+        attrs.push(`frameMismatchWarning="${escapeAttr(joint.sourceFrames.frameMismatchWarning)}"`);
+      }
+      if (joint.sourceFrames.axisLocal) {
+        attrs.push(`axisLocal="${formatVec3(joint.sourceFrames.axisLocal)}"`);
+      }
+      if (joint.sourceFrames.axisWorld) {
+        attrs.push(`axisWorld="${formatVec3(joint.sourceFrames.axisWorld)}"`);
+      }
+      lines.push(`    <sourceFrames${attrs.length ? ` ${attrs.join(" ")}` : ""}>`);
+      const appendFrame = (
+        label: "frame0Local" | "frame1Local" | "frame0World" | "frame1World",
+        value: { position: [number, number, number]; quaternion: [number, number, number, number] } | undefined
+      ) => {
+        if (!value) return;
+        const pos = formatVec3(value.position);
+        const quat = value.quaternion.map((item) => formatNumber(item)).join(" ");
+        lines.push(`      <${label} position="${pos}" quaternion="${quat}" />`);
+      };
+      appendFrame("frame0Local", joint.sourceFrames.frame0Local);
+      appendFrame("frame1Local", joint.sourceFrames.frame1Local);
+      appendFrame("frame0World", joint.sourceFrames.frame0World);
+      appendFrame("frame1World", joint.sourceFrames.frame1World);
+      lines.push(`    </sourceFrames>`);
+    }
+    if (joint.muscle) {
+      const attrs: string[] = [];
+      if (typeof joint.muscle.enabled === "boolean") attrs.push(`enabled="${joint.muscle.enabled ? "true" : "false"}"`);
+      if (joint.muscle.range) attrs.push(`range="${formatNumber(joint.muscle.range[0])} ${formatNumber(joint.muscle.range[1])}"`);
+      if (Number.isFinite(joint.muscle.force)) attrs.push(`force="${formatNumber(Number(joint.muscle.force))}"`);
+      if (Number.isFinite(joint.muscle.scale)) attrs.push(`scale="${formatNumber(Number(joint.muscle.scale))}"`);
+      if (Number.isFinite(joint.muscle.damping)) attrs.push(`damping="${formatNumber(Number(joint.muscle.damping))}"`);
+      if (typeof joint.muscle.showLine === "boolean") attrs.push(`showLine="${joint.muscle.showLine ? "true" : "false"}"`);
+      if (typeof joint.muscle.showTube === "boolean") attrs.push(`showTube="${joint.muscle.showTube ? "true" : "false"}"`);
+      lines.push(`    <muscle${attrs.length ? ` ${attrs.join(" ")}` : ""}>`);
+      lines.push(
+        `      <endA body="${escapeAttr(joint.muscle.endA.body)}" localPos="${formatVec3(joint.muscle.endA.localPos)}" />`
+      );
+      lines.push(
+        `      <endB body="${escapeAttr(joint.muscle.endB.body)}" localPos="${formatVec3(joint.muscle.endB.localPos)}" />`
+      );
+      lines.push(`    </muscle>`);
     }
     lines.push(`  </joint>`);
   }
@@ -578,6 +666,9 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
   if (!robot || robot.kind !== "robot") {
     throw new Error("The selected node is not a robot.");
   }
+  const robotModelSource = robot.components?.robotModelSource;
+  const usdCollisionSyncFallbackActive =
+    robotModelSource?.kind === "usd" && robotModelSource.isDirty === true;
 
   const descendants = collectDescendants(nodes, robotId);
   const linkNodes = descendants
@@ -631,7 +722,7 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
         linkScale: linkTransform.scale,
       }),
     ];
-    const collisions = [
+    let collisions = [
       ...transformCollisionList(importedCollisions, {
         frameMatrix,
         linkScale: linkTransform.scale,
@@ -641,6 +732,17 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
         linkScale: linkTransform.scale,
       }),
     ];
+
+    if (usdCollisionSyncFallbackActive && collisions.length === 0 && visuals.length > 0) {
+      collisions = visuals.map((visual) => ({
+        name: visual.name ? `${visual.name}_auto_collision` : undefined,
+        origin: clonePose(visual.origin),
+        geom: cloneGeom(visual.geom),
+      }));
+      warnings.push(
+        `Link "${linkNameById.get(link.id) as string}": collision fallback derivado de visuales (USD sin colision explicita).`
+      );
+    }
     return {
       name: linkNameById.get(link.id) as string,
       inertial: transformInertial(resolveLinkInertial(link), { frameMatrix, linkScale: linkTransform.scale }),

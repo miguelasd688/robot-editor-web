@@ -7,6 +7,7 @@ type UsdImportDialogRequest = {
   usdKey: string;
   source: UsdImportDialogSource;
   optionOverrides?: Partial<UsdImportOptions>;
+  bundleHintPaths?: string[];
 };
 
 type UsdImportDialogState = {
@@ -14,6 +15,7 @@ type UsdImportDialogState = {
   usdKey: string | null;
   source: UsdImportDialogSource | null;
   optionOverrides: Partial<UsdImportOptions> | null;
+  bundleHintPaths: string[] | null;
   requestImport: (request: UsdImportDialogRequest) => void;
   close: () => void;
 };
@@ -23,12 +25,14 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
   usdKey: null,
   source: null,
   optionOverrides: null,
+  bundleHintPaths: null,
   requestImport: (request) =>
     set({
       isOpen: true,
       usdKey: request.usdKey,
       source: request.source,
       optionOverrides: request.optionOverrides ?? null,
+      bundleHintPaths: Array.isArray(request.bundleHintPaths) ? request.bundleHintPaths : null,
     }),
   close: () =>
     set({
@@ -36,5 +40,6 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
       usdKey: null,
       source: null,
       optionOverrides: null,
+      bundleHintPaths: null,
     }),
 }));

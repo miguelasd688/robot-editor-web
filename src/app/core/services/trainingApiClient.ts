@@ -28,6 +28,12 @@ export type TrainingRunnerAssetMeta = {
   uri: string;
 };
 
+export type TrainingUsdBundleFileInput = {
+  path: string;
+  contentBase64: string;
+  contentType?: string;
+};
+
 export type TrainingMjcfToUsdConversionMeta = {
   sourceAssetId: string;
   sourceFilename: string;
@@ -45,6 +51,43 @@ export type UsdJointInfo = {
   axis: [number, number, number];
   parentBody?: string | null;
   childBody?: string | null;
+  parentBodyPath?: string | null;
+  childBodyPath?: string | null;
+  localPos0?: [number, number, number] | null;
+  localRot0?: [number, number, number, number] | null;
+  localPos1?: [number, number, number] | null;
+  localRot1?: [number, number, number, number] | null;
+  frame0Local?: UsdFramePose | null;
+  frame1Local?: UsdFramePose | null;
+  frame0World?: UsdFramePose | null;
+  frame1World?: UsdFramePose | null;
+  axisLocal?: [number, number, number] | null;
+  axisWorld?: [number, number, number] | null;
+  sourceUpAxis?: StageUpAxis;
+  normalizedToZUp?: boolean;
+  frameMismatchDistance?: number;
+  frameMismatchWarning?: string;
+  muscle?: UsdMuscleInfo | null;
+};
+
+export type UsdFramePose = {
+  position: [number, number, number];
+  quaternion: [number, number, number, number]; // xyzw
+};
+
+export type UsdMuscleEndpoint = {
+  body?: string | null;
+  localPos: [number, number, number];
+};
+
+export type UsdMuscleInfo = {
+  enabled: boolean;
+  endA: UsdMuscleEndpoint;
+  endB: UsdMuscleEndpoint;
+  range?: [number, number];
+  force?: number;
+  scale?: number;
+  damping?: number;
 };
 
 export type StageUpAxis = "X" | "Y" | "Z" | "unknown";
@@ -417,6 +460,31 @@ export async function uploadMjcfTrainingAssetRemote(input: {
       filename: input.filename,
       mjcf: input.mjcf,
       contentType: input.contentType ?? "application/xml",
+    }),
+  });
+  return await parseJson<TrainingRunnerAssetMeta>(response);
+}
+
+export async function uploadUsdTrainingAssetRemote(input: {
+  entryPath: string;
+  files: TrainingUsdBundleFileInput[];
+}): Promise<TrainingRunnerAssetMeta> {
+  const files = Array.isArray(input.files)
+    ? input.files
+        .map((item) => ({
+          path: String(item.path ?? "").trim(),
+          contentBase64: String(item.contentBase64 ?? "").trim(),
+          contentType: String(item.contentType ?? "").trim() || undefined,
+        }))
+        .filter((item) => item.path.length > 0 && item.contentBase64.length > 0)
+    : [];
+
+  const response = await fetch(buildUrl("/v1/training/assets/usd"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      entryPath: String(input.entryPath ?? "").trim(),
+      files,
     }),
   });
   return await parseJson<TrainingRunnerAssetMeta>(response);

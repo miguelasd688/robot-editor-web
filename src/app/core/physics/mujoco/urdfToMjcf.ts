@@ -328,6 +328,12 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
 
   const lines: string[] = [];
   const worldLines: string[] = [];
+  const tendonLines: string[] = [];
+  const muscleActuatorLines: string[] = [];
+  const muscleSitesByLink = new Map<string, Array<{ name: string; pos: [number, number, number] }>>();
+  const tendonNames = new NameRegistry("tendon", warn, "tendon");
+  const siteNames = new NameRegistry("site", warn, "site");
+  const actuatorNames = new NameRegistry("actuator", warn, "actuator");
   const modelName = sanitizeMjcfName(withPrefix(robotName));
   const contactSolref = DEFAULT_CONTACT_SOLREF.trim();
   const contactSolimp = DEFAULT_CONTACT_SOLIMP.trim();
@@ -347,6 +353,52 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
         ).normalize(),
       }
     : null;
+
+  const registerMuscleSite = (linkName: string, seed: string, pos: [number, number, number]) => {
+    const list = muscleSitesByLink.get(linkName) ?? [];
+    const siteName = siteNames.claim(withPrefix(seed));
+    list.push({ name: siteName, pos });
+    muscleSitesByLink.set(linkName, list);
+    return siteName;
+  };
+
+  for (const joint of joints) {
+    if (joint.actuator?.enabled === false) continue;
+    if (joint.actuator?.type !== "muscle" || !joint.muscle) continue;
+    const mjcfJointName = nameMap.joints[joint.name] ?? sanitizeMjcfName(withPrefix(joint.name));
+    const parentBodyName = links.has(joint.muscle.endA.body) ? joint.muscle.endA.body : joint.parent;
+    const childBodyName = links.has(joint.muscle.endB.body) ? joint.muscle.endB.body : joint.child;
+    const siteA = registerMuscleSite(
+      parentBodyName,
+      `${mjcfJointName}_muscle_a`,
+      [...joint.muscle.endA.localPos] as [number, number, number]
+    );
+    const siteB = registerMuscleSite(
+      childBodyName,
+      `${mjcfJointName}_muscle_b`,
+      [...joint.muscle.endB.localPos] as [number, number, number]
+    );
+    const tendonName = tendonNames.claim(withPrefix(`${mjcfJointName}_tendon`));
+    tendonLines.push(`    <spatial name="${tendonName}">`);
+    tendonLines.push(`      <site site="${siteA}" />`);
+    tendonLines.push(`      <site site="${siteB}" />`);
+    tendonLines.push(`    </spatial>`);
+    const actuatorName = actuatorNames.claim(joint.actuator.name?.trim() || withPrefix(`${mjcfJointName}_muscle`));
+    const muscleAttrs: string[] = [`name="${actuatorName}"`, `tendon="${tendonName}"`];
+    if (joint.muscle.range) {
+      muscleAttrs.push(`range="${joint.muscle.range[0].toFixed(6)} ${joint.muscle.range[1].toFixed(6)}"`);
+    }
+    if (Number.isFinite(joint.muscle.force)) {
+      muscleAttrs.push(`force="${Number(joint.muscle.force).toFixed(6)}"`);
+    }
+    if (Number.isFinite(joint.muscle.scale)) {
+      muscleAttrs.push(`scale="${Number(joint.muscle.scale).toFixed(6)}"`);
+    }
+    if (Number.isFinite(joint.muscle.damping)) {
+      muscleAttrs.push(`damping="${Number(joint.muscle.damping).toFixed(6)}"`);
+    }
+    muscleActuatorLines.push(`    <muscle ${muscleAttrs.join(" ")} />`);
+  }
 
   const buildBody = (linkName: string, indent: number, isRoot: boolean) => {
     const link = links.get(linkName);
@@ -409,6 +461,13 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
         }
         worldLines.push(`${pad}  <joint ${attrs.join(" ")} />`);
       }
+    }
+
+    const muscleSites = muscleSitesByLink.get(linkName) ?? [];
+    for (const site of muscleSites) {
+      worldLines.push(
+        `${pad}  <site name="${site.name}" pos="${formatVec([site.pos[0], site.pos[1], site.pos[2]])}" />`
+      );
     }
 
     const geoms = link.collisions.length ? link.collisions : link.visuals;
@@ -615,13 +674,21 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
   for (const joint of joints) {
     if (joint.type === "fixed" || joint.type === "floating") continue;
     if (joint.actuator?.enabled === false) continue;
+    if (joint.actuator?.type === "muscle") continue;
     const jointName = nameMap.joints[joint.name] ?? sanitizeMjcfName(joint.name);
     jointActuators.push(`    <motor name="${jointName}_motor" joint="${jointName}" gear="1" />`);
   }
 
-  if (jointActuators.length) {
+  if (tendonLines.length) {
+    lines.push(`  <tendon>`);
+    lines.push(...tendonLines);
+    lines.push(`  </tendon>`);
+  }
+
+  if (jointActuators.length || muscleActuatorLines.length) {
     lines.push(`  <actuator>`);
     lines.push(...jointActuators);
+    lines.push(...muscleActuatorLines);
     lines.push(`  </actuator>`);
   }
 
@@ -630,7 +697,8 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
   debugLog("mjcf built", {
     bodies: worldLines.filter((line) => line.includes("<body ")).length,
     geoms: worldLines.filter((line) => line.includes("<geom ")).length,
-    actuators: jointActuators.length,
+    actuators: jointActuators.length + muscleActuatorLines.length,
+    tendons: tendonLines.length,
   });
 
   return { xml: lines.join("\n"), warnings, nameMap };

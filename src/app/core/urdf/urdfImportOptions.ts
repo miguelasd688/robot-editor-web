@@ -38,7 +38,9 @@ export function resolveUrdfImportOptionsFromSources(input: {
   const legacy = normalizeUrdfImportOptions(input.urdfImportOptions);
   const modelSource = asRecord(input.robotModelSource);
   const fromModel =
-    modelSource?.kind === "urdf" ? normalizeUrdfImportOptions(modelSource.importOptions) : undefined;
+    modelSource?.kind === "urdf" || modelSource?.kind === "usd"
+      ? normalizeUrdfImportOptions(modelSource.importOptions)
+      : undefined;
   const merged = { ...(legacy ?? {}), ...(fromModel ?? {}) };
   return Object.keys(merged).length ? merged : undefined;
 }

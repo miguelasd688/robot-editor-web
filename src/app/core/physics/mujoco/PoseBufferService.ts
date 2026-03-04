@@ -8,6 +8,7 @@ export type PoseConfigsByRobot = Record<string, Record<string, JointActuatorConf
 export type JointKeyResolver = (robotId: string, jointId: string) => string | null;
 
 export function resolveJointKey(robotId: string, jointName: string, nameMap?: MjcfNameMap | null) {
+  if (!nameMap) return jointName;
   const safeRobot = sanitizeMjcfName(robotId);
   const safeJoint = sanitizeMjcfName(jointName);
   return nameMap?.joints?.[jointName] ?? `${safeRobot}_${safeJoint}`;

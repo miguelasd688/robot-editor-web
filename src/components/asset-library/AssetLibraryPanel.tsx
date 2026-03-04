@@ -17,6 +17,7 @@ import {
 } from "./browserDragDrop";
 import {
   ensureLibrarySampleImported,
+  findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
   LIBRARY_SAMPLES,
 } from "./librarySamples";
@@ -218,6 +219,19 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(165, 122, 178, 0.58)",
           bottom: "rgba(72, 40, 90, 0.92)",
           caption: "ACTIVE",
+        },
+      },
+      {
+        id: "joint-muscle",
+        label: "Muscle Joint",
+        pathName: "MuscleJoint",
+        description: "Joint using tendon+muscle actuator mode.",
+        icon: "🫀",
+        assetId: "joint:muscle",
+        preview: {
+          top: "rgba(148, 146, 126, 0.58)",
+          bottom: "rgba(70, 67, 52, 0.92)",
+          caption: "MUSCLE",
         },
       },
     ],
@@ -437,9 +451,12 @@ export default function AssetLibraryPanel() {
     if (isUsdPath(path)) {
       const store = useAssetStore.getState();
       store.setUSD(path);
+      const sample = findLibrarySampleByWorkspaceKey(path);
       requestUsdImport({
         usdKey: path,
         source: "browser",
+        optionOverrides: sample?.defaultImportOptions?.usd,
+        bundleHintPaths: sample?.files,
       });
       logInfo("Browser import request: Workspace USD", { scope: "assets", data: { usdKey: path } });
       return;
@@ -479,6 +496,7 @@ export default function AssetLibraryPanel() {
         usdKey: sampleKey,
         source: "browser",
         optionOverrides: sample.defaultImportOptions?.usd,
+        bundleHintPaths: sample.files,
       });
       logInfo(`Browser import request: Library sample ${sample.id} (USD)`, {
         scope: "assets",

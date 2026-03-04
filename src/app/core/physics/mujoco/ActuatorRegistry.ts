@@ -18,7 +18,7 @@ export type ActuatorDescriptor = {
   stiffness: number;
   damping: number;
   continuous: boolean;
-  actuatorType: "position" | "velocity" | "torque";
+  actuatorType: "position" | "velocity" | "torque" | "muscle";
   angular: boolean;
 };
 
@@ -152,10 +152,12 @@ export function buildActuatorRegistry(
       const initial = angular ? toDegrees(initialRad) : initialRad;
       const { stiffness, damping } = resolveActuatorDefaults(joint);
       const mjcfJoint = resolveJointKey(robotId, joint.name, nameMap);
-      const actuatorName = `${mjcfJoint}_motor`;
+      const explicitActuatorName = joint.actuator?.name?.trim();
+      const rawActuatorType = joint.actuator?.type ?? "position";
+      const actuatorName =
+        explicitActuatorName || `${mjcfJoint}_${rawActuatorType === "muscle" ? "muscle" : "motor"}`;
       // Revolute follows the same angular error path as continuous joints, but with joint limits.
       const continuous = usesContinuousError(joint);
-      const rawActuatorType = joint.actuator?.type ?? "position";
       const actuatorType =
         joint.type === "revolute" && rawActuatorType === "velocity" ? "position" : rawActuatorType;
       const velocityRange = resolveVelocityRange(joint, angular);
@@ -179,7 +181,7 @@ export function buildActuatorRegistry(
       });
       initialTargets[id] = initial;
       const maxForce = Math.max(Math.abs(effortRange.min), Math.abs(effortRange.max));
-      configs[id] = { stiffness, damping, continuous, angular, mode: actuatorType, maxForce };
+      configs[id] = { stiffness, damping, continuous, angular, mode: actuatorType, maxForce, actuatorName };
     }
 
     list.sort((a, b) => a.jointName.localeCompare(b.jointName));

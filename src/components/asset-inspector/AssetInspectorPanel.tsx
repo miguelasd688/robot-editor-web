@@ -149,10 +149,22 @@ export default function AssetInspectorPanel() {
   const showCollisions = showPhysics && (!!fields.collisionsEnabled || instance?.kind === "link");
   const urdf = instance?.urdf;
   const jointActuatorEnabled = urdf?.kind === "joint" ? urdf.joint.actuator?.enabled !== false : false;
+  const jointActuatorType =
+    urdf?.kind === "joint"
+      ? (urdf.joint.actuator?.type ?? "position")
+      : ("position" as "position" | "velocity" | "torque" | "muscle");
   const actuatorDefaults = {
     stiffness: Number(import.meta.env.VITE_URDF_ACTUATOR_STIFFNESS ?? "120"),
     damping: Number(import.meta.env.VITE_URDF_ACTUATOR_DAMPING ?? "4"),
     initialPosition: 0,
+  } as const;
+  const muscleDefaults = {
+    range: [0, 1] as [number, number],
+    force: 1,
+    scale: 1,
+    damping: 0,
+    showLine: true,
+    showTube: false,
   } as const;
   const dynamicsDefaults = {
     damping: Number(import.meta.env.VITE_URDF_DEFAULT_DAMPING ?? "0.05"),
@@ -359,12 +371,48 @@ export default function AssetInspectorPanel() {
         next = { ...next, actuator: nextActuator };
         changed = true;
       }
+      if ((nextActuator.type ?? joint.actuator?.type ?? "position") === "muscle") {
+        const muscle = next.muscle ?? joint.muscle;
+        const frame0Pos =
+          joint.sourceFrames?.frame0Local?.position ?? ([0, 0, 0] as [number, number, number]);
+        const frame1Pos =
+          joint.sourceFrames?.frame1Local?.position ?? ([0, 0, 0] as [number, number, number]);
+        const endA = muscle?.endA ?? {
+          body: joint.parent,
+          localPos: [frame0Pos[0], frame0Pos[1], frame0Pos[2]] as [number, number, number],
+        };
+        const endB = muscle?.endB ?? {
+          body: joint.child,
+          localPos: [frame1Pos[0], frame1Pos[1], frame1Pos[2]] as [number, number, number],
+        };
+        const nextMuscle = {
+          enabled: muscle?.enabled ?? false,
+          endA: {
+            body: endA.body || joint.parent,
+            localPos: [endA.localPos[0], endA.localPos[1], endA.localPos[2]] as [number, number, number],
+          },
+          endB: {
+            body: endB.body || joint.child,
+            localPos: [endB.localPos[0], endB.localPos[1], endB.localPos[2]] as [number, number, number],
+          },
+          range: muscle?.range ? ([...muscle.range] as [number, number]) : ([...muscleDefaults.range] as [number, number]),
+          force: Number.isFinite(muscle?.force) ? muscle?.force : muscleDefaults.force,
+          scale: Number.isFinite(muscle?.scale) ? muscle?.scale : muscleDefaults.scale,
+          damping: Number.isFinite(muscle?.damping) ? muscle?.damping : muscleDefaults.damping,
+          showLine: muscle?.showLine ?? muscleDefaults.showLine,
+          showTube: muscle?.showTube ?? muscleDefaults.showTube,
+        };
+        if (!joint.muscle) {
+          next = { ...next, muscle: nextMuscle };
+          changed = true;
+        }
+      }
     }
 
     if (changed) {
       updateUrdfInstance({ kind: "joint", joint: next });
     }
-  }, [instance, actuatorDefaults, dynamicsDefaults, limitDefaults]);
+  }, [instance, actuatorDefaults, dynamicsDefaults, limitDefaults, muscleDefaults]);
 
   const updateVecArray = (value: [number, number, number], index: number, nextValue: number) => {
     const next = [...value] as [number, number, number];
@@ -617,7 +665,7 @@ export default function AssetInspectorPanel() {
     });
   };
 
-  type JointActuatorNumericField = Exclude<keyof NonNullable<UrdfJoint["actuator"]>, "type" | "enabled">;
+  type JointActuatorNumericField = "stiffness" | "damping" | "initialPosition";
 
   const updateJointActuatorField = (field: JointActuatorNumericField, value: number | undefined) => {
     updateJoint((joint) => {
@@ -629,6 +677,27 @@ export default function AssetInspectorPanel() {
       }
       const hasAny = Object.values(next).some((v) => v !== undefined);
       return { ...joint, actuator: hasAny ? next : undefined };
+    });
+  };
+
+  const updateJointMuscle = (
+    mutate: (muscle: NonNullable<UrdfJoint["muscle"]>, joint: UrdfJoint) => NonNullable<UrdfJoint["muscle"]>
+  ) => {
+    updateJoint((joint) => {
+      const parentBody = joint.parent || "";
+      const childBody = joint.child || "";
+      const base = joint.muscle ?? {
+        enabled: false,
+        endA: { body: parentBody, localPos: [0, 0, 0] as [number, number, number] },
+        endB: { body: childBody, localPos: [0, 0, 0] as [number, number, number] },
+        range: [...muscleDefaults.range] as [number, number],
+        force: muscleDefaults.force,
+        scale: muscleDefaults.scale,
+        damping: muscleDefaults.damping,
+        showLine: muscleDefaults.showLine,
+        showTube: muscleDefaults.showTube,
+      };
+      return { ...joint, muscle: mutate(base, joint) };
     });
   };
 
@@ -662,6 +731,19 @@ export default function AssetInspectorPanel() {
       parent: parentName ?? instance.urdf.joint.parent,
       child: resolveLinkLabel(nextNode),
       origin: nextOrigin,
+      muscle: instance.urdf.joint.muscle
+        ? {
+            ...instance.urdf.joint.muscle,
+            endA: {
+              ...instance.urdf.joint.muscle.endA,
+              body: parentName ?? instance.urdf.joint.parent,
+            },
+            endB: {
+              ...instance.urdf.joint.muscle.endB,
+              body: resolveLinkLabel(nextNode),
+            },
+          }
+        : instance.urdf.joint.muscle,
     };
     editorEngine.setNodeUrdf(instance.id, { kind: "joint", joint: nextJoint }, { recordHistory: true, reason: "joint.child" });
     markSceneDirty();
@@ -1112,6 +1194,8 @@ export default function AssetInspectorPanel() {
                   {urdf.link.visuals.map((visual, index) => {
                     const visualNode = linkVisualChildren[index];
                     const currentRgba = visualNode?.components?.visual?.rgba;
+                    const materialInfo = visualNode?.components?.visual?.materialInfo;
+                    const materialEditable = materialInfo?.editable !== false;
                     return (
                       <div key={`visual-${index}`} style={{ marginBottom: 10, paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                         <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>
@@ -1126,10 +1210,20 @@ export default function AssetInspectorPanel() {
                         {visualNode && (
                           <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginTop: 4 }}>
                             <div style={{ fontSize: 12, opacity: 0.75 }}>Color</div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <div style={{ display: "grid", gap: 6 }}>
+                              {materialInfo && (
+                                <div style={{ fontSize: 11, opacity: 0.68 }}>
+                                  USD material
+                                  {materialInfo.materialName ? `: ${materialInfo.materialName}` : ""}
+                                  {materialInfo.texturePath ? ` • texture: ${materialInfo.texturePath}` : ""}
+                                  {!materialEditable ? " • read-only" : ""}
+                                </div>
+                              )}
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <input
                                 type="color"
                                 value={currentRgba ? rgbaToHex(currentRgba) : "#888888"}
+                                disabled={!materialEditable}
                                 onChange={(e) => {
                                   const alpha = currentRgba?.[3] ?? 1;
                                   handleVisualColorChange(visualNode.id, hexToRgba(e.target.value, alpha));
@@ -1142,6 +1236,7 @@ export default function AssetInspectorPanel() {
                                 max={1}
                                 step={0.05}
                                 value={(currentRgba?.[3] ?? 1).toFixed(2)}
+                                disabled={!materialEditable}
                                 onChange={(e) => {
                                   const alpha = Math.min(1, Math.max(0, parseFloat(e.target.value) || 1));
                                   const hex = currentRgba ? rgbaToHex(currentRgba) : "#888888";
@@ -1153,6 +1248,7 @@ export default function AssetInspectorPanel() {
                               {currentRgba && (
                                 <button
                                   onClick={() => handleVisualColorChange(visualNode.id, undefined)}
+                                  disabled={!materialEditable}
                                   style={{
                                     height: 24,
                                     padding: "0 8px",
@@ -1168,6 +1264,7 @@ export default function AssetInspectorPanel() {
                                   Reset
                                 </button>
                               )}
+                              </div>
                             </div>
                           </div>
                         )}
@@ -1303,6 +1400,54 @@ export default function AssetInspectorPanel() {
                         />
                         Actuator enabled
                       </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center" }}>
+                        <div style={{ fontSize: 12, opacity: 0.75 }}>Mode</div>
+                        <DarkSelect
+                          value={jointActuatorType}
+                          onChange={(e) =>
+                            updateJoint((joint) => {
+                              const nextType = e.target.value as "position" | "velocity" | "torque" | "muscle";
+                              const nextActuator = {
+                                ...(joint.actuator ?? {}),
+                                type: nextType,
+                              };
+                              if (nextType !== "muscle") {
+                                return { ...joint, actuator: nextActuator };
+                              }
+                              const parentBody = joint.parent || "";
+                              const childBody = joint.child || "";
+                              const frame0Pos =
+                                joint.sourceFrames?.frame0Local?.position ?? ([0, 0, 0] as [number, number, number]);
+                              const frame1Pos =
+                                joint.sourceFrames?.frame1Local?.position ?? ([0, 0, 0] as [number, number, number]);
+                              const nextMuscle = joint.muscle ?? {
+                                enabled: false,
+                                endA: {
+                                  body: parentBody,
+                                  localPos: [frame0Pos[0], frame0Pos[1], frame0Pos[2]] as [number, number, number],
+                                },
+                                endB: {
+                                  body: childBody,
+                                  localPos: [frame1Pos[0], frame1Pos[1], frame1Pos[2]] as [number, number, number],
+                                },
+                                range: [...muscleDefaults.range] as [number, number],
+                                force: muscleDefaults.force,
+                                scale: muscleDefaults.scale,
+                                damping: muscleDefaults.damping,
+                                showLine: muscleDefaults.showLine,
+                                showTube: muscleDefaults.showTube,
+                              };
+                              return { ...joint, actuator: nextActuator, muscle: nextMuscle };
+                            })
+                          }
+                          style={{ ...inputStyle, width: 150, height: 28 }}
+                        >
+                          <option value="position">position</option>
+                          <option value="velocity">velocity</option>
+                          <option value="torque">torque</option>
+                          <option value="muscle">muscle</option>
+                        </DarkSelect>
+                      </div>
                       <div
                         style={{
                           display: "grid",
@@ -1311,29 +1456,141 @@ export default function AssetInspectorPanel() {
                           opacity: jointActuatorEnabled ? 1 : 0.55,
                         }}
                       >
-                        {([
-                          ["stiffness", urdf.joint.actuator?.stiffness],
-                          ["damping", urdf.joint.actuator?.damping],
-                          ["initialPosition", urdf.joint.actuator?.initialPosition],
-                        ] as const).map(([label, value]) => (
-                          <div key={label} style={{ display: "grid", gap: 4 }}>
-                            <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
-                            <input
-                              type="number"
-                              step={0.01}
-                              value={value ?? ""}
-                              placeholder={
-                                Number.isFinite((actuatorDefaults as Record<string, number>)[label])
-                                  ? String(actuatorDefaults[label])
-                                  : undefined
-                              }
-                              onChange={(e) => updateJointActuatorField(label, parseOptionalNumber(e.target.value))}
-                              disabled={!jointActuatorEnabled}
-                              style={inputStyle}
-                            />
-                          </div>
-                        ))}
+                        {jointActuatorType !== "muscle" &&
+                          ([
+                            ["stiffness", urdf.joint.actuator?.stiffness],
+                            ["damping", urdf.joint.actuator?.damping],
+                            ["initialPosition", urdf.joint.actuator?.initialPosition],
+                          ] as const).map(([label, value]) => (
+                            <div key={label} style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
+                              <input
+                                type="number"
+                                step={0.01}
+                                value={value ?? ""}
+                                placeholder={
+                                  Number.isFinite((actuatorDefaults as Record<string, number>)[label])
+                                    ? String(actuatorDefaults[label])
+                                    : undefined
+                                }
+                                onChange={(e) => updateJointActuatorField(label, parseOptionalNumber(e.target.value))}
+                                disabled={!jointActuatorEnabled}
+                                style={inputStyle}
+                              />
+                            </div>
+                          ))}
+                        {jointActuatorType === "muscle" && (
+                          <>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 10, opacity: 0.6 }}>range min</div>
+                              <input
+                                type="number"
+                                step={0.01}
+                                value={urdf.joint.muscle?.range?.[0] ?? muscleDefaults.range[0]}
+                                onChange={(e) =>
+                                  updateJointMuscle((muscle) => ({
+                                    ...muscle,
+                                    range: [clampNumber(e.target.value), muscle.range?.[1] ?? muscleDefaults.range[1]],
+                                  }))
+                                }
+                                disabled={!jointActuatorEnabled}
+                                style={inputStyle}
+                              />
+                            </div>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={{ fontSize: 10, opacity: 0.6 }}>range max</div>
+                              <input
+                                type="number"
+                                step={0.01}
+                                value={urdf.joint.muscle?.range?.[1] ?? muscleDefaults.range[1]}
+                                onChange={(e) =>
+                                  updateJointMuscle((muscle) => ({
+                                    ...muscle,
+                                    range: [muscle.range?.[0] ?? muscleDefaults.range[0], clampNumber(e.target.value)],
+                                  }))
+                                }
+                                disabled={!jointActuatorEnabled}
+                                style={inputStyle}
+                              />
+                            </div>
+                            {([
+                              ["force", urdf.joint.muscle?.force ?? muscleDefaults.force],
+                              ["scale", urdf.joint.muscle?.scale ?? muscleDefaults.scale],
+                              ["damping", urdf.joint.muscle?.damping ?? muscleDefaults.damping],
+                            ] as const).map(([label, value]) => (
+                              <div key={label} style={{ display: "grid", gap: 4 }}>
+                                <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
+                                <input
+                                  type="number"
+                                  step={0.01}
+                                  value={value}
+                                  onChange={(e) =>
+                                    updateJointMuscle((muscle) => ({
+                                      ...muscle,
+                                      [label]: clampNumber(e.target.value),
+                                    }))
+                                  }
+                                  disabled={!jointActuatorEnabled}
+                                  style={inputStyle}
+                                />
+                              </div>
+                            ))}
+                          </>
+                        )}
                       </div>
+                      {jointActuatorType === "muscle" && (
+                        <div style={{ display: "grid", gap: 8, opacity: jointActuatorEnabled ? 1 : 0.55 }}>
+                          <div style={{ fontSize: 11, opacity: 0.7, textTransform: "uppercase" }}>Muscle Endpoints</div>
+                          {renderVecRow(
+                            "endA",
+                            urdf.joint.muscle?.endA.localPos ?? [0, 0, 0],
+                            (next) =>
+                              updateJointMuscle((muscle, joint) => ({
+                                ...muscle,
+                                endA: { body: muscle.endA.body || joint.parent, localPos: next },
+                              })),
+                            0.001
+                          )}
+                          {renderVecRow(
+                            "endB",
+                            urdf.joint.muscle?.endB.localPos ?? [0, 0, 0],
+                            (next) =>
+                              updateJointMuscle((muscle, joint) => ({
+                                ...muscle,
+                                endB: { body: muscle.endB.body || joint.child, localPos: next },
+                              })),
+                            0.001
+                          )}
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                            <input
+                              type="checkbox"
+                              checked={urdf.joint.muscle?.showLine !== false}
+                              onChange={(e) =>
+                                updateJointMuscle((muscle) => ({
+                                  ...muscle,
+                                  showLine: e.target.checked,
+                                }))
+                              }
+                              disabled={!jointActuatorEnabled}
+                            />
+                            Show gray line
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                            <input
+                              type="checkbox"
+                              checked={urdf.joint.muscle?.showTube === true}
+                              onChange={(e) =>
+                                updateJointMuscle((muscle) => ({
+                                  ...muscle,
+                                  showTube: e.target.checked,
+                                }))
+                              }
+                              disabled={!jointActuatorEnabled}
+                            />
+                            Tube rendering
+                          </label>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

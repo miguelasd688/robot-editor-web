@@ -5,6 +5,7 @@ import { applyInitialTransform, ensureUserInstance } from "../../assets/assetIns
 import type { AssetEntry } from "../../assets/assetRegistryTypes";
 import type { MujocoModelSource } from "./MujocoRuntime";
 import type { MjcfNameMap } from "./mjcfNames";
+import { sanitizeMjcfName } from "./mjcfNames";
 import { convertUrdfToMjcf } from "./urdfToMjcf";
 import { logDebug, logInfo, logWarn } from "../../services/logger";
 import { expandXacroIfConfigured, hasXacroTags, stripXacroTags } from "../../urdf/xacro";
@@ -43,6 +44,233 @@ export type MjcfMergeInput = {
   nameMaps: Array<MjcfNameMap | undefined>;
 };
 
+type MjcfNameDomain = "body" | "joint" | "geom" | "site" | "actuator" | "tendon" | "mesh" | "material" | "texture";
+
+type MjcfPrefixResult = {
+  xml: string;
+  nameMap?: MjcfNameMap;
+};
+
+function isActuatorElement(el: Element): boolean {
+  const parent = el.parentElement;
+  if (!parent) return false;
+  return parent.tagName.toLowerCase() === "actuator";
+}
+
+function isTendonElement(el: Element): boolean {
+  const parent = el.parentElement;
+  if (!parent) return false;
+  return parent.tagName.toLowerCase() === "tendon";
+}
+
+function classifyMjcfNamedElement(el: Element): MjcfNameDomain | null {
+  const tag = el.tagName.toLowerCase();
+  if (!el.hasAttribute("name")) return null;
+  if (tag === "body") return "body";
+  if (tag === "joint") return "joint";
+  if (tag === "geom") return "geom";
+  if (tag === "site") return "site";
+  if (tag === "mesh") return "mesh";
+  if (tag === "material") return "material";
+  if (tag === "texture") return "texture";
+  if (isActuatorElement(el)) return "actuator";
+  if (isTendonElement(el)) return "tendon";
+  return null;
+}
+
+function applyMjcfNamePrefix(xml: string, rawPrefix?: string | null): MjcfPrefixResult {
+  const prefixBase = sanitizeMjcfName(String(rawPrefix ?? "").trim());
+  if (!prefixBase) return { xml };
+
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(xml, "application/xml");
+  } catch {
+    return { xml };
+  }
+  if (doc.querySelector("parsererror")) return { xml };
+
+  const domainMaps: Record<MjcfNameDomain, Map<string, string>> = {
+    body: new Map(),
+    joint: new Map(),
+    geom: new Map(),
+    site: new Map(),
+    actuator: new Map(),
+    tendon: new Map(),
+    mesh: new Map(),
+    material: new Map(),
+    texture: new Map(),
+  };
+
+  const prefixName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return trimmed;
+    const alreadyPrefixed = trimmed.startsWith(`${prefixBase}_`);
+    if (alreadyPrefixed) return trimmed;
+    return sanitizeMjcfName(`${prefixBase}_${trimmed}`);
+  };
+
+  for (const el of Array.from(doc.querySelectorAll("[name]"))) {
+    const domain = classifyMjcfNamedElement(el);
+    if (!domain) continue;
+    const raw = String(el.getAttribute("name") ?? "").trim();
+    if (!raw) continue;
+    const mapped = prefixName(raw);
+    domainMaps[domain].set(raw, mapped);
+    if (mapped !== raw) {
+      el.setAttribute("name", mapped);
+    }
+  }
+
+  const mapRef = (el: Element, attr: string, domain: MjcfNameDomain) => {
+    const raw = String(el.getAttribute(attr) ?? "").trim();
+    if (!raw) return;
+    const mapped = domainMaps[domain].get(raw);
+    if (mapped && mapped !== raw) el.setAttribute(attr, mapped);
+  };
+
+  for (const el of Array.from(doc.querySelectorAll("*"))) {
+    mapRef(el, "body", "body");
+    mapRef(el, "body1", "body");
+    mapRef(el, "body2", "body");
+    mapRef(el, "joint", "joint");
+    mapRef(el, "joint1", "joint");
+    mapRef(el, "joint2", "joint");
+    mapRef(el, "geom", "geom");
+    mapRef(el, "geom1", "geom");
+    mapRef(el, "geom2", "geom");
+    mapRef(el, "site", "site");
+    mapRef(el, "site1", "site");
+    mapRef(el, "site2", "site");
+    mapRef(el, "tendon", "tendon");
+    mapRef(el, "mesh", "mesh");
+    mapRef(el, "material", "material");
+    mapRef(el, "texture", "texture");
+  }
+
+  const linkMap: Record<string, string> = {};
+  const linkByMjcf: Record<string, string> = {};
+  for (const [raw, mapped] of domainMaps.body.entries()) {
+    linkMap[raw] = mapped;
+    linkByMjcf[mapped] = raw;
+  }
+  const jointMap: Record<string, string> = {};
+  const jointByMjcf: Record<string, string> = {};
+  for (const [raw, mapped] of domainMaps.joint.entries()) {
+    jointMap[raw] = mapped;
+    jointByMjcf[mapped] = raw;
+  }
+
+  const nameMap: MjcfNameMap = {
+    links: linkMap,
+    joints: jointMap,
+    linksByMjcf: linkByMjcf,
+    jointsByMjcf: jointByMjcf,
+  };
+
+  return {
+    xml: new XMLSerializer().serializeToString(doc),
+    nameMap,
+  };
+}
+
+function sanitizeMjcfInertials(xml: string): { xml: string; mutated: boolean } {
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(xml, "application/xml");
+  } catch {
+    return { xml, mutated: false };
+  }
+  if (doc.querySelector("parsererror")) return { xml, mutated: false };
+
+  const parseVec = (value: string | null | undefined, length: number, fallback: number[]) => {
+    const parts = (value ?? "")
+      .trim()
+      .split(/\s+/)
+      .slice(0, length)
+      .map((item) => Number(item));
+    const out = fallback.slice(0, length);
+    for (let i = 0; i < length; i += 1) {
+      const next = parts[i];
+      out[i] = Number.isFinite(next) ? next : out[i];
+    }
+    return out;
+  };
+
+  const positive = (value: number, fallback: number, min: number) =>
+    Number.isFinite(value) && value > min ? value : Math.max(min, fallback);
+
+  const inertials = Array.from(doc.querySelectorAll("inertial"));
+  let mutated = false;
+  for (const inertial of inertials) {
+    const rawMass = Number(inertial.getAttribute("mass"));
+    const mass = positive(rawMass, 1, 1e-8);
+    if (!Number.isFinite(rawMass) || rawMass <= 1e-8) {
+      inertial.setAttribute("mass", mass.toFixed(6));
+      mutated = true;
+    }
+
+    const pos = parseVec(inertial.getAttribute("pos"), 3, [0, 0, 0]);
+    const posText = pos.map((v) => v.toFixed(6)).join(" ");
+    if ((inertial.getAttribute("pos") ?? "") !== posText) {
+      inertial.setAttribute("pos", posText);
+      mutated = true;
+    }
+
+    const quat = parseVec(inertial.getAttribute("quat"), 4, [1, 0, 0, 0]);
+    const quatNorm = Math.hypot(quat[0], quat[1], quat[2], quat[3]);
+    const safeQuat =
+      quatNorm > 1e-12
+        ? quat.map((v) => v / quatNorm)
+        : [1, 0, 0, 0];
+    const quatText = safeQuat.map((v) => v.toFixed(6)).join(" ");
+    if ((inertial.getAttribute("quat") ?? "") !== quatText) {
+      inertial.setAttribute("quat", quatText);
+      mutated = true;
+    }
+
+    const fallbackDiag = Math.max(1e-9, mass * 0.01);
+    const diagRaw = parseVec(inertial.getAttribute("diaginertia"), 3, [fallbackDiag, fallbackDiag, fallbackDiag]);
+    const diag = [
+      positive(diagRaw[0], fallbackDiag, 1e-9),
+      positive(diagRaw[1], fallbackDiag, 1e-9),
+      positive(diagRaw[2], fallbackDiag, 1e-9),
+    ];
+    const diagText = diag.map((v) => v.toFixed(6)).join(" ");
+    if ((inertial.getAttribute("diaginertia") ?? "") !== diagText) {
+      inertial.setAttribute("diaginertia", diagText);
+      mutated = true;
+    }
+
+    if (inertial.hasAttribute("fullinertia")) {
+      const full = parseVec(inertial.getAttribute("fullinertia"), 6, [
+        diag[0],
+        diag[1],
+        diag[2],
+        0,
+        0,
+        0,
+      ]);
+      const fullSafe = [
+        positive(full[0], diag[0], 1e-9),
+        positive(full[1], diag[1], 1e-9),
+        positive(full[2], diag[2], 1e-9),
+        Number.isFinite(full[3]) ? full[3] : 0,
+        Number.isFinite(full[4]) ? full[4] : 0,
+        Number.isFinite(full[5]) ? full[5] : 0,
+      ];
+      const fullText = fullSafe.map((v) => v.toFixed(6)).join(" ");
+      if ((inertial.getAttribute("fullinertia") ?? "") !== fullText) {
+        inertial.setAttribute("fullinertia", fullText);
+        mutated = true;
+      }
+    }
+  }
+
+  if (!mutated) return { xml, mutated: false };
+  return { xml: new XMLSerializer().serializeToString(doc), mutated: true };
+}
+
 function extractTagContent(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
   return match ? match[1].trim() : "";
@@ -70,11 +298,13 @@ export function mergeMjcfSources(input: MjcfMergeInput): { source: MujocoModelSo
   const assets: string[] = [];
   const worldbody: string[] = [];
   const equality: string[] = [];
+  const tendon: string[] = [];
   const actuators: string[] = [];
   for (const source of mjcfSources) {
     assets.push(extractTagContent(source.content, "asset"));
     worldbody.push(extractTagContent(source.content, "worldbody"));
     equality.push(extractTagContent(source.content, "equality"));
+    tendon.push(extractTagContent(source.content, "tendon"));
     actuators.push(extractTagContent(source.content, "actuator"));
   }
 
@@ -103,6 +333,12 @@ export function mergeMjcfSources(input: MjcfMergeInput): { source: MujocoModelSo
     lines.push(`  <equality>`);
     lines.push(equalityBody);
     lines.push(`  </equality>`);
+  }
+  const tendonBody = tendon.filter(Boolean).join("\n");
+  if (tendonBody) {
+    lines.push(`  <tendon>`);
+    lines.push(tendonBody);
+    lines.push(`  </tendon>`);
   }
   const actuatorBody = actuators.filter(Boolean).join("\n");
   if (actuatorBody) {
@@ -224,11 +460,21 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
   const explicitMjcfKey = typeof mjcfKey === "string" ? mjcfKey.trim() : "";
   if (inlineMjcf || (explicitMjcfKey && assets[explicitMjcfKey])) {
     const sourceKey = explicitMjcfKey || null;
-    const content =
+    const contentRaw =
       inlineMjcf ||
       (sourceKey && assets[sourceKey] ? await assets[sourceKey].file.text() : "");
-    if (!content) {
+    if (!contentRaw) {
       throw new Error("Failed to resolve MJCF source for export.");
+    }
+    const sanitized = sanitizeMjcfInertials(contentRaw);
+    const prefixed = applyMjcfNamePrefix(sanitized.xml, namePrefix);
+    const content = prefixed.xml;
+    if (sanitized.mutated) {
+      warnings.push("Sanitized invalid inertial values in source MJCF.");
+      logWarn("MuJoCo: sanitized invalid inertial values in MJCF source.", {
+        scope: "mujoco",
+        data: { source: sourceKey ?? "inline" },
+      });
     }
     const label = sourceKey ?? "inline";
     logInfo(`MuJoCo: loading MJCF (${label})`, { scope: "mujoco" });
@@ -249,6 +495,7 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
         filename: sourceKey || "inline.mjcf",
         content: rewritten,
         files,
+        nameMap: prefixed.nameMap,
       },
       warnings,
     };
@@ -387,7 +634,17 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
   const xmlKey = keys.find((k) => k.toLowerCase().endsWith(".xml") || k.toLowerCase().endsWith(".mjcf"));
   if (xmlKey && assets[xmlKey]) {
     logInfo(`MuJoCo: loading MJCF (${xmlKey})`, { scope: "mujoco" });
-    const content = await assets[xmlKey].file.text();
+    const contentRaw = await assets[xmlKey].file.text();
+    const sanitized = sanitizeMjcfInertials(contentRaw);
+    const prefixed = applyMjcfNamePrefix(sanitized.xml, namePrefix);
+    const content = prefixed.xml;
+    if (sanitized.mutated) {
+      warnings.push("Sanitized invalid inertial values in source MJCF.");
+      logWarn("MuJoCo: sanitized invalid inertial values in MJCF source.", {
+        scope: "mujoco",
+        data: { source: xmlKey },
+      });
+    }
     const meshRefs = findMeshRefs(content, "file");
     const { files, remap, missing, convertedWarnings } = await convertMeshesForMujoco(
       assets,
@@ -405,6 +662,7 @@ export async function buildModelSource(input: MujocoModelBuildInput): Promise<Mu
         filename: xmlKey,
         content: rewritten,
         files,
+        nameMap: prefixed.nameMap,
       },
       warnings,
     };

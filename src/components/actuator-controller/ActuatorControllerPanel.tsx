@@ -16,7 +16,7 @@ const clamp = (value: number, min?: number, max?: number) => {
   return value;
 };
 
-const ACTUATOR_TYPES = ["position", "velocity", "torque"] as const;
+const ACTUATOR_TYPES = ["position", "velocity", "torque", "muscle"] as const;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
@@ -452,6 +452,7 @@ export default function ActuatorControllerPanel() {
           const showVelocity = actuatorMode === "velocity" || actuatorMode === "torque";
           const showTorque = actuatorMode === "torque";
           const showInitial = actuatorMode === "position";
+          const showMuscle = actuatorMode === "muscle";
           const headerIsVelocity = actuatorMode === "velocity";
           const headerRange = headerIsVelocity ? velocityDisplayRange : entry.range;
           const headerUnit = headerIsVelocity ? velocityUnit : unit;
@@ -504,7 +505,11 @@ export default function ActuatorControllerPanel() {
                   title="Actuator type"
                 >
                   {ACTUATOR_TYPES.map((type) => (
-                    <option key={type} value={type} disabled={entry.type === "revolute" && type === "velocity"}>
+                    <option
+                      key={type}
+                      value={type}
+                      disabled={entry.type === "revolute" && type === "velocity"}
+                    >
                       {type}
                     </option>
                   ))}
@@ -728,6 +733,11 @@ export default function ActuatorControllerPanel() {
                       fontSize: 12,
                     }}
                   />
+                </div>
+              )}
+              {showMuscle && (
+                <div style={{ fontSize: 11, opacity: 0.65 }}>
+                  Muscle actuators are tendon-driven and are not controlled via direct motor sliders.
                 </div>
               )}
             </div>

@@ -141,6 +141,43 @@ const sameTransform = (a: Transform, b: Transform) =>
   a.scale.y === b.scale.y &&
   a.scale.z === b.scale.z;
 
+const readUsdVisualMaterialInfo = (obj: THREE.Object3D): VisualComponent["materialInfo"] | undefined => {
+  let chosen:
+    | {
+        source?: string;
+        materialName?: string | null;
+        texturePath?: string | null;
+        editable?: boolean;
+      }
+    | undefined;
+  obj.traverse((node) => {
+    const raw = node.userData?.usdMaterialInfo as
+      | {
+          materialSource?: unknown;
+          materialName?: unknown;
+          baseColorTexture?: unknown;
+          editable?: unknown;
+        }
+      | undefined;
+    if (!raw) return;
+
+    const source = String(raw.materialSource ?? "").trim() || undefined;
+    const materialName = String(raw.materialName ?? "").trim() || null;
+    const texturePath = String(raw.baseColorTexture ?? "").trim() || null;
+    const editable = raw.editable === false ? false : true;
+    const next = { source, materialName, texturePath, editable } satisfies NonNullable<VisualComponent["materialInfo"]>;
+
+    if (!chosen) {
+      chosen = next;
+      return;
+    }
+    if (chosen.editable !== false && next.editable === false) {
+      chosen = next;
+    }
+  });
+  return chosen;
+};
+
 const findAncestorIdByKind = (
   nodes: Record<string, SceneNode>,
   startId: string | null,
@@ -567,6 +604,39 @@ export class ThreeSceneAdapter {
 
   private populateComponents(nodes: Record<string, SceneNode>) {
     const defaultCollisionSyncVisualIds = new Set<string>();
+    const dirtyUsdLinkCache = new Map<string, boolean>();
+
+    const subtreeHasMeshDescendant = (rootId: string) => {
+      const stack: string[] = [rootId];
+      while (stack.length) {
+        const id = stack.pop() as string;
+        const current = nodes[id];
+        if (!current) continue;
+        if (id !== rootId && current.kind === "mesh") return true;
+        for (let i = current.children.length - 1; i >= 0; i -= 1) {
+          stack.push(current.children[i]);
+        }
+      }
+      return false;
+    };
+
+    const linkHasCollisionMeshes = (linkNode: SceneNode) =>
+      linkNode.children
+        .map((childId) => nodes[childId])
+        .filter((child): child is SceneNode => !!child && child.kind === "collision")
+        .some((collision) => subtreeHasMeshDescendant(collision.id));
+
+    const linkBelongsToDirtyUsdRobot = (linkNode: SceneNode) => {
+      const cached = dirtyUsdLinkCache.get(linkNode.id);
+      if (typeof cached === "boolean") return cached;
+      const robotId = findAncestorIdByKind(nodes, linkNode.id, "robot");
+      const robotObj = robotId ? this.viewer.getObjectById(robotId) : null;
+      const robotModelSource = robotObj?.userData?.robotModelSource as RobotModelSource | undefined;
+      const isDirtyUsd = robotModelSource?.kind === "usd" && robotModelSource.isDirty === true;
+      dirtyUsdLinkCache.set(linkNode.id, isDirtyUsd);
+      return isDirtyUsd;
+    };
+
     for (const node of Object.values(nodes)) {
       if (node.kind !== "link") continue;
       const visualChildren = node.children
@@ -577,6 +647,9 @@ export class ThreeSceneAdapter {
         (visual) => typeof visual.components?.visual?.attachCollisions === "boolean"
       );
       if (alreadyConfigured) continue;
+      const hasCollisionMeshes = linkHasCollisionMeshes(node);
+      const shouldEnableSyncDefault = !hasCollisionMeshes || linkBelongsToDirtyUsdRobot(node);
+      if (!shouldEnableSyncDefault) continue;
       defaultCollisionSyncVisualIds.add(visualChildren[0].id);
     }
 
@@ -599,16 +672,18 @@ export class ThreeSceneAdapter {
           const prev = node.components?.visual;
           const explicitRgba = obj.userData?.visualRgba as VisualComponent["rgba"] | null | undefined;
           const rgba = explicitRgba ?? (node.kind === "visual" ? readRgbaFromObject(obj) : undefined) ?? undefined;
+          const materialInfo = node.kind === "visual" ? readUsdVisualMaterialInfo(obj) : undefined;
           const attachCollisions =
             typeof prev?.attachCollisions === "boolean"
               ? prev.attachCollisions
               : node.kind === "visual" && defaultCollisionSyncVisualIds.has(node.id)
                 ? true
                 : undefined;
-          if (!rgba && !prev && attachCollisions === undefined) return prev;
+          if (!rgba && !prev && attachCollisions === undefined && !materialInfo) return prev;
           const next: VisualComponent = { ...(prev ?? {}) };
           if (attachCollisions !== undefined) next.attachCollisions = attachCollisions;
           if (rgba !== undefined) next.rgba = rgba;
+          if (materialInfo) next.materialInfo = materialInfo;
           return next;
         })(),
       };

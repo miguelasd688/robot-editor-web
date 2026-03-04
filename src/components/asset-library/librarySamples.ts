@@ -4,12 +4,20 @@ import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 
 export type LibrarySampleKind = "urdf" | "usd";
 
+export type LibrarySampleTrainingDefaults = {
+  templateId: string;
+  recipeId: string;
+  taskTemplate: string;
+  task: string;
+};
+
 export type LibrarySample = {
   id: string;
   label: string;
   description: string;
   kind: LibrarySampleKind;
   entry: string;
+  /** For USD samples include entry + all referenced dependencies (layers/textures/meshes). */
   files: string[];
   /**
    * Optional compatibility keys used by older imports before the /public/library contract.
@@ -28,6 +36,7 @@ export type LibrarySample = {
     urdf?: Partial<UrdfImportOptions>;
     usd?: Partial<UsdImportOptions>;
   };
+  trainingDefaults?: LibrarySampleTrainingDefaults;
 };
 
 export const LIBRARY_ROOT = "library";
@@ -52,6 +61,152 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
     },
     defaultImportOptions: {
       urdf: { floatingBase: false },
+    },
+    trainingDefaults: {
+      templateId: "isaaclab.cartpole.sample.v1",
+      recipeId: "isaaclab.cartpole.sample.v1",
+      taskTemplate: "cartpole_direct",
+      task: "Isaac-Cartpole-Direct-v0",
+    },
+  },
+  {
+    id: "ant",
+    label: "Ant Sample",
+    description: "Isaac Lab Ant USD sample (instanceable).",
+    kind: "usd",
+    entry: "ant_instanceable.usd",
+    files: [
+      "ant-LICENSE.txt",
+      "ant.usd",
+      "ant_colored.usd",
+      "ant_instanceable.usd",
+      "configuration/ant_colored_robot_schema.usd",
+      "configuration/ant_instanceable_robot_schema.usd",
+      "configuration/ant_robot_schema.usd",
+    ],
+    badge: "USD",
+    importLabel: "Load sample",
+    icon: "🐜",
+    preview: {
+      top: "rgba(109, 139, 179, 0.55)",
+      bottom: "rgba(43, 58, 83, 0.92)",
+      caption: "ANT",
+    },
+    defaultImportOptions: {
+      usd: {
+        floatingBase: true,
+        selfCollision: false,
+      },
+    },
+    trainingDefaults: {
+      templateId: "isaaclab.ant.direct.v1",
+      recipeId: "isaaclab.ant.direct.v1",
+      taskTemplate: "ant_direct",
+      task: "Isaac-Ant-Direct-v0",
+    },
+  },
+  {
+    id: "humanoid",
+    label: "Humanoid Sample",
+    description: "Isaac Lab Humanoid USD sample (instanceable).",
+    kind: "usd",
+    entry: "humanoid_instanceable.usd",
+    files: [
+      "configuration/humanoid_instanceable_robot_schema.usd",
+      "configuration/humanoid_robot_schema.usd",
+      "humanoid-LICENSE.txt",
+      "humanoid.usd",
+      "humanoid_instanceable.usd",
+    ],
+    badge: "USD",
+    importLabel: "Load sample",
+    icon: "🧍",
+    preview: {
+      top: "rgba(159, 126, 109, 0.56)",
+      bottom: "rgba(84, 56, 43, 0.92)",
+      caption: "HUMANOID",
+    },
+    defaultImportOptions: {
+      usd: {
+        floatingBase: true,
+        selfCollision: false,
+      },
+    },
+    trainingDefaults: {
+      templateId: "isaaclab.humanoid.direct.v1",
+      recipeId: "isaaclab.humanoid.direct.v1",
+      taskTemplate: "humanoid_direct",
+      task: "Isaac-Humanoid-Direct-v0",
+    },
+  },
+  {
+    id: "anymal_c",
+    label: "Anymal-C Sample",
+    description: "Isaac Lab ANYmal-C rough terrain USD sample.",
+    kind: "usd",
+    entry: "anymal_c.usd",
+    files: [
+      "Props/instanceable_meshes.usd",
+      "Props/materials/base.jpg",
+      "Props/materials/battery.jpg",
+      "Props/materials/bottom_shell.jpg",
+      "Props/materials/depth_camera.jpg",
+      "Props/materials/drive.jpg",
+      "Props/materials/face.jpg",
+      "Props/materials/foot.jpg",
+      "Props/materials/handle.jpg",
+      "Props/materials/hatch.jpg",
+      "Props/materials/hip.jpg",
+      "Props/materials/lidar.jpg",
+      "Props/materials/lidar_cage.jpg",
+      "Props/materials/remote.jpg",
+      "Props/materials/shank.jpg",
+      "Props/materials/thigh.jpg",
+      "Props/materials/top_shell.jpg",
+      "Props/materials/wide_angle_camera.jpg",
+      "anymal_c.usd",
+      "configuration/anymal_c_robot_schema.usd",
+      "legacy/anymal.usd",
+      "legacy/anymal_base.usd",
+      "legacy/anymal_c-LICENSE.txt",
+      "legacy/anymal_instanceable.usd",
+      "legacy/materials/base.jpg",
+      "legacy/materials/battery.jpg",
+      "legacy/materials/bottom_shell.jpg",
+      "legacy/materials/depth_camera.jpg",
+      "legacy/materials/drive.jpg",
+      "legacy/materials/face.jpg",
+      "legacy/materials/foot.jpg",
+      "legacy/materials/handle.jpg",
+      "legacy/materials/hatch.jpg",
+      "legacy/materials/hip.jpg",
+      "legacy/materials/lidar.jpg",
+      "legacy/materials/lidar_cage.jpg",
+      "legacy/materials/remote.jpg",
+      "legacy/materials/shank.jpg",
+      "legacy/materials/thigh.jpg",
+      "legacy/materials/top_shell.jpg",
+      "legacy/materials/wide_angle_camera.jpg",
+    ],
+    badge: "USD",
+    importLabel: "Load sample",
+    icon: "🐕",
+    preview: {
+      top: "rgba(121, 151, 117, 0.58)",
+      bottom: "rgba(54, 76, 50, 0.92)",
+      caption: "ANYMAL-C",
+    },
+    defaultImportOptions: {
+      usd: {
+        floatingBase: true,
+        selfCollision: false,
+      },
+    },
+    trainingDefaults: {
+      templateId: "isaaclab.anymal_c.rough.manager.v1",
+      recipeId: "isaaclab.anymal_c.rough.manager.v1",
+      taskTemplate: "anymal_c_rough_manager",
+      task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
   },
 ];
@@ -82,6 +237,38 @@ export function findLibrarySampleKey(keys: string[], sample: LibrarySample): str
   if (byEntry) return byEntry;
   const byName = keys.find((key) => key === sample.entry);
   return byName ?? null;
+}
+
+export function findLibrarySampleByWorkspaceKey(
+  key: string,
+  samples: LibrarySample[] = LIBRARY_SAMPLES
+): LibrarySample | null {
+  const normalized = normalizeLibraryFile(String(key ?? "").trim());
+  if (!normalized) return null;
+  for (const sample of samples) {
+    const entryKey = normalizeLibraryFile(buildLibrarySampleEntryKey(sample));
+    if (entryKey === normalized) return sample;
+    if (normalized === sample.entry || normalized.endsWith(`/${sample.entry}`)) return sample;
+
+    const legacyKeys = sample.legacyKeys ?? [];
+    for (const legacyKey of legacyKeys) {
+      const normalizedLegacy = normalizeLibraryFile(legacyKey);
+      if (!normalizedLegacy) continue;
+      if (normalized === normalizedLegacy || normalized.endsWith(`/${normalizedLegacy}`)) return sample;
+    }
+  }
+  return null;
+}
+
+export function findLibrarySampleFromKeys(
+  keys: string[],
+  samples: LibrarySample[] = LIBRARY_SAMPLES
+): { sample: LibrarySample; matchedKey: string } | null {
+  for (const sample of samples) {
+    const matchedKey = findLibrarySampleKey(keys, sample);
+    if (matchedKey) return { sample, matchedKey };
+  }
+  return null;
 }
 
 const resolveLibraryBaseUrl = () => {
