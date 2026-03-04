@@ -92,6 +92,9 @@ const MUJOCO_SELF_COLLIDE = String(import.meta.env.VITE_URDF_SELF_COLLIDE ?? "fa
 const DEFAULT_ACTUATOR_VELOCITY_GAIN = Number(import.meta.env.VITE_ACTUATOR_VELOCITY_GAIN ?? "4");
 const ACTUATOR_ARM_RAMP_SEC = Number(import.meta.env.VITE_ACTUATOR_ARM_RAMP_SEC ?? "0.25");
 const ACTUATOR_CTRL_FILTER_SEC = Number(import.meta.env.VITE_ACTUATOR_CTRL_FILTER_SEC ?? "0.03");
+const ACTUATOR_DAMPING_RATIO_FLOOR_RAW = Number(import.meta.env.VITE_ACTUATOR_DAMPING_RATIO_FLOOR ?? "0.85");
+const ACTUATOR_MAX_ANGULAR_ERROR_DEG_RAW = Number(import.meta.env.VITE_ACTUATOR_MAX_ANGULAR_ERROR_DEG ?? "45");
+const ACTUATOR_MAX_LINEAR_ERROR_RAW = Number(import.meta.env.VITE_ACTUATOR_MAX_LINEAR_ERROR ?? "0.25");
 const DEFAULT_SCENE_JOINT_DAMPING = Number(import.meta.env.VITE_MUJOCO_SCENE_JOINT_DAMPING ?? "0.2");
 const DEFAULT_SCENE_JOINT_ARMATURE = Number(import.meta.env.VITE_MUJOCO_SCENE_JOINT_ARMATURE ?? "0.01");
 const DEFAULT_CONTACT_SOLREF = String(import.meta.env.VITE_MUJOCO_CONTACT_SOLREF ?? "0.02 1.2");
@@ -109,6 +112,15 @@ const POINTER_DRAG_MAX_FORCE = Number.isFinite(POINTER_DRAG_MAX_FORCE_RAW) ? POI
 const POINTER_DRAG_DAMPING_RATIO = Number.isFinite(POINTER_DRAG_DAMPING_RATIO_RAW)
   ? Math.max(0, POINTER_DRAG_DAMPING_RATIO_RAW)
   : 1;
+const ACTUATOR_DAMPING_RATIO_FLOOR = Number.isFinite(ACTUATOR_DAMPING_RATIO_FLOOR_RAW)
+  ? Math.max(0, ACTUATOR_DAMPING_RATIO_FLOOR_RAW)
+  : 0.85;
+const ACTUATOR_MAX_ANGULAR_ERROR_RAD = Number.isFinite(ACTUATOR_MAX_ANGULAR_ERROR_DEG_RAW)
+  ? Math.max(1, ACTUATOR_MAX_ANGULAR_ERROR_DEG_RAW) * (Math.PI / 180)
+  : Math.PI / 4;
+const ACTUATOR_MAX_LINEAR_ERROR = Number.isFinite(ACTUATOR_MAX_LINEAR_ERROR_RAW)
+  ? Math.max(0.01, ACTUATOR_MAX_LINEAR_ERROR_RAW)
+  : 0.25;
 const debugLog = (...args: unknown[]) => {
   if (MUJOCO_DEBUG) console.info("[mujoco][runtime]", ...args);
 };
@@ -753,6 +765,9 @@ function isUrdfRoot(root: THREE.Object3D) {
   // carry `userData.urdf` on joints, so we must not classify them as imported.
   if (typeof root.userData?.urdfSource === "string" && root.userData.urdfSource.length > 0) return true;
   if (typeof root.userData?.urdfKey === "string" && root.userData.urdfKey.length > 0) return true;
+  if (root.userData?.editorRobotRoot) return true;
+  const modelSource = root.userData?.robotModelSource as { kind?: string } | undefined;
+  if (modelSource?.kind === "usd" || modelSource?.kind === "urdf") return true;
 
   let found = false;
   root.traverse((obj) => {
@@ -835,6 +850,7 @@ export function createMujocoRuntime(): MujocoRuntime {
   let actuatorVelocityTargets: Record<string, number> = {};
   let actuatorTorqueTargets: Record<string, number> = {};
   let actuatorConfigs: Record<string, JointActuatorConfig> = {};
+  let actuatorTrnIdView: Int32Array = new Int32Array();
   let actuatorsArmed = false;
   let actuatorArmBlend = 0;
   let filteredActuatorCtrl = new Map<number, number>();
@@ -901,6 +917,7 @@ export function createMujocoRuntime(): MujocoRuntime {
     actuatorVelocityTargets = {};
     actuatorTorqueTargets = {};
     actuatorConfigs = {};
+    actuatorTrnIdView = new Int32Array();
     actuatorsArmed = false;
     actuatorArmBlend = 0;
     filteredActuatorCtrl = new Map();
@@ -1026,6 +1043,24 @@ export function createMujocoRuntime(): MujocoRuntime {
     return id;
   };
 
+  const resolveJointIdForActuator = (actuatorId: number, rawJointName: string) => {
+    if (actuatorId >= 0) {
+      const base = actuatorId * 2;
+      if (base + 1 < actuatorTrnIdView.length) {
+        const linkedJointId = actuatorTrnIdView[base];
+        if (Number.isFinite(linkedJointId) && linkedJointId >= 0) {
+          return linkedJointId;
+        }
+      }
+    }
+    return resolveJointId(rawJointName);
+  };
+
+  const resolveControlledJointId = (rawJointName: string, preferredActuatorName?: string) => {
+    const actuatorId = resolveActuatorId(rawJointName, preferredActuatorName);
+    return resolveJointIdForActuator(actuatorId, rawJointName);
+  };
+
   const applyActuatorTargets = () => {
     if (!actuatorsArmed || !model || !data || !mujoco) return;
     if (!ctrlView || ctrlView.length === 0) return;
@@ -1043,7 +1078,9 @@ export function createMujocoRuntime(): MujocoRuntime {
     for (const [jointName, config] of Object.entries(actuatorConfigs)) {
       if (!config) continue;
       const stiffness = Number.isFinite(config.stiffness) ? config.stiffness : 0;
-      const damping = Number.isFinite(config.damping) ? config.damping : 0;
+      const dampingInput = Number.isFinite(config.damping) ? config.damping : 0;
+      const dampingFloor = stiffness > 0 ? 2 * Math.sqrt(stiffness) * ACTUATOR_DAMPING_RATIO_FLOOR : 0;
+      const damping = Math.max(dampingInput, dampingFloor);
       const velocityGain = Number.isFinite(config.velocityGain)
         ? Math.max(0, config.velocityGain as number)
         : Math.max(0.1, DEFAULT_ACTUATOR_VELOCITY_GAIN);
@@ -1062,7 +1099,9 @@ export function createMujocoRuntime(): MujocoRuntime {
 
       if (stiffness === 0 && damping === 0 && velocityGain === 0 && torqueTarget === 0) continue;
 
-      const jointId = resolveJointId(jointName);
+      const actuatorId = resolveActuatorId(jointName, config.actuatorName);
+      if (actuatorId < 0) continue;
+      const jointId = resolveJointIdForActuator(actuatorId, jointName);
       if (jointId < 0) continue;
       const qposAdr = jntQposAdr[jointId];
       const qvelAdr = jntDofAdr[jointId];
@@ -1077,6 +1116,11 @@ export function createMujocoRuntime(): MujocoRuntime {
         errorPos = posTargetValue - pos;
         if (config.continuous) {
           errorPos = normalizeAngle(errorPos);
+        }
+        const maxError = angular ? ACTUATOR_MAX_ANGULAR_ERROR_RAD : ACTUATOR_MAX_LINEAR_ERROR;
+        if (Number.isFinite(maxError) && maxError > 0) {
+          if (errorPos > maxError) errorPos = maxError;
+          if (errorPos < -maxError) errorPos = -maxError;
         }
       }
       const holdVelError = -vel;
@@ -1095,8 +1139,6 @@ export function createMujocoRuntime(): MujocoRuntime {
         torque = Math.max(-maxForce, Math.min(maxForce, torque));
       }
       torque *= actuatorArmBlend;
-      const actuatorId = resolveActuatorId(jointName, config.actuatorName);
-      if (actuatorId < 0) continue;
       const prevTorque = filteredActuatorCtrl.get(actuatorId) ?? 0;
       const filteredTorque = prevTorque + (torque - prevTorque) * filterAlpha;
       filteredActuatorCtrl.set(actuatorId, filteredTorque);
@@ -1295,7 +1337,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       } else {
         xmlPath = `/working/${source.filename}`;
         xmlToWrite = source.content;
-        const extraRoots = roots.filter((root) => !isUrdfRoot(root));
+        const extraRoots = roots.filter((root) => !isUrdfRoot(root) && root.userData?.editorRobotRoot !== true);
         if (extraRoots.length) {
           const extraCollisionMask = MUJOCO_SELF_COLLIDE
             ? { contype: 1, conaffinity: 1 }
@@ -1366,6 +1408,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       qvelView = getBufferView((data as any).qvel);
       jntQposAdr = getIntView((model as any).jnt_qposadr);
       jntDofAdr = getIntView((model as any).jnt_dofadr);
+      actuatorTrnIdView = getIntView((model as any).actuator_trnid);
       ctrlView = getBufferView((data as any).ctrl);
       qfrcAppliedView = getBufferView((data as any).qfrc_applied);
       bodyMassView = getBufferView((model as any).body_mass);
@@ -1554,7 +1597,7 @@ export function createMujocoRuntime(): MujocoRuntime {
           continue;
         }
         if (nextMode !== "velocity") {
-          const jointId = resolveJointId(jointName);
+          const jointId = resolveControlledJointId(jointName, config.actuatorName);
           if (jointId >= 0) {
             const qposAdr = jntQposAdr[jointId];
             if (Number.isFinite(qposAdr)) {
@@ -1583,18 +1626,8 @@ export function createMujocoRuntime(): MujocoRuntime {
       }
       actuatorArmBlend = 0;
       filteredActuatorCtrl.clear();
-      const RAD2DEG = 180 / Math.PI;
-      for (const [jointName, config] of Object.entries(actuatorConfigs)) {
-        if (!config) continue;
-        const mode = config.mode ?? "position";
-        if (mode === "velocity" || mode === "muscle") continue;
-        const jointId = resolveJointId(jointName);
-        if (jointId < 0) continue;
-        const qposAdr = jntQposAdr[jointId];
-        if (!Number.isFinite(qposAdr)) continue;
-        const current = qposView[qposAdr] ?? 0;
-        actuatorTargets[jointName] = config.angular ? current * RAD2DEG : current;
-      }
+      // Preserve existing targets when arming so the controller tracks the
+      // current slider command immediately instead of snapping targets to qpos.
       applyActuatorTargets();
     },
     getJointPositions(names) {

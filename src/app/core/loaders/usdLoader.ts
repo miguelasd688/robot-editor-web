@@ -408,6 +408,30 @@ const toPose = (pos: [number, number, number], quat: THREE.Quaternion): Pose => 
   };
 };
 
+const normalizeAxisTuple = (axis: [number, number, number]): [number, number, number] => {
+  const vec = new THREE.Vector3(
+    Number.isFinite(axis[0]) ? axis[0] : 0,
+    Number.isFinite(axis[1]) ? axis[1] : 0,
+    Number.isFinite(axis[2]) ? axis[2] : 1
+  );
+  if (vec.lengthSq() <= 1e-12) return [0, 0, 1];
+  vec.normalize();
+  return [vec.x, vec.y, vec.z];
+};
+
+const axisInJointFrame = (
+  axisParentLocal: [number, number, number],
+  jointFrameQuat: THREE.Quaternion | null | undefined
+): [number, number, number] => {
+  const normalized = normalizeAxisTuple(axisParentLocal);
+  if (!jointFrameQuat || jointFrameQuat.lengthSq() <= 1e-12) return normalized;
+  const axisVec = new THREE.Vector3(normalized[0], normalized[1], normalized[2]);
+  axisVec.applyQuaternion(jointFrameQuat.clone().invert());
+  if (axisVec.lengthSq() <= 1e-12) return [0, 0, 1];
+  axisVec.normalize();
+  return [axisVec.x, axisVec.y, axisVec.z];
+};
+
 const claimName = (base: string, used: Set<string>, fallbackPrefix: string) => {
   const seed = (base || fallbackPrefix).trim() || fallbackPrefix;
   let candidate = seed;
@@ -838,7 +862,7 @@ const addMjcfGeomMeshes = (
 const buildRobotFromMjcf = (
   parsed: ParsedMjcf,
   robotName: string,
-  options?: { instantiateRenderGroups?: boolean }
+  options?: { instantiateRenderGroups?: boolean; introspection?: NormalizedUsdIntrospection | null }
 ): { root: THREE.Group; linkCount: number; jointCount: number } => {
   const robotRoot = new THREE.Group();
   const robotRootFlagged = robotRoot as THREE.Group & { isRobot?: boolean };
@@ -850,8 +874,74 @@ const buildRobotFromMjcf = (
   const usedJointNames = new Set<string>();
   const usedMeshNames = new Set<string>();
   const instantiateRenderGroups = options?.instantiateRenderGroups !== false;
+  const introspectionJoints = options?.introspection?.joints ?? [];
+  const usedIntrospectionJointIndexes = new Set<number>();
   let linkCount = 0;
   let jointCount = 0;
+
+  const normalizeJointToken = (value: string | null | undefined) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    return raw.replace(/[^A-Za-z0-9_.:-]/g, "_");
+  };
+
+  const toNormalizedFrameLocal = (
+    frame:
+      | { position: [number, number, number]; quaternion: [number, number, number, number] }
+      | null
+      | undefined
+  ): { position: [number, number, number]; quaternion: THREE.Quaternion } | null => {
+    if (!frame) return null;
+    const quat = new THREE.Quaternion(
+      frame.quaternion[0],
+      frame.quaternion[1],
+      frame.quaternion[2],
+      frame.quaternion[3]
+    );
+    if (quat.lengthSq() <= 1e-9) {
+      quat.identity();
+    } else {
+      quat.normalize();
+    }
+    return {
+      position: [frame.position[0], frame.position[1], frame.position[2]],
+      quaternion: quat,
+    };
+  };
+
+  const resolveIntrospectionJoint = (
+    rawJoint: MjcfJointDef | null,
+    parentLinkName: string,
+    childLinkName: string
+  ): { index: number; joint: NormalizedIntrospectionJoint } | null => {
+    const tryMatchByIndex = (index: number) => {
+      if (usedIntrospectionJointIndexes.has(index)) return null;
+      return { index, joint: introspectionJoints[index] };
+    };
+
+    const rawJointNameToken = normalizeJointToken(rawJoint?.name);
+    if (rawJointNameToken) {
+      for (let index = 0; index < introspectionJoints.length; index += 1) {
+        const candidate = introspectionJoints[index];
+        if (normalizeJointToken(candidate.name) !== rawJointNameToken) continue;
+        const matched = tryMatchByIndex(index);
+        if (matched) return matched;
+      }
+    }
+
+    const parentToken = normalizeBodyToken(parentLinkName) ?? parentLinkName;
+    const childToken = normalizeBodyToken(childLinkName) ?? childLinkName;
+    for (let index = 0; index < introspectionJoints.length; index += 1) {
+      const candidate = introspectionJoints[index];
+      const candidateParent = normalizeBodyToken(candidate.parentBody) ?? candidate.parentBody ?? "";
+      const candidateChild = normalizeBodyToken(candidate.childBody) ?? candidate.childBody ?? "";
+      if (candidateParent !== parentToken || candidateChild !== childToken) continue;
+      const matched = tryMatchByIndex(index);
+      if (matched) return matched;
+    }
+
+    return null;
+  };
 
   const createLinkNode = (body: MjcfBodyDef, forcedName?: string) => {
     const linkName = claimName(forcedName ?? body.name, usedLinkNames, "Link");
@@ -953,7 +1043,26 @@ const buildRobotFromMjcf = (
       const implicitName = `${parentLinkName}_${linkName}_fixed`;
       const jointName = claimName(rawJoint?.name ?? implicitName, usedJointNames, "Joint");
       const jointType = convertMjcfJointTypeToUrdf(rawJoint?.type ?? "fixed", Boolean(rawJoint?.range));
-      const jointAxis = rawJoint?.axis ?? [0, 0, 1];
+      const introspectionMatch = resolveIntrospectionJoint(rawJoint, parentLinkName, linkName);
+      const introspectionJoint = introspectionMatch?.joint ?? null;
+      if (introspectionMatch) usedIntrospectionJointIndexes.add(introspectionMatch.index);
+      const frame0Local = toNormalizedFrameLocal(
+        introspectionJoint?.frame0Local ??
+          (introspectionJoint?.localPos0 && introspectionJoint.localRot0
+            ? { position: introspectionJoint.localPos0, quaternion: introspectionJoint.localRot0 }
+            : null)
+      );
+      const frame1Local = toNormalizedFrameLocal(
+        introspectionJoint?.frame1Local ??
+          (introspectionJoint?.localPos1 && introspectionJoint.localRot1
+            ? { position: introspectionJoint.localPos1, quaternion: introspectionJoint.localRot1 }
+            : null)
+      );
+      const hasFramePair = Boolean(frame0Local && frame1Local);
+      const rawJointAxis = introspectionJoint?.axisLocal ?? introspectionJoint?.axis ?? rawJoint?.axis ?? [0, 0, 1];
+      const jointAxis = frame0Local
+        ? axisInJointFrame([rawJointAxis[0], rawJointAxis[1], rawJointAxis[2]], frame0Local.quaternion)
+        : normalizeAxisTuple([rawJointAxis[0], rawJointAxis[1], rawJointAxis[2]]);
       const actuator = rawJoint ? parsed.actuatorsByJoint.get(rawJoint.name) : undefined;
       const muscleFromActuator =
         actuator?.type === "muscle"
@@ -976,10 +1085,26 @@ const buildRobotFromMjcf = (
       jointFlags.isURDFJoint = true;
       jointFlags.urdfName = jointName;
       joint.userData.editorKind = "joint";
-      joint.position.set(body.pos[0], body.pos[1], body.pos[2]);
-      joint.quaternion.copy(body.quat);
+      const jointPosePosition = frame0Local?.position ?? body.pos;
+      const jointPoseQuaternion = frame0Local?.quaternion ?? body.quat;
+      joint.position.set(jointPosePosition[0], jointPosePosition[1], jointPosePosition[2]);
+      joint.quaternion.copy(jointPoseQuaternion);
 
-      const jointOrigin = toPose(body.pos, body.quat);
+      const jointOrigin = toPose(jointPosePosition, jointPoseQuaternion);
+      const sourceFrames = introspectionJoint
+        ? {
+            frame0Local: introspectionJoint.frame0Local ?? undefined,
+            frame1Local: introspectionJoint.frame1Local ?? undefined,
+            frame0World: introspectionJoint.frame0World ?? undefined,
+            frame1World: introspectionJoint.frame1World ?? undefined,
+            axisLocal: introspectionJoint.axisLocal ?? undefined,
+            axisWorld: introspectionJoint.axisWorld ?? undefined,
+            sourceUpAxis: introspectionJoint.sourceUpAxis,
+            normalizedToZUp: introspectionJoint.normalizedToZUp,
+            frameMismatchDistance: introspectionJoint.frameMismatchDistance ?? undefined,
+            frameMismatchWarning: introspectionJoint.frameMismatchWarning ?? undefined,
+          }
+        : undefined;
       const urdfJoint: UrdfJoint = {
         name: jointName,
         type: jointType,
@@ -1006,17 +1131,25 @@ const buildRobotFromMjcf = (
               damping: actuator.damping,
             }
           : undefined,
+        sourceFrames,
         muscle: muscleFromActuator,
       };
 
       joint.userData.urdf = { kind: "joint", joint: urdfJoint };
 
-      if (forcePoseOnLink) {
+      if (hasFramePair && frame1Local) {
+        const childQuat = frame1Local.quaternion.clone().invert();
+        const childPos = new THREE.Vector3(
+          -frame1Local.position[0],
+          -frame1Local.position[1],
+          -frame1Local.position[2]
+        ).applyQuaternion(childQuat);
+        link.position.set(childPos.x, childPos.y, childPos.z);
+        link.quaternion.copy(childQuat);
+      } else if (forcePoseOnLink) {
         link.position.set(body.pos[0], body.pos[1], body.pos[2]);
         link.quaternion.copy(body.quat);
-      }
-
-      if (!forcePoseOnLink) {
+      } else {
         link.position.set(0, 0, 0);
         link.quaternion.identity();
       }
@@ -2740,7 +2873,11 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
           rpy: [frame0Euler.x, frame0Euler.y, frame0Euler.z] as [number, number, number],
         }
       : ({ xyz: [0, 0, 0], rpy: [0, 0, 0] } as Pose);
-    const axisLocal = joint.axisLocal ?? joint.axis;
+    const axisSource = joint.axisLocal ?? joint.axis;
+    const axisLocal = axisInJointFrame(
+      [axisSource[0], axisSource[1], axisSource[2]],
+      frame0Local ? frame0Quat : null
+    );
     const sourceFrames = {
       frame0Local: frame0Local ?? undefined,
       frame1Local: frame1Local ?? undefined,
@@ -2984,7 +3121,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   let resolvedConverterAssetId = converterAssetId ?? null;
   let resolvedMjcfAssetId: string | undefined;
   let mjcfXml: string | undefined;
-  let shouldUseCollisionSyncFallback = false;
+  const useVisualCollisionSync = true;
   let introspection: NormalizedUsdIntrospection | null = null;
   let meshScene: NormalizedUsdMeshScene | null = null;
   let detectedFloatingBase: boolean | undefined;
@@ -3062,17 +3199,9 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       resolvedMjcfAssetId = converted.mjcfAssetId;
       mjcfXml = converted.mjcfXml;
 
-      const diagnostics =
-        converted.diagnostics && typeof converted.diagnostics === "object"
-          ? (converted.diagnostics as Record<string, unknown>)
-          : null;
-      const visualFallbackBodies = Number(diagnostics?.bodiesUsingVisualFallback ?? 0);
-      shouldUseCollisionSyncFallback =
-        Number.isFinite(visualFallbackBodies) && visualFallbackBodies > 0;
-
       const parsed = parseMjcf(mjcfXml);
       detectedFloatingBase = parsed.bodies.some((body) => body.joints.some((joint) => joint.type === "free"));
-      const built = buildRobotFromMjcf(parsed, displayName);
+      const built = buildRobotFromMjcf(parsed, displayName, { introspection });
       root = built.root;
 
       logInfo("USD conversion + render completed", {
@@ -3086,17 +3215,13 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           diagnostics: converted.diagnostics ?? null,
         },
       });
-
-      if (shouldUseCollisionSyncFallback) {
-        logWarn("USD lacks explicit collision geoms on one or more bodies; enabling visual->collision sync fallback.", {
-          scope: "usd",
-          data: {
-            usdKey,
-            converterAssetId: resolvedConverterAssetId,
-            diagnostics,
-          },
-        });
-      }
+      logInfo("USD visual->collision sync enabled by default.", {
+        scope: "usd",
+        data: {
+          usdKey,
+          converterAssetId: resolvedConverterAssetId,
+        },
+      });
     } catch (error) {
       logWarn("USD conversion failed; checking introspection fallback.", {
         scope: "usd",
@@ -3173,7 +3298,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   const meshAttach = attachUsdMeshSceneToRoot(root, meshScene, {
     selfCollisionEnabled: importOptions?.selfCollision === true,
     resolveResource,
-    attachCollisionProxies: shouldUseCollisionSyncFallback,
+    attachCollisionProxies: useVisualCollisionSync,
   });
   if (meshAttach.attachedMeshes > 0 || meshAttach.attachedPrimitives > 0) {
     logInfo("USD mesh scene attached", {
@@ -3199,7 +3324,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     workspaceKey: usdKey,
     converterAssetId: resolvedConverterAssetId,
     trainingAssetId: null,
-    mjcfKey: shouldUseCollisionSyncFallback ? undefined : resolvedMjcfAssetId,
+    mjcfKey: useVisualCollisionSync ? undefined : resolvedMjcfAssetId,
     importOptions: {
       ...(importOptions ?? {}),
       floatingBase:
@@ -3207,15 +3332,15 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           ? importOptions.floatingBase
           : (detectedFloatingBase ?? false),
     },
-    isDirty: shouldUseCollisionSyncFallback,
+    isDirty: useVisualCollisionSync,
   };
 
   root.userData.robotModelSource = modelSource;
   root.userData.usdUrl = usdUrl;
   root.userData.usdWorkspaceKey = usdKey;
   if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
-  if (!shouldUseCollisionSyncFallback && resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
-  if (!shouldUseCollisionSyncFallback && mjcfXml) root.userData.mjcfSource = mjcfXml;
+  if (!useVisualCollisionSync && resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
+  if (!useVisualCollisionSync && mjcfXml) root.userData.mjcfSource = mjcfXml;
   if (mjcfBodiesPatchedFromMeshScene > 0) root.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
 
   return root;

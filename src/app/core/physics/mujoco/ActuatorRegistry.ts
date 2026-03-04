@@ -111,7 +111,7 @@ const resolveEffortRange = (joint: UrdfJoint) => {
   return { min: -limit, max: limit };
 };
 
-const usesContinuousError = (joint: UrdfJoint) => joint.type === "continuous" || joint.type === "revolute";
+const usesContinuousError = (joint: UrdfJoint) => joint.type === "continuous";
 const isActuatorEnabled = (joint: UrdfJoint) => joint.actuator?.enabled !== false;
 
 export function buildActuatorRegistry(

@@ -733,14 +733,14 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
       }),
     ];
 
-    if (usdCollisionSyncFallbackActive && collisions.length === 0 && visuals.length > 0) {
+    if (usdCollisionSyncFallbackActive && visuals.length > 0) {
       collisions = visuals.map((visual) => ({
         name: visual.name ? `${visual.name}_auto_collision` : undefined,
         origin: clonePose(visual.origin),
         geom: cloneGeom(visual.geom),
       }));
       warnings.push(
-        `Link "${linkNameById.get(link.id) as string}": collision fallback derivado de visuales (USD sin colision explicita).`
+        `Link "${linkNameById.get(link.id) as string}": colisiones forzadas desde visuales antes de simular (USD dirty source).`
       );
     }
     return {
