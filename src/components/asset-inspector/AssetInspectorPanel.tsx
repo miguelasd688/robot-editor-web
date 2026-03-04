@@ -862,6 +862,7 @@ export default function AssetInspectorPanel() {
                 value={instance.id}
                 onChange={(e) => handleSelectableObjectChange(e.target.value)}
                 aria-label="Select object"
+                className="dark-select"
                 style={{
                   position: "absolute",
                   inset: 0,

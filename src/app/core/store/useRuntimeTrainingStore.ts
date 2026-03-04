@@ -345,6 +345,21 @@ function toStringArrayOrUndefined(value: unknown): string[] | undefined {
   return next.length > 0 ? next : undefined;
 }
 
+function toAssetPipelineOrUndefined(
+  value: unknown
+): { mode: "usd_passthrough" | "mjcf_conversion"; reason?: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const modeToken = toTextOrEmpty(record.mode).toLowerCase();
+  if (modeToken !== "usd_passthrough" && modeToken !== "mjcf_conversion") return undefined;
+  const mode = modeToken as "usd_passthrough" | "mjcf_conversion";
+  const reason = toTextOrEmpty(record.reason);
+  return {
+    mode,
+    ...(reason ? { reason } : {}),
+  };
+}
+
 function isOptimisticLocalJobId(jobId: string) {
   return jobId.startsWith("local_job_");
 }
@@ -421,6 +436,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const previewValues = toObjectOrEmpty(configValues.preview);
       const environmentValues = toObjectOrEmpty(configValues.environment);
       const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
+      const resolvedTaskTemplate = toTextOrEmpty(configValues.taskTemplate) || taskTemplate;
       const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
       const baseConstraintModeToken = toTextOrEmpty(configValues.baseConstraintMode);
       const submissionPromise = isTaskFactoryConfig(configObject)
@@ -430,8 +446,10 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             executionMode: toTextOrEmpty(configValues.executionMode) === "generic" ? "generic" : "recipe",
             taskSpecId: toTextOrEmpty(configValues.taskSpecId) || undefined,
             taskSpec: toObjectOrUndefined(configValues.taskSpec),
-            taskTemplate: toTextOrEmpty(configValues.taskTemplate) || taskTemplate || "cartpole_direct",
-            task: toTextOrEmpty(configValues.task) || taskTemplate || undefined,
+            agentId: toTextOrEmpty(configValues.agentId) || undefined,
+            catalogVersion: toTextOrEmpty(configValues.catalogVersion) || undefined,
+            taskTemplate: resolvedTaskTemplate || undefined,
+            task: toTextOrEmpty(configValues.task) || resolvedTaskTemplate || undefined,
             robotAssetId,
             sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
             tenantId: input.tenantId,
@@ -457,6 +475,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
                   : undefined,
             userModelMetadata: toObjectOrUndefined(configValues.userModelMetadata),
             environment: toObjectOrUndefined(configValues.environment),
+            assetPipeline: toAssetPipelineOrUndefined(configValues.assetPipeline),
             extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
             overrides: toObjectOrUndefined(configValues.overrides),
           }).then((taskResponse) => {

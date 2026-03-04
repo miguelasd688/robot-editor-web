@@ -3332,7 +3332,9 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           ? importOptions.floatingBase
           : (detectedFloatingBase ?? false),
     },
-    isDirty: useVisualCollisionSync,
+    // Visual/collision sync is part of the default import pipeline and should not
+    // mark the source as user-edited. Edits are tracked later via markSceneDirty.
+    isDirty: false,
   };
 
   root.userData.robotModelSource = modelSource;

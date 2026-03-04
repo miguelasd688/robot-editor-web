@@ -150,6 +150,8 @@ export type TaskAutocompleteRequest = {
   executionMode?: "recipe" | "generic";
   taskSpecId?: string;
   taskSpec?: Record<string, unknown>;
+  agentId?: string;
+  catalogVersion?: string;
   taskTemplate?: string;
   task?: string;
   robotAssetId: string;
@@ -170,6 +172,7 @@ export type TaskAutocompleteRequest = {
   baseConstraintMode?: "fix_base" | "source_weld";
   userModelMetadata?: Record<string, unknown>;
   environment?: Record<string, unknown>;
+  assetPipeline?: AssetPipelineDecision;
   extraArgs?: string[];
   overrides?: Record<string, unknown>;
   dryRun?: boolean;
@@ -193,6 +196,9 @@ export type TaskAutocompletePreview = {
   taskConfig: Record<string, unknown>;
   physicsDiagnostics?: PhysicsDiagnostics;
   environmentPreview: Record<string, unknown>;
+  resolvedAgent?: AgentVariant;
+  warnings?: string[];
+  catalogVersion?: string;
   message: string;
 };
 
@@ -204,6 +210,9 @@ export type TaskAutocompleteLaunchResponse = {
   task: string;
   policy: Record<string, unknown>;
   deduplicated?: boolean;
+  resolvedAgent?: AgentVariant;
+  warnings?: string[];
+  catalogVersion?: string;
   taskTemplate: string;
   autoConfig: {
     assetId: string;
@@ -226,11 +235,107 @@ export type TrainingTaskCatalogEntry = {
   task: string;
   title: string;
   description?: string;
+  modelId?: string;
+  environmentId?: string;
+  agents?: AgentVariant[];
+  policyTerms?: PolicyTerm[];
+  policyTermsStatus?: "full" | "partial" | "none";
   defaults: Record<string, unknown>;
 };
 
 type TrainingTaskCatalogResponse = {
+  catalogVersion?: string;
   items: TrainingTaskCatalogEntry[];
+};
+
+export type PolicyTerm = {
+  id: string;
+  name: string;
+  mode: "reward" | "penalty";
+  expression: string;
+  variable: string;
+  weight: number;
+  sample?: number;
+  enabled: boolean;
+};
+
+export type AgentVariant = {
+  agentId: string;
+  title: string;
+  trainer: string;
+  algorithm: string;
+  preset: string;
+  entrypoint?: string;
+  supportedByIsaacLab: boolean;
+  executableByRunner: boolean;
+  notes?: string;
+};
+
+export type AgentCatalogEnvironment = {
+  environmentId: string;
+  title: string;
+  description?: string;
+  taskTemplate: string;
+  task: string;
+  recipeId: string;
+  executionMode: "recipe" | "generic";
+  defaults: Record<string, unknown>;
+  agents: AgentVariant[];
+  policyTermsStatus: "full" | "partial" | "none";
+  policyTerms: PolicyTerm[];
+};
+
+export type AgentCatalogModel = {
+  modelId: string;
+  title: string;
+  description?: string;
+  sample?: Record<string, unknown> | null;
+  match?: Record<string, unknown> | null;
+  environments: AgentCatalogEnvironment[];
+};
+
+export type AgentCatalogResponse = {
+  schemaVersion: string;
+  catalogVersion: string;
+  isaacLabVersionPinned: string;
+  generatedAt: string;
+  models: AgentCatalogModel[];
+  genericTemplate: AgentCatalogEnvironment;
+  runnerCapabilities?: Record<string, unknown>;
+};
+
+export type AssetPipelineDecision = {
+  mode: "usd_passthrough" | "mjcf_conversion";
+  reason?: string;
+};
+
+export type AgentResolveRequest = {
+  model?: Record<string, unknown>;
+  preferences?: {
+    modelId?: string;
+    environmentId?: string;
+    recipeId?: string;
+    taskTemplate?: string;
+    task?: string;
+    agentId?: string;
+  };
+  agentId?: string;
+  assetPipeline?: AssetPipelineDecision;
+};
+
+export type AgentResolveResponse = {
+  catalogVersion: string;
+  resolvedModelId: string;
+  resolvedEnvironmentId: string;
+  resolvedTaskTemplate: string;
+  resolvedRecipeId?: string;
+  resolvedTask: string;
+  resolvedAgentId: string;
+  resolvedAgent?: AgentVariant;
+  availableAgents: AgentVariant[];
+  environment: AgentCatalogEnvironment;
+  assetPipeline: AssetPipelineDecision;
+  warnings?: string[];
 };
 
 export type TrainingPreviewMeta = {
@@ -573,6 +678,29 @@ export async function listTrainingTaskCatalogRemote(): Promise<TrainingTaskCatal
   return Array.isArray(payload.items) ? payload.items : [];
 }
 
+export async function listAgentCatalogRemote(): Promise<AgentCatalogResponse> {
+  const response = await fetch(buildUrl("/v1/agents/catalog"), {
+    method: "GET",
+    headers: buildHeaders({ accept: "application/json" }),
+  });
+  return await parseJson<AgentCatalogResponse>(response);
+}
+
+export async function resolveAgentRemote(input: AgentResolveRequest): Promise<AgentResolveResponse> {
+  const payload: Record<string, unknown> = {};
+  if (input.model && typeof input.model === "object") payload.model = input.model;
+  if (input.preferences && typeof input.preferences === "object") payload.preferences = input.preferences;
+  const agentId = String(input.agentId ?? "").trim();
+  if (agentId) payload.agentId = agentId;
+  if (input.assetPipeline && typeof input.assetPipeline === "object") payload.assetPipeline = input.assetPipeline;
+  const response = await fetch(buildUrl("/v1/agents:resolve"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return await parseJson<AgentResolveResponse>(response);
+}
+
 export async function submitTrainingTaskRemote(
   input: TaskAutocompleteRequest
 ): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse> {
@@ -588,6 +716,10 @@ export async function submitTrainingTaskRemote(
   const taskSpecId = String(input.taskSpecId ?? "").trim();
   if (taskSpecId) payload.taskSpecId = taskSpecId;
   if (input.taskSpec && typeof input.taskSpec === "object") payload.taskSpec = input.taskSpec;
+  const agentId = String(input.agentId ?? "").trim();
+  if (agentId) payload.agentId = agentId;
+  const catalogVersion = String(input.catalogVersion ?? "").trim();
+  if (catalogVersion) payload.catalogVersion = catalogVersion;
 
   const taskTemplate = String(input.taskTemplate ?? "").trim();
   if (taskTemplate) payload.taskTemplate = taskTemplate;
@@ -625,6 +757,7 @@ export async function submitTrainingTaskRemote(
     payload.userModelMetadata = input.userModelMetadata;
   }
   if (input.environment && typeof input.environment === "object") payload.environment = input.environment;
+  if (input.assetPipeline && typeof input.assetPipeline === "object") payload.assetPipeline = input.assetPipeline;
   if (input.overrides && typeof input.overrides === "object") payload.overrides = input.overrides;
   if (Array.isArray(input.extraArgs)) payload.extraArgs = input.extraArgs.map((item) => String(item));
   if (input.dryRun === true) payload.dryRun = true;
