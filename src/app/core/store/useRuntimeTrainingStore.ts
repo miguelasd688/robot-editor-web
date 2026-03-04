@@ -644,26 +644,30 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     if (trainingApiEnabled) {
       if (optimisticJobIds.has(jobId)) {
         optimisticJobIds.delete(jobId);
-      } else {
-        void cancelTrainingJobRemote(jobId).catch((error) => {
+        set((state) => ({
+          jobs: state.jobs.map((item) =>
+            item.id === jobId
+              ? {
+                  ...item,
+                  status: (item.status === "completed" ? "completed" : "cancelled") as TrainingJobStatus,
+                  updatedAt: Date.now(),
+                }
+              : item
+          ),
+        }));
+        return;
+      }
+
+      void cancelTrainingJobRemote(jobId)
+        .catch((error) => {
           logWarn("Failed to cancel remote training job", {
             scope: "runtime-training",
             data: { jobId, error },
           });
+        })
+        .finally(() => {
+          void syncRemoteJobsOnce();
         });
-      }
-
-      set((state) => ({
-        jobs: state.jobs.map((item) =>
-          item.id === jobId
-            ? {
-                ...item,
-                status: (item.status === "completed" ? "completed" : "cancelled") as TrainingJobStatus,
-                updatedAt: Date.now(),
-              }
-            : item
-        ),
-      }));
       return;
     }
 
