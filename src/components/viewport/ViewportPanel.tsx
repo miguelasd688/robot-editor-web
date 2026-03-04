@@ -9,11 +9,13 @@ import { useLoaderStore } from "../../app/core/store/useLoaderStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
 import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import { useTrainingImportContextStore } from "../../app/core/store/useTrainingImportContextStore";
+import { useBrowserPreviewStore } from "../../app/core/store/useBrowserPreviewStore";
 import { loadWorkspaceURDFIntoViewer } from "../../app/core/loaders/urdfLoader";
 import { loadWorkspaceUSDIntoViewer } from "../../app/core/loaders/usdLoader";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 import { logInfo } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
+import { isUrdfLikePath } from "../../app/core/urdf/urdfFileTypes";
 import { DarkSelect } from "../../app/ui/DarkSelect";
 import { tickSimulation } from "./services/simulationService";
 import ViewportControls, { type UrdfDebugOptions } from "./ViewportControls";
@@ -50,6 +52,7 @@ const isUsdPath = (path: string) => {
   return USD_EXTS.some((ext) => lower.endsWith(ext));
 };
 const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
+const isLibraryWorkspaceKey = (path: string) => normalizeWorkspaceFilePath(path).startsWith(`${LIBRARY_ROOT}/`);
 
 function isTerrainLikeWorkspaceUsdKey(key: string): boolean {
   const normalized = normalizeWorkspaceFilePath(key).toLowerCase();
@@ -773,6 +776,46 @@ export default function ViewportPanel() {
     return Array.from(new Set(cleaned));
   }, [usdDialogTerrainUsdKeys]);
 
+  const captureWorkspacePreviewIfNeeded = useCallback(
+    async (workspaceKey: string) => {
+      const normalizedKey = normalizeWorkspaceFilePath(workspaceKey);
+      if (!normalizedKey) return;
+      if (isLibraryWorkspaceKey(normalizedKey)) return;
+      if (!isUrdfLikePath(normalizedKey) && !isUsdPath(normalizedKey)) return;
+
+      const previewStore = useBrowserPreviewStore.getState();
+      const current = previewStore.workspacePreviews[normalizedKey];
+      if (current?.status === "loading") return;
+      if (current?.status === "ready") {
+        previewStore.touch(normalizedKey);
+        return;
+      }
+
+      previewStore.markLoading(normalizedKey);
+      try {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        const dataUrl = await viewer.captureThumbnail({
+          maxWidth: 640,
+          maxHeight: 360,
+          mimeType: "image/webp",
+          quality: 0.78,
+        });
+        if (!dataUrl) {
+          useBrowserPreviewStore.getState().setFailed(normalizedKey);
+          return;
+        }
+        const nextStore = useBrowserPreviewStore.getState();
+        nextStore.setReady(normalizedKey, dataUrl);
+        nextStore.evictOverflow(60);
+      } catch {
+        useBrowserPreviewStore.getState().setFailed(normalizedKey);
+      }
+    },
+    [viewer]
+  );
+
   const confirmLoadUSD = useCallback(async (input: {
     options: UsdDialogFormOptions;
     usdKey: string;
@@ -864,7 +907,8 @@ export default function ViewportPanel() {
         options: input.options,
       },
     });
-  }, [closeUsdImportDialog, setSelected, setUSD, setUSDOptions, usdDialogBundleHintPaths, viewer]);
+    await captureWorkspacePreviewIfNeeded(selectedUsdKey);
+  }, [captureWorkspacePreviewIfNeeded, closeUsdImportDialog, setSelected, setUSD, setUSDOptions, usdDialogBundleHintPaths, viewer]);
 
   const confirmLoadURDF = useCallback(async (selectedOptions: UrdfDialogFormOptions) => {
     if (!urdfDialogKey) return;
@@ -884,7 +928,8 @@ export default function ViewportPanel() {
       scope: "assets",
       data: { urdfKey: urdfDialogKey, options: selectedOptions },
     });
-  }, [closeUrdfImportDialog, setURDF, setURDFOptions, urdfDialogKey, viewer]);
+    await captureWorkspacePreviewIfNeeded(urdfDialogKey);
+  }, [captureWorkspacePreviewIfNeeded, closeUrdfImportDialog, setURDF, setURDFOptions, urdfDialogKey, viewer]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

@@ -516,6 +516,46 @@ export class Viewer {
     return [...this.userRoot.children];
   }
 
+  async captureThumbnail(options?: {
+    maxWidth?: number;
+    maxHeight?: number;
+    mimeType?: "image/webp" | "image/jpeg";
+    quality?: number;
+  }): Promise<string | null> {
+    if (!this.renderer || !this.scene || !this.camera) return null;
+
+    const domCanvas = this.renderer.domElement;
+    const sourceWidth = Math.max(1, Math.floor(domCanvas.width));
+    const sourceHeight = Math.max(1, Math.floor(domCanvas.height));
+    if (sourceWidth <= 0 || sourceHeight <= 0) return null;
+
+    const maxWidth = Math.max(1, Math.floor(options?.maxWidth ?? 640));
+    const maxHeight = Math.max(1, Math.floor(options?.maxHeight ?? 360));
+    const mimeType = options?.mimeType ?? "image/webp";
+    const quality = Number.isFinite(options?.quality) ? Math.min(1, Math.max(0.1, Number(options?.quality))) : 0.78;
+
+    const scale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight, 1);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+
+    this.controls?.update();
+    this.selection.updateSelectionBox();
+    this.renderer.render(this.scene, this.camera);
+
+    const thumbnailCanvas = document.createElement("canvas");
+    thumbnailCanvas.width = width;
+    thumbnailCanvas.height = height;
+    const context = thumbnailCanvas.getContext("2d");
+    if (!context) return null;
+
+    try {
+      context.drawImage(domCanvas, 0, 0, sourceWidth, sourceHeight, 0, 0, width, height);
+      return thumbnailCanvas.toDataURL(mimeType, quality);
+    } catch {
+      return null;
+    }
+  }
+
   setTransformMode(mode: "translate" | "rotate" | "scale") {
     this.transformMode = mode;
     if (this.transformControls) {

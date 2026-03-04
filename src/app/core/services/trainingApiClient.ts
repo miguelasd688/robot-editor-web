@@ -241,6 +241,7 @@ export type TrainingTaskCatalogEntry = {
   agents?: AgentVariant[];
   policyTerms?: PolicyTerm[];
   policyTermsStatus?: "full" | "partial" | "none";
+  expressionHints?: TrainingExpressionHints;
   defaults: Record<string, unknown>;
 };
 
@@ -258,6 +259,20 @@ export type PolicyTerm = {
   weight: number;
   sample?: number;
   enabled: boolean;
+};
+
+export type TrainingExpressionFieldSymbols = {
+  observables: string[];
+  actions: string[];
+  resets: string[];
+  policyVariable: string[];
+  policyExpression: string[];
+};
+
+export type TrainingExpressionHints = {
+  commonSymbols: string[];
+  fieldSymbols: TrainingExpressionFieldSymbols;
+  resetOperators: Array<"==" | "!=" | ">" | ">=" | "<" | "<=">;
 };
 
 export type AgentVariant = {
@@ -284,6 +299,7 @@ export type AgentCatalogEnvironment = {
   agents: AgentVariant[];
   policyTermsStatus: "full" | "partial" | "none";
   policyTerms: PolicyTerm[];
+  expressionHints?: TrainingExpressionHints;
 };
 
 export type AgentCatalogModel = {

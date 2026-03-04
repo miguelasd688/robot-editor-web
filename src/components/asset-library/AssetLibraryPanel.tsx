@@ -5,6 +5,7 @@ import { logInfo } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import { useAssetStore } from "../../app/core/store/useAssetStore";
 import { useBrowserStore } from "../../app/core/store/useBrowserStore";
+import { useBrowserPreviewStore, type BrowserWorkspacePreviewEntry } from "../../app/core/store/useBrowserPreviewStore";
 import { useDockStore } from "../../app/core/store/useDockStore";
 import { useFileViewerStore } from "../../app/core/store/useFileViewerStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
@@ -22,9 +23,17 @@ import {
   LIBRARY_SAMPLES,
   listLibrarySampleUsdWorkspaceKeys,
 } from "./librarySamples";
+import { getBrowserItemPreviewImage } from "./browserPreviewCatalog";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
 
 type LibrarySectionId = Exclude<BrowserDirectoryId, "workspace">;
+
+type BrowserCardPreview = {
+  top: string;
+  bottom: string;
+  caption: string;
+  imageUrl?: string;
+};
 
 type BrowserItem = {
   id: string;
@@ -36,11 +45,7 @@ type BrowserItem = {
   assetId?: SceneAssetId;
   sampleId?: string;
   importLabel?: string;
-  preview: {
-    top: string;
-    bottom: string;
-    caption: string;
-  };
+  preview: BrowserCardPreview;
 };
 
 type BrowserSection = {
@@ -56,11 +61,8 @@ type WorkspaceEntry = {
   description: string;
   icon: string;
   actionLabel: string;
-  preview: {
-    top: string;
-    bottom: string;
-    caption: string;
-  };
+  preview: BrowserCardPreview;
+  previewStatus?: BrowserWorkspacePreviewEntry;
 };
 
 type BreadcrumbItem = {
@@ -93,7 +95,10 @@ const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
   badge: sample.badge ?? sample.kind.toUpperCase(),
   sampleId: sample.id,
   importLabel: sample.importLabel ?? "Load sample",
-  preview: sample.preview,
+  preview: {
+    ...sample.preview,
+    imageUrl: sample.preview.imageUrl ?? getBrowserItemPreviewImage(`robot-sample-${sample.id}`),
+  },
 }));
 
 const LIBRARY_SECTIONS: BrowserSection[] = [
@@ -112,6 +117,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(78, 117, 151, 0.55)",
           bottom: "rgba(32, 47, 64, 0.88)",
           caption: "PLANE",
+          imageUrl: getBrowserItemPreviewImage("floor-default"),
         },
       },
       {
@@ -125,6 +131,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(121, 146, 98, 0.55)",
           bottom: "rgba(51, 68, 39, 0.88)",
           caption: "ROUGH",
+          imageUrl: getBrowserItemPreviewImage("floor-rough"),
         },
       },
     ],
@@ -177,6 +184,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(120, 125, 134, 0.56)",
           bottom: "rgba(56, 61, 70, 0.92)",
           caption: "CUBE",
+          imageUrl: getBrowserItemPreviewImage("link-cube"),
         },
       },
       {
@@ -190,6 +198,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(133, 159, 170, 0.6)",
           bottom: "rgba(53, 65, 73, 0.93)",
           caption: "SPHERE",
+          imageUrl: getBrowserItemPreviewImage("link-sphere"),
         },
       },
       {
@@ -203,6 +212,7 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(171, 131, 107, 0.58)",
           bottom: "rgba(83, 59, 46, 0.92)",
           caption: "CYLINDER",
+          imageUrl: getBrowserItemPreviewImage("link-cylinder"),
         },
       },
     ],
@@ -357,6 +367,8 @@ export default function AssetLibraryPanel() {
   const setActiveFile = useFileViewerStore((s) => s.setActiveFile);
   const openPanel = useDockStore((s) => s.openPanel);
   const isOpen = useDockStore((s) => s.isOpen);
+  const workspacePreviews = useBrowserPreviewStore((s) => s.workspacePreviews);
+  const touchWorkspacePreview = useBrowserPreviewStore((s) => s.touch);
 
   const spawnIndex = useRef(0);
   const normalizedQuery = query.trim().toLowerCase();
@@ -400,7 +412,14 @@ export default function AssetLibraryPanel() {
       })
       .map((node) => {
         const isDir = node.kind === "dir";
-        const preview = workspaceEntryPreview(node.name, isDir);
+        const normalizedPath = normalizeWorkspaceFilePath(node.path);
+        const previewStatus = workspacePreviews[normalizedPath];
+        const sample = isDir ? null : findLibrarySampleByWorkspaceKey(normalizedPath);
+        const sampleImageUrl = sample?.preview.imageUrl;
+        const preview = {
+          ...workspaceEntryPreview(node.name, isDir),
+          imageUrl: previewStatus?.status === "ready" ? previewStatus.dataUrl : sampleImageUrl,
+        };
         return {
           kind: isDir ? "dir" : "file",
           name: node.name,
@@ -409,9 +428,10 @@ export default function AssetLibraryPanel() {
           icon: workspaceEntryIcon(node.name, isDir),
           actionLabel: isDir ? "Open" : isUrdfLikePath(node.name) || isUsdPath(node.name) ? "Import" : "Open",
           preview,
+          previewStatus,
         } satisfies WorkspaceEntry;
       });
-  }, [workspaceDirNode, normalizedQuery]);
+  }, [normalizedQuery, workspaceDirNode, workspacePreviews]);
 
   const selectedWorkspaceEntry = useMemo(() => {
     if (!selectedWorkspacePath) return null;
@@ -782,12 +802,11 @@ export default function AssetLibraryPanel() {
                       display: "grid",
                       alignContent: "center",
                       justifyItems: "center",
-                      gap: 5,
+                      gap: 2,
                       borderBottom: "1px solid rgba(255,255,255,0.08)",
                     }}
                   >
                     <span style={{ fontSize: 22, lineHeight: 1 }}>{directory.icon}</span>
-                    <span style={{ fontSize: 10, letterSpacing: 0.8, opacity: 0.85 }}>DIRECTORY</span>
                   </div>
                   <div style={{ padding: "8px 9px 0 9px", fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.93)" }}>
                     {directory.title}
@@ -824,6 +843,7 @@ export default function AssetLibraryPanel() {
             {visibleItems.map((item) => {
               const selected = item.id === selectedItem?.id;
               const dragPayload = dragPayloadFromBrowserItem(item);
+              const hasImage = Boolean(item.preview.imageUrl);
               return (
                 <div
                   key={item.id}
@@ -841,48 +861,99 @@ export default function AssetLibraryPanel() {
                   style={{
                     border: selected ? "1px solid rgba(120,170,220,0.58)" : "1px solid rgba(255,255,255,0.1)",
                     borderRadius: 11,
-                    background: selected ? "rgba(95,150,230,0.14)" : "rgba(255,255,255,0.02)",
+                    background: selected ? "rgba(95,150,230,0.08)" : "rgba(255,255,255,0.01)",
                     overflow: "hidden",
                     display: "grid",
                     gridTemplateRows: "60px auto 1fr auto",
                     minHeight: 166,
+                    position: "relative",
                     cursor: dragPayload ? "grab" : "pointer",
                   }}
                   title={`${activeSection?.title ?? ""}/${resolveItemPathName(item)}`}
                 >
                   <div
                     style={{
-                      background: `linear-gradient(160deg, ${item.preview.top} 0%, ${item.preview.bottom} 100%)`,
-                      color: "rgba(255,255,255,0.92)",
-                      display: "grid",
-                      alignContent: "center",
-                      justifyItems: "center",
-                      gap: 5,
-                      borderBottom: "1px solid rgba(255,255,255,0.08)",
+                      position: "absolute",
+                      inset: 0,
+                      zIndex: 0,
                     }}
                   >
-                    <span style={{ fontSize: 22, lineHeight: 1 }}>{item.icon}</span>
-                    <span style={{ fontSize: 10, letterSpacing: 0.8, opacity: 0.85 }}>{item.preview.caption}</span>
-                  </div>
-                  <div style={{ padding: "8px 9px 0 9px", display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.93)" }}>{item.label}</div>
-                    {item.badge && (
-                      <span
+                    {hasImage ? (
+                      <img
+                        src={item.preview.imageUrl}
+                        alt={item.label}
                         style={{
-                          fontSize: 10,
-                          letterSpacing: 0.4,
-                          padding: "1px 6px",
-                          borderRadius: 999,
-                          border: "1px solid rgba(160,200,240,0.45)",
-                          color: "rgba(210,230,250,0.95)",
-                          background: "rgba(74,124,176,0.15)",
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
                         }}
-                      >
-                        {item.badge}
-                      </span>
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          background: `linear-gradient(160deg, ${item.preview.top} 0%, ${item.preview.bottom} 100%)`,
+                        }}
+                      />
                     )}
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        background: "linear-gradient(180deg, rgba(7,10,14,0.00) 0%, rgba(7,10,14,0.12) 45%, rgba(7,10,14,0.24) 100%)",
+                      }}
+                    />
                   </div>
-                  <div style={{ padding: "5px 9px 8px 9px", fontSize: 11, color: "rgba(255,255,255,0.67)", lineHeight: 1.35 }}>
+                  <div
+                    style={{
+                      position: "relative",
+                      borderBottom: "1px solid rgba(255,255,255,0.08)",
+                      zIndex: 1,
+                    }}
+                  >
+                  </div>
+                  <div
+                    style={{
+                      padding: "8px 9px 0 9px",
+                      position: "relative",
+                      zIndex: 1,
+                      background: "rgba(8,12,18,0.42)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 14, lineHeight: 1 }}>{item.icon}</span>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.95)" }}>{item.label}</div>
+                      {item.badge && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            letterSpacing: 0.4,
+                            padding: "1px 6px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(160,200,240,0.45)",
+                            color: "rgba(210,230,250,0.95)",
+                            background: "rgba(74,124,176,0.15)",
+                          }}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      padding: "5px 9px 8px 9px",
+                      fontSize: 11,
+                      color: "rgba(236,244,255,0.82)",
+                      lineHeight: 1.35,
+                      position: "relative",
+                      zIndex: 1,
+                      background: "rgba(8,12,18,0.34)",
+                    }}
+                  >
                     {item.description}
                   </div>
                   <button
@@ -893,12 +964,14 @@ export default function AssetLibraryPanel() {
                     style={{
                       border: "none",
                       borderTop: "1px solid rgba(255,255,255,0.08)",
-                      background: "rgba(255,255,255,0.06)",
+                      background: "#243447",
                       color: "rgba(240,248,255,0.95)",
                       height: 32,
                       fontSize: 11,
                       fontWeight: 600,
                       cursor: "pointer",
+                      position: "relative",
+                      zIndex: 1,
                     }}
                   >
                     {item.importLabel ?? "Import"}
@@ -916,15 +989,20 @@ export default function AssetLibraryPanel() {
                 {workspaceEntries.map((entry) => {
                   const selected = entry.path === selectedWorkspaceEntry?.path;
                   const dragPayload = dragPayloadFromWorkspaceEntry(entry);
+                  const hasImage = Boolean(entry.preview.imageUrl);
+                  const isCapturing = entry.previewStatus?.status === "loading";
                   return (
                     <div
                       key={entry.path}
-                      onClick={() =>
+                      onClick={() => {
                         setSelectedWorkspacePath({
                           value: entry.path,
                           navigationVersion,
-                        })
-                      }
+                        });
+                        if (entry.previewStatus?.status === "ready") {
+                          touchWorkspacePreview(normalizeWorkspaceFilePath(entry.path));
+                        }
+                      }}
                       onDoubleClick={() => {
                         void executeWorkspaceEntry(entry);
                       }}
@@ -933,33 +1011,99 @@ export default function AssetLibraryPanel() {
                       style={{
                         border: selected ? "1px solid rgba(120,170,220,0.58)" : "1px solid rgba(255,255,255,0.1)",
                         borderRadius: 11,
-                        background: selected ? "rgba(95,150,230,0.14)" : "rgba(255,255,255,0.02)",
+                        background: selected ? "rgba(95,150,230,0.08)" : "rgba(255,255,255,0.01)",
                         overflow: "hidden",
                         display: "grid",
                         gridTemplateRows: "60px auto 1fr auto",
                         minHeight: 166,
+                        position: "relative",
                         cursor: dragPayload ? "grab" : "pointer",
                       }}
                       title={entry.path}
                     >
                       <div
                         style={{
-                          background: `linear-gradient(160deg, ${entry.preview.top} 0%, ${entry.preview.bottom} 100%)`,
-                          color: "rgba(255,255,255,0.92)",
-                          display: "grid",
-                          alignContent: "center",
-                          justifyItems: "center",
-                          gap: 5,
-                          borderBottom: "1px solid rgba(255,255,255,0.08)",
+                          position: "absolute",
+                          inset: 0,
+                          zIndex: 0,
                         }}
                       >
-                        <span style={{ fontSize: 22, lineHeight: 1 }}>{entry.icon}</span>
-                        <span style={{ fontSize: 10, letterSpacing: 0.8, opacity: 0.85 }}>{entry.preview.caption}</span>
+                        {hasImage ? (
+                          <img
+                            src={entry.preview.imageUrl}
+                            alt={entry.name}
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "cover",
+                            }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              background: `linear-gradient(160deg, ${entry.preview.top} 0%, ${entry.preview.bottom} 100%)`,
+                            }}
+                          />
+                        )}
+                        <div
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            background: "linear-gradient(180deg, rgba(7,10,14,0.00) 0%, rgba(7,10,14,0.12) 45%, rgba(7,10,14,0.24) 100%)",
+                          }}
+                        />
                       </div>
-                      <div style={{ padding: "8px 9px 0 9px", fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.93)" }}>
-                        {entry.name}
+                      <div
+                        style={{
+                          position: "relative",
+                          borderBottom: "1px solid rgba(255,255,255,0.08)",
+                          zIndex: 1,
+                        }}
+                      >
                       </div>
-                      <div style={{ padding: "5px 9px 8px 9px", fontSize: 11, color: "rgba(255,255,255,0.67)", lineHeight: 1.35 }}>
+                      <div
+                        style={{
+                          padding: "8px 9px 0 9px",
+                          position: "relative",
+                          zIndex: 1,
+                          background: "rgba(8,12,18,0.42)",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                          <span style={{ fontSize: 14, lineHeight: 1 }}>{entry.icon}</span>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.95)" }}>{entry.name}</div>
+                          {isCapturing && (
+                            <span
+                              style={{
+                                fontSize: 10,
+                                letterSpacing: 0.4,
+                                padding: "1px 6px",
+                                borderRadius: 999,
+                                border: "1px solid rgba(160,200,240,0.45)",
+                                color: "rgba(210,230,250,0.95)",
+                                background: "rgba(74,124,176,0.15)",
+                              }}
+                            >
+                              CAPTURING
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          padding: "5px 9px 8px 9px",
+                          fontSize: 11,
+                          color: "rgba(236,244,255,0.82)",
+                          lineHeight: 1.35,
+                          position: "relative",
+                          zIndex: 1,
+                          background: "rgba(8,12,18,0.34)",
+                        }}
+                      >
                         {entry.description}
                       </div>
                       <button
@@ -970,12 +1114,14 @@ export default function AssetLibraryPanel() {
                         style={{
                           border: "none",
                           borderTop: "1px solid rgba(255,255,255,0.08)",
-                          background: "rgba(255,255,255,0.06)",
+                          background: "#243447",
                           color: "rgba(240,248,255,0.95)",
                           height: 32,
                           fontSize: 11,
                           fontWeight: 600,
                           cursor: "pointer",
+                          position: "relative",
+                          zIndex: 1,
                         }}
                       >
                         {entry.actionLabel}

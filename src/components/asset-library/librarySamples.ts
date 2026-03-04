@@ -1,6 +1,7 @@
 import type { AssetEntry } from "../../app/core/assets/assetRegistryTypes";
 import type { UrdfImportOptions } from "../../app/core/urdf/urdfImportOptions";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
+import { getLibrarySamplePreviewImage } from "./browserPreviewCatalog";
 
 export type LibrarySampleKind = "urdf" | "usd";
 
@@ -42,6 +43,7 @@ export type LibrarySample = {
     top: string;
     bottom: string;
     caption: string;
+    imageUrl?: string;
   };
   defaultImportOptions?: {
     urdf?: Partial<UrdfImportOptions>;
@@ -73,6 +75,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       top: "rgba(101, 148, 117, 0.55)",
       bottom: "rgba(38, 74, 57, 0.9)",
       caption: "CARTPOLE",
+      imageUrl: getLibrarySamplePreviewImage("cartpole"),
     },
     defaultImportOptions: {
       urdf: { floatingBase: false },
@@ -104,6 +107,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       top: "rgba(109, 139, 179, 0.55)",
       bottom: "rgba(43, 58, 83, 0.92)",
       caption: "ANT",
+      imageUrl: getLibrarySamplePreviewImage("ant"),
     },
     defaultImportOptions: {
       usd: {
@@ -149,6 +153,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       top: "rgba(159, 126, 109, 0.56)",
       bottom: "rgba(84, 56, 43, 0.92)",
       caption: "HUMANOID",
+      imageUrl: getLibrarySamplePreviewImage("humanoid"),
     },
     defaultImportOptions: {
       usd: {
@@ -220,6 +225,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       top: "rgba(121, 151, 117, 0.58)",
       bottom: "rgba(54, 76, 50, 0.92)",
       caption: "ANYMAL-C",
+      imageUrl: getLibrarySamplePreviewImage("anymal_c"),
     },
     defaultImportOptions: {
       usd: {
@@ -271,6 +277,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       top: "rgba(112, 122, 158, 0.58)",
       bottom: "rgba(47, 57, 84, 0.92)",
       caption: "OPEN ARM",
+      imageUrl: getLibrarySamplePreviewImage("open_arm"),
     },
     defaultImportOptions: {
       usd: {
