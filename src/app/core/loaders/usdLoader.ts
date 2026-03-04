@@ -1650,6 +1650,7 @@ const attachUsdMeshSceneToRoot = (
     selfCollisionEnabled?: boolean;
     resolveResource?: (resourcePath: string) => string | null;
     attachCollisionProxies?: boolean;
+    replaceExisting?: boolean;
   }
 ) => {
   if (!meshScene || (meshScene.meshes.length === 0 && meshScene.primitives.length === 0)) {
@@ -1658,6 +1659,7 @@ const attachUsdMeshSceneToRoot = (
 
   const selfCollisionEnabled = options?.selfCollisionEnabled === true;
   const attachCollisionProxies = options?.attachCollisionProxies !== false;
+  const replaceExisting = options?.replaceExisting === true;
   const links = collectUsdLinkGroups(root, selfCollisionEnabled);
   const uniqueLinks = new Set(Array.from(links.values()).map((entry) => entry.link));
   const singleLinkToken = uniqueLinks.size === 1 ? normalizeBodyToken(Array.from(uniqueLinks)[0]?.name) : null;
@@ -1677,6 +1679,19 @@ const attachUsdMeshSceneToRoot = (
   const targetsWithMeshVisual = new Set<string>();
   const seenUsdItems = new Set<string>();
   const targetPrimaryMeshCount = new Map<string, number>();
+
+  if (replaceExisting) {
+    const preparedEntries = new Set(Array.from(links.values()));
+    for (const entry of preparedEntries) {
+      clearGroupChildren(entry.visual);
+      configureVisualGroup(entry.visual, entry.link.name);
+      if (attachCollisionProxies) {
+        clearGroupChildren(entry.collision);
+        configureCollisionGroup(entry.collision, entry.link.name, selfCollisionEnabled);
+      }
+      entry.preparedForUsd = true;
+    }
+  }
 
   const isAuxiliaryVisualCandidate = (value: { name: string; primPath: string }) => {
     const token = `${value.name} ${value.primPath}`.toLowerCase();
@@ -2863,7 +2878,24 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
     return created;
   };
 
-  const rootNames = introspection.rootBodies.length > 0 ? introspection.rootBodies : ["base"];
+  const parentBodies = new Set<string>();
+  const childBodies = new Set<string>();
+  for (const joint of introspection.joints) {
+    if (joint.parentBody) parentBodies.add(joint.parentBody);
+    if (joint.childBody) childBodies.add(joint.childBody);
+  }
+  const explicitRootNames = introspection.rootBodies.filter(
+    (name) => parentBodies.has(name) || childBodies.has(name)
+  );
+  const derivedRootNames = Array.from(parentBodies).filter((name) => !childBodies.has(name));
+  const rootNames =
+    explicitRootNames.length > 0
+      ? explicitRootNames
+      : derivedRootNames.length > 0
+        ? derivedRootNames
+        : introspection.rootBodies.length > 0
+          ? introspection.rootBodies
+          : ["base"];
   for (const rootName of rootNames) ensureLink(rootName);
   for (const joint of introspection.joints) {
     if (joint.parentBody) ensureLink(joint.parentBody);
@@ -2875,7 +2907,12 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
   let jointCount = 0;
 
   for (const [index, joint] of introspection.joints.entries()) {
-    const parentName = joint.parentBody ?? rootNames[0] ?? "base";
+    const fallbackRootName = rootNames[0] ?? "base";
+    const parentName =
+      joint.parentBody ??
+      (joint.childBody && fallbackRootName === joint.childBody
+        ? `${joint.childBody}_root`
+        : fallbackRootName);
     const childSeed = joint.childBody ?? `${joint.name || `joint_${index + 1}`}_link`;
     const childName = childSeed === parentName ? `${childSeed}_child` : childSeed;
     if (attachedChildren.has(childName)) continue;
@@ -3242,23 +3279,98 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       resolvedConverterAssetId = converted.converterAssetId;
       resolvedMjcfAssetId = converted.mjcfAssetId;
       mjcfXml = converted.mjcfXml;
+      const introspectionJointCount = introspection?.joints.length ?? 0;
+      const mjcfHasBodyHierarchy = /<body(?:\s|>)/i.test(mjcfXml);
 
-      const parsed = parseMjcf(mjcfXml);
-      detectedFloatingBase = parsed.bodies.some((body) => body.joints.some((joint) => joint.type === "free"));
-      const built = buildRobotFromMjcf(parsed, displayName, { introspection });
-      root = built.root;
+      if (!mjcfHasBodyHierarchy && introspection && introspectionJointCount > 0) {
+        const built = buildRobotFromIntrospection(introspection, displayName);
+        root = built.root;
+        logWarn("USD MJCF is missing body hierarchy; using introspection skeleton.", {
+          scope: "usd",
+          data: {
+            usdKey,
+            converterAssetId: resolvedConverterAssetId,
+            mjcfAssetId: resolvedMjcfAssetId,
+            introspectionJoints: introspectionJointCount,
+          },
+        });
+        logInfo("USD conversion + render completed", {
+          scope: "usd",
+          data: {
+            usdKey,
+            converterAssetId: resolvedConverterAssetId,
+            mjcfAssetId: resolvedMjcfAssetId,
+            links: built.linkCount,
+            joints: built.jointCount,
+            hierarchySource: "introspection",
+            diagnostics: converted.diagnostics ?? null,
+          },
+        });
+      } else {
+        const parsed = parseMjcf(mjcfXml);
+        detectedFloatingBase = parsed.bodies.some((body) => body.joints.some((joint) => joint.type === "free"));
+        const builtFromMjcf = buildRobotFromMjcf(parsed, displayName, { introspection });
+        const introspectionBodyCount = introspection
+          ? new Set(
+              introspection.joints
+                .flatMap((joint) => [joint.parentBody, joint.childBody])
+                .filter((name): name is string => Boolean(name))
+            ).size
+          : 0;
+        const mjcfHierarchyIncomplete =
+          introspectionJointCount > 0 &&
+          (
+            builtFromMjcf.linkCount <= 1 ||
+            builtFromMjcf.jointCount === 0 ||
+            (introspectionJointCount >= 4 &&
+              builtFromMjcf.jointCount < Math.ceil(introspectionJointCount * 0.4)) ||
+            (introspectionBodyCount >= 3 &&
+              builtFromMjcf.linkCount < Math.ceil(introspectionBodyCount * 0.4))
+          );
+        if (mjcfHierarchyIncomplete && introspection) {
+          const built = buildRobotFromIntrospection(introspection, displayName);
+          root = built.root;
+          logWarn("USD MJCF hierarchy appears incomplete; using introspection skeleton.", {
+            scope: "usd",
+            data: {
+              usdKey,
+              converterAssetId: resolvedConverterAssetId,
+              mjcfAssetId: resolvedMjcfAssetId,
+              introspectionJoints: introspectionJointCount,
+              introspectionBodies: introspectionBodyCount,
+              mjcfLinks: builtFromMjcf.linkCount,
+              mjcfJoints: builtFromMjcf.jointCount,
+            },
+          });
+          logInfo("USD conversion + render completed", {
+            scope: "usd",
+            data: {
+              usdKey,
+              converterAssetId: resolvedConverterAssetId,
+              mjcfAssetId: resolvedMjcfAssetId,
+              links: built.linkCount,
+              joints: built.jointCount,
+              hierarchySource: "introspection",
+              diagnostics: converted.diagnostics ?? null,
+            },
+          });
+        } else {
+          root = builtFromMjcf.root;
+          logInfo("USD conversion + render completed", {
+            scope: "usd",
+            data: {
+              usdKey,
+              converterAssetId: resolvedConverterAssetId,
+              mjcfAssetId: resolvedMjcfAssetId,
+              links: builtFromMjcf.linkCount,
+              joints: builtFromMjcf.jointCount,
+              hierarchySource: "mjcf",
+              diagnostics: converted.diagnostics ?? null,
+            },
+          });
+        }
+      }
 
-      logInfo("USD conversion + render completed", {
-        scope: "usd",
-        data: {
-          usdKey,
-          converterAssetId: resolvedConverterAssetId,
-          mjcfAssetId: resolvedMjcfAssetId,
-          links: built.linkCount,
-          joints: built.jointCount,
-          diagnostics: converted.diagnostics ?? null,
-        },
-      });
       logInfo("USD visual->collision sync enabled by default.", {
         scope: "usd",
         data: {
@@ -3343,7 +3455,20 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     selfCollisionEnabled: importOptions?.selfCollision === true,
     resolveResource,
     attachCollisionProxies: useVisualCollisionSync,
+    replaceExisting: importSceneRole === "scene_asset" && Boolean(meshScene && meshScene.meshes.length > 0),
   });
+  if (meshScene && meshScene.meshes.length > 0 && meshAttach.attachedMeshes === 0) {
+    logWarn("USD mesh scene contains meshes but none were attached; keeping fallback geometry.", {
+      scope: "usd",
+      data: {
+        usdKey,
+        converterAssetId: resolvedConverterAssetId,
+        meshCount: meshScene.meshes.length,
+        primitiveCount: meshScene.primitives.length,
+        bodyCount: meshScene.bodyCount,
+      },
+    });
+  }
   if (meshAttach.attachedMeshes > 0 || meshAttach.attachedPrimitives > 0) {
     logInfo("USD mesh scene attached", {
       scope: "usd",

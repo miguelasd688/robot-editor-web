@@ -96,8 +96,6 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "ant_colored.usd",
       "configuration/ant_colored_robot_schema.usd",
       "configuration/ant_robot_schema.usd",
-      "terrain/flat_floor.usda",
-      "terrain/flat_scene_with_cubes.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -143,8 +141,6 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "configuration/humanoid_robot_schema.usd",
       "humanoid-LICENSE.txt",
       "humanoid.usd",
-      "terrain/flat_floor.usda",
-      "terrain/flat_scene_with_cubes.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -171,7 +167,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
   {
     id: "anymal_c",
     label: "Anymal-C Sample",
-    description: "Isaac Lab ANYmal-C rough terrain USD sample.",
+    description: "Isaac Lab ANYmal-C USD sample.",
     kind: "usd",
     entry: "anymal_c.usd",
     files: [
@@ -216,8 +212,6 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "legacy/materials/thigh.jpg",
       "legacy/materials/top_shell.jpg",
       "legacy/materials/wide_angle_camera.jpg",
-      "terrain/flat_floor.usda",
-      "terrain/rough_preview.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -290,7 +284,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "generic_manager",
       task: "Agent-Generic-Manager-v0",
     },
-    terrainOptions: ["none", "full_scene"],
+    terrainOptions: ["none"],
     usdVariants: [
       {
         id: "unimanual",

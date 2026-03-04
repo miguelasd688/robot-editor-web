@@ -779,8 +779,6 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
     const jointUrdf = urdf?.kind === "joint" ? urdf.joint : null;
     const jointTransform = resolveTransform(jointNode);
     const parentLink = nodes[parentLinkId];
-    const childLink = nodes[childLinkId];
-    const childLinkTransform = resolveTransform(childLink);
     const parentLinkTransform = resolveTransform(parentLink);
     const parentLinkUrdf =
       parentLink?.components?.urdf?.kind === "link" ? parentLink.components.urdf.link : null;
@@ -791,13 +789,9 @@ export function exportRobotToUrdf(doc: ProjectDoc, robotId: string): ExportRobot
       : matrixFromRigidTransform(parentLinkTransform);
     const parentScaleMatrix = matrixFromScale(parentLinkTransform.scale);
     const jointMatrix = matrixFromRigidTransform(jointTransform);
-    const childRigidMatrix = matrixFromRigidTransform(childLinkTransform);
-    const originMatrix = parentFrameMatrix
-      .clone()
-      .multiply(parentScaleMatrix)
-      .multiply(jointMatrix)
-      .multiply(childRigidMatrix);
-    const baseOrigin = jointUrdf?.origin ? clonePose(jointUrdf.origin) : poseFromMatrix(originMatrix);
+    // Export joints from the scene transform (what the editor/debug draws), not from cached URDF metadata.
+    // This avoids drift when metadata and transform diverge after USD frame compensation updates.
+    const baseOrigin = poseFromMatrix(parentFrameMatrix.clone().multiply(parentScaleMatrix).multiply(jointMatrix));
     const fallbackParentOffset = hasIncomingJoint(nodes, parentLinkId) ? poseFromTransform(parentLinkTransform) : undefined;
     const parentOffsetPose = parentLinkUrdf?.editorOffset ?? fallbackParentOffset;
     const origin = parentOffsetPose && !isIdentityPose(parentOffsetPose)

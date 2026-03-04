@@ -198,6 +198,13 @@ function writeFileTree(mujoco: MainModule, files: Record<string, Uint8Array>) {
   }
 }
 
+function writeTextFileUtf8(mujoco: MainModule, path: string, content: string) {
+  const text = String(content ?? "");
+  const bytes = new TextEncoder().encode(text);
+  (mujoco as any).FS.writeFile(path, bytes);
+  return bytes.length;
+}
+
 function ensureDirForPath(mujoco: MainModule, path: string) {
   const fs = (mujoco as any).FS;
   const parts = path.split("/").filter(Boolean);
@@ -264,8 +271,18 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const jointCandidates: THREE.Object3D[] = [];
   const visited = new Set<THREE.Object3D>();
 
+  const hasUsdSceneAssetAncestor = (obj: THREE.Object3D) => {
+    let cur: THREE.Object3D | null = obj;
+    while (cur) {
+      if (cur.userData?.usdSceneAsset === true) return true;
+      cur = cur.parent;
+    }
+    return false;
+  };
+
   const shouldSimulate = (obj: THREE.Object3D) => {
-    if ((obj as any).isURDFLink || (obj as any).isURDFJoint || (obj as any).isURDFCollider || (obj as any).isURDFVisual) {
+    const isUrdfTagged = (obj as any).isURDFLink || (obj as any).isURDFJoint || (obj as any).isURDFCollider || (obj as any).isURDFVisual;
+    if (isUrdfTagged && !hasUsdSceneAssetAncestor(obj)) {
       return false;
     }
     if (obj.userData?.editorRobotRoot) return false;
@@ -761,6 +778,7 @@ function setGravity(model: MjModel, gravity: [number, number, number]) {
 }
 
 function isUrdfRoot(root: THREE.Object3D) {
+  if (root.userData?.usdSceneAsset === true) return false;
   // Imported URDF roots are tagged at root level; editor-built robots can also
   // carry `userData.urdf` on joints, so we must not classify them as imported.
   if (typeof root.userData?.urdfSource === "string" && root.userData.urdfSource.length > 0) return true;
@@ -1356,14 +1374,22 @@ export function createMujocoRuntime(): MujocoRuntime {
       xmlToWrite = mergeWorldbody(xmlToWrite, buildPointerCursorWorldbody());
       lastXML = xmlToWrite;
       ensureDirForPath(mujoco, xmlPath);
-      (mujoco as any).FS.writeFile(xmlPath, xmlToWrite);
+      const xmlChars = xmlToWrite.length;
+      let xmlBytes = 0;
+      try {
+        xmlBytes = writeTextFileUtf8(mujoco, xmlPath, xmlToWrite);
+      } catch (error) {
+        throw new Error(
+          `Failed to write MJCF XML to MuJoCo FS (${xmlPath}, chars=${xmlChars}): ${String((error as Error)?.message ?? error)}`
+        );
+      }
 
       if (MUJOCO_DEBUG) {
         try {
           const fs = (mujoco as any).FS;
           const exists = fs.analyzePath?.(xmlPath)?.exists;
           const size = exists ? fs.stat(xmlPath).size : 0;
-          debugLog("xml file", { path: xmlPath, exists, size });
+          debugLog("xml file", { path: xmlPath, exists, size, xmlChars, xmlBytes });
         } catch (err) {
           debugLog("xml file check failed", err);
         }

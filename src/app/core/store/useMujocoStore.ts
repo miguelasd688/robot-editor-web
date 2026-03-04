@@ -811,21 +811,33 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
               node.components?.robotModelSource ??
               (root.userData?.robotModelSource as Record<string, unknown> | undefined);
             const sourceIsCleanUsd = modelSource?.kind === "usd" && modelSource?.isDirty !== true;
-            const directMjcfSource =
+            const usdIntrospection = root.userData?.usdIntrospection as
+              | {
+                  joints?: Array<{ frame0Local?: unknown; frame1Local?: unknown }>;
+                }
+              | undefined;
+            const hasUsdFrameIntrospection =
+              sourceIsCleanUsd &&
+              Array.isArray(usdIntrospection?.joints) &&
+              usdIntrospection.joints.some((joint) => Boolean(joint?.frame0Local || joint?.frame1Local));
+            const canUseDirectMjcf = sourceIsCleanUsd && !hasUsdFrameIntrospection;
+            const cachedDirectMjcfSource =
               sourceIsCleanUsd && typeof root.userData?.mjcfSource === "string" && root.userData.mjcfSource.trim()
                 ? (root.userData.mjcfSource as string)
                 : null;
-            const directMjcfKey =
+            const cachedDirectMjcfKey =
               sourceIsCleanUsd && typeof root.userData?.mjcfAssetId === "string" && root.userData.mjcfAssetId.trim()
                 ? (root.userData.mjcfAssetId as string)
                 : null;
+            const directMjcfSource = canUseDirectMjcf ? cachedDirectMjcfSource : null;
+            const directMjcfKey = canUseDirectMjcf ? cachedDirectMjcfKey : null;
             const hasDirectMjcf = Boolean(directMjcfSource || directMjcfKey);
             const shouldRegenerateUrdf =
               Boolean(sourceUrdf) ||
               Boolean(urdfKeyForRobot) ||
               // Dirty USD must regenerate from scene edits; clean USD can use cached MJCF directly.
               // If cached MJCF is missing (legacy loads), regenerate as fallback.
-              (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf));
+              (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf || hasUsdFrameIntrospection));
             if (shouldRegenerateUrdf) {
               try {
                 const exported = exportRobotToUrdf(doc, node.id);
