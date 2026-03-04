@@ -13,6 +13,8 @@ export type USDLoaderParams = {
   usdFile?: File;
   /** Resolved asset name for display */
   usdName?: string;
+  /** Import role controls whether the root is treated as a robot or a generic scene asset. */
+  sceneRole?: "robot" | "scene_asset";
   resolveResource?: (resourcePath: string) => string | null;
   importOptions?: UsdImportOptions;
   /**
@@ -330,6 +332,8 @@ const PATH_SKIP_SEGMENTS = new Set([
 ]);
 const FILE_EXT_SKIP_RE = /\.(png|jpg|jpeg|webp|tiff|bmp|hdr|exr|mtl|obj|stl|dae|fbx|gltf|glb|xml|mjcf)$/i;
 const DEFAULT_VISUAL_RGBA: [number, number, number, number] = [0.72, 0.79, 0.9, 1];
+const ISAAC_LAB_DEFAULT_SURFACE_FRICTION = 1.0;
+const ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION = 0.0;
 const BUNDLE_FALLBACK_INCLUDE_EXT_RE = /\.(usd|usda|usdc|usdz|png|jpg|jpeg|webp|tif|tiff|bmp|hdr|exr|mtl|obj|stl|dae|fbx|gltf|glb)$/i;
 const ABSOLUTE_URL_RE = /^(?:https?:\/\/|blob:|data:)/i;
 const usdTextureLoader = new THREE.TextureLoader();
@@ -340,6 +344,44 @@ type UsdPrimNode = {
   name: string;
   parentPath: string | null;
   kind: "group" | "link" | "joint";
+};
+
+const stripFileExtension = (name: string) => name.replace(/\.[^/.]+$/, "");
+
+const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) => {
+  const rootWithRobotFlag = root as THREE.Object3D & { isRobot?: boolean };
+  if (rootWithRobotFlag.isRobot) {
+    delete rootWithRobotFlag.isRobot;
+  }
+  root.name = sceneAssetName;
+  if (root.userData && Object.prototype.hasOwnProperty.call(root.userData, "editorRobotRoot")) {
+    delete root.userData.editorRobotRoot;
+  }
+  if (root.userData && Object.prototype.hasOwnProperty.call(root.userData, "robotModelSource")) {
+    delete root.userData.robotModelSource;
+  }
+  root.userData.editorKind = "group";
+  root.userData.usdSceneAsset = true;
+};
+
+const applySceneAssetPhysicsDefaults = (root: THREE.Object3D) => {
+  root.traverse((node) => {
+    const isLink = node.userData?.editorKind === "link" || Boolean((node as THREE.Object3D & { isURDFLink?: boolean }).isURDFLink);
+    if (!isLink) return;
+    const currentPhysics =
+      node.userData?.physics && typeof node.userData.physics === "object" && !Array.isArray(node.userData.physics)
+        ? (node.userData.physics as Record<string, unknown>)
+        : {};
+    node.userData.physics = {
+      ...currentPhysics,
+      mass: 0,
+      fixed: true,
+      useDensity: false,
+      collisionsEnabled: true,
+      friction: ISAAC_LAB_DEFAULT_SURFACE_FRICTION,
+      restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
+    };
+  });
 };
 
 export type CollectedUsdBundleFile = {
@@ -3112,7 +3154,9 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     converterAssetId,
     assetsByKey,
     bundleHintPaths,
+    sceneRole,
   } = params;
+  const importSceneRole = sceneRole === "scene_asset" ? "scene_asset" : "robot";
   const displayName = usdName ?? (basename(usdKey) || usdKey);
 
   logInfo(`USD load: ${usdKey}`, { scope: "usd" });
@@ -3318,13 +3362,37 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     });
   }
 
+  if (importSceneRole === "scene_asset") {
+    retagUsdRootAsSceneAsset(root, stripFileExtension(displayName) || displayName);
+    applySceneAssetPhysicsDefaults(root);
+    root.userData.usdUrl = usdUrl;
+    root.userData.usdWorkspaceKey = usdKey;
+    if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
+    if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
+    if (mjcfXml) root.userData.mjcfSource = mjcfXml;
+    if (mjcfBodiesPatchedFromMeshScene > 0) root.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
+    logInfo("USD scene asset import completed", {
+      scope: "usd",
+      data: {
+        usdKey,
+        sceneAssetName: root.name,
+        converterAssetId: resolvedConverterAssetId,
+        attachedMeshes: meshAttach.attachedMeshes,
+        attachedPrimitives: meshAttach.attachedPrimitives,
+      },
+    });
+    return root;
+  }
+
   const modelSource: UsdModelSource = {
     kind: "usd",
     usdKey: resolvedConverterAssetId ?? usdKey,
     workspaceKey: usdKey,
     converterAssetId: resolvedConverterAssetId,
     trainingAssetId: null,
-    mjcfKey: useVisualCollisionSync ? undefined : resolvedMjcfAssetId,
+    // Keep the converted MJCF reference even when visual/collision sync is enabled.
+    // MuJoCo runtime reload depends on this cached source for clean USD models.
+    mjcfKey: resolvedMjcfAssetId,
     importOptions: {
       ...(importOptions ?? {}),
       floatingBase:
@@ -3341,8 +3409,8 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   root.userData.usdUrl = usdUrl;
   root.userData.usdWorkspaceKey = usdKey;
   if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
-  if (!useVisualCollisionSync && resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
-  if (!useVisualCollisionSync && mjcfXml) root.userData.mjcfSource = mjcfXml;
+  if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
+  if (mjcfXml) root.userData.mjcfSource = mjcfXml;
   if (mjcfBodiesPatchedFromMeshScene > 0) root.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
 
   return root;
@@ -3353,10 +3421,13 @@ export type USDImportDeps = {
   assets: Record<string, UsdWorkspaceAssetEntry>;
   importOptions?: USDLoaderParams["importOptions"];
   bundleHintPaths?: string[];
+  rootName?: string;
+  sceneRole?: USDLoaderParams["sceneRole"];
+  frameOnAdd?: boolean;
 };
 
 export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
-  const { usdKey, assets, importOptions, bundleHintPaths } = deps;
+  const { usdKey, assets, importOptions, bundleHintPaths, rootName, sceneRole, frameOnAdd } = deps;
 
   if (!usdKey) {
     logWarn("USD load requested but no USD selected.", { scope: "usd" });
@@ -3374,17 +3445,22 @@ export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
   logInfo(`USD load requested: ${usdKey}`, { scope: "usd" });
   const resolveResource = createAssetResolver(assets, usdKey);
 
-  await useLoaderStore.getState().load(
+  return await useLoaderStore.getState().load(
     "usd",
     {
       usdUrl: entry.url,
       usdKey,
       usdFile: entry.file,
-      usdName: basename(usdKey),
+      usdName: rootName?.trim() || basename(usdKey),
+      sceneRole,
       resolveResource,
       assetsByKey: assets,
       importOptions,
       bundleHintPaths,
-    } satisfies USDLoaderParams
+    } satisfies USDLoaderParams,
+    {
+      name: rootName?.trim() || undefined,
+      frame: frameOnAdd ?? true,
+    }
   );
 }

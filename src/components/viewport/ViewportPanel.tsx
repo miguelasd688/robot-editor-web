@@ -7,10 +7,11 @@ import { useSceneStore } from "../../app/core/store/useSceneStore";
 import { useMujocoStore } from "../../app/core/store/useMujocoStore";
 import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDialogStore";
 import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
+import { useTrainingImportContextStore } from "../../app/core/store/useTrainingImportContextStore";
 import { loadWorkspaceURDFIntoViewer } from "../../app/core/loaders/urdfLoader";
 import { loadWorkspaceUSDIntoViewer } from "../../app/core/loaders/usdLoader";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
-import { logInfo } from "../../app/core/services/logger";
+import { logInfo, logWarn } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import { DarkSelect } from "../../app/ui/DarkSelect";
 import { tickSimulation } from "./services/simulationService";
@@ -20,9 +21,11 @@ import { ThreeSceneAdapter } from "../../app/core/editor/adapters/three/ThreeSce
 import { setThreeAdapter } from "../../app/core/editor/adapters/three/adapterSingleton";
 import { hasBrowserImportPayload, payloadFromDataTransfer, type BrowserImportPayload } from "../asset-library/browserDragDrop";
 import {
+  LIBRARY_ROOT,
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
+  listLibrarySampleUsdWorkspaceKeys,
 } from "../asset-library/librarySamples";
 
 const pointerPointFromRay = (ray: { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }, depth: number) => ({
@@ -40,6 +43,45 @@ const dropHintFromPayload = (payload: BrowserImportPayload) => {
 
 const isMeshAssetId = (assetId: SceneAssetId) => assetId.startsWith("mesh:");
 const toUiCollisionMode = (mode: string | undefined) => (mode === "mesh" ? "mesh" : "fast");
+const USD_EXTS = [".usd", ".usda", ".usdc", ".usdz"];
+const isUsdPath = (path: string) => {
+  const lower = String(path ?? "").toLowerCase();
+  return USD_EXTS.some((ext) => lower.endsWith(ext));
+};
+const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
+const stripFileExtension = (name: string) => name.replace(/\.[^/.]+$/, "");
+
+function collectSampleTerrainUsdKeys(sampleId: string, allUsdKeys: string[], variantUsdKeys: string[]): string[] {
+  const prefix = `${LIBRARY_ROOT}/${sampleId}/`;
+  const blocked = new Set(variantUsdKeys.map((key) => normalizeWorkspaceFilePath(key)));
+  return Array.from(
+    new Set(
+      allUsdKeys
+        .map((key) => normalizeWorkspaceFilePath(key))
+        .filter((key) => key.startsWith(prefix) && !blocked.has(key))
+    )
+  );
+}
+
+function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] | null | undefined): string[] | undefined {
+  const hints = (bundleHintPaths ?? [])
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0);
+  if (hints.length === 0) return undefined;
+  const sample = findLibrarySampleByWorkspaceKey(usdKey);
+  if (!sample || sample.kind !== "usd") return hints;
+  const samplePrefix = normalizeWorkspaceFilePath(`${LIBRARY_ROOT}/${sample.id}/`);
+  const normalizedUsdKey = normalizeWorkspaceFilePath(usdKey);
+  if (!normalizedUsdKey.startsWith(samplePrefix)) return hints;
+  const relativeEntry = normalizedUsdKey.slice(samplePrefix.length);
+  const entryDir = relativeEntry.includes("/") ? relativeEntry.slice(0, relativeEntry.lastIndexOf("/") + 1) : "";
+  if (!entryDir) return hints;
+  const scoped = hints.filter((item) => {
+    const normalizedHint = normalizeWorkspaceFilePath(item);
+    return normalizedHint.startsWith(entryDir) || normalizedHint.startsWith("terrain/") || normalizedHint.startsWith("environment/");
+  });
+  return scoped.length > 0 ? scoped : hints;
+}
 
 type UrdfDialogFormOptions = {
   floatingBase: boolean;
@@ -184,15 +226,259 @@ type UsdDialogFormOptions = {
   selfCollision: boolean;
 };
 
+type UsdDialogTerrainMode = "none" | "usd" | "plane" | "generator";
+
+type TerrainDialogOption = {
+  value: string;
+  mode: UsdDialogTerrainMode;
+  usdKey: string | null;
+  label: string;
+  hint: string;
+};
+
+const TERRAIN_OPTION_NONE = "__terrain_none__";
+const TERRAIN_OPTION_ROUGH = "__terrain_rough__";
+const TERRAIN_OPTION_FULL_SCENE = "__terrain_full_scene__";
+
+type TerrainOptionPolicy = {
+  allowFlat: boolean;
+  allowRough: boolean;
+  allowFullScene: boolean;
+  allowExternalUsd: boolean;
+};
+
+function resolveTerrainOptionPolicy(selectedUsdKey: string): TerrainOptionPolicy {
+  const sample = findLibrarySampleByWorkspaceKey(selectedUsdKey);
+  const configured = Array.isArray(sample?.terrainOptions) ? new Set(sample.terrainOptions) : null;
+  if (!configured) {
+    return {
+      allowFlat: false,
+      allowRough: false,
+      allowFullScene: false,
+      allowExternalUsd: false,
+    };
+  }
+  const allowFullScene = configured.has("full_scene");
+  return {
+    allowFlat: configured.has("flat"),
+    allowRough: configured.has("rough"),
+    allowFullScene,
+    allowExternalUsd: true,
+  };
+}
+
+function classifyTerrainKeyForUi(terrainKey: string): { label: string; hint: string } {
+  const key = String(terrainKey ?? "").trim();
+  const file = key.split("/").pop() ?? key;
+  const lowered = `${key}`.toLowerCase();
+  if (lowered.includes("rough") || lowered.includes("terrain")) {
+    return {
+      label: `Rough floor (USD) · ${file}`,
+      hint: `Detected rough terrain candidate from '${key}'.`,
+    };
+  }
+  if (
+    lowered.includes("obstacle") ||
+    lowered.includes("cube") ||
+    lowered.includes("crate") ||
+    lowered.includes("props")
+  ) {
+    return {
+      label: `Obstacle scene (USD) · ${file}`,
+      hint: `Detected obstacle/props scene candidate from '${key}'.`,
+    };
+  }
+  if (
+    lowered.includes("plane") ||
+    lowered.includes("flat") ||
+    lowered.includes("ground") ||
+    lowered.includes("floor")
+  ) {
+    return {
+      label: `Flat floor (USD) · ${file}`,
+      hint: `Detected flat floor candidate from '${key}'.`,
+    };
+  }
+  if (
+    lowered.includes("table") ||
+    lowered.includes("desk") ||
+    lowered.includes("workbench") ||
+    lowered.includes("shelf")
+  ) {
+    return {
+      label: `Table/prop scene (USD) · ${file}`,
+      hint: `Detected table/prop scene candidate from '${key}'.`,
+    };
+  }
+  if (lowered.includes("scene") || lowered.includes("world") || lowered.includes("environment")) {
+    return {
+      label: `Environment scene (USD) · ${file}`,
+      hint: `Detected scene candidate from '${key}'.`,
+    };
+  }
+  if (lowered.includes("/props/")) {
+    return {
+      label: `Scene assets (USD) · ${file}`,
+      hint: `Detected props bundle candidate from '${key}'.`,
+    };
+  }
+  return {
+    label: `USD scene asset · ${file}`,
+    hint: `Detected additional USD asset from '${key}'.`,
+  };
+}
+
+function resolveSampleTerrainUsdKey(sampleId: string, terrainUsdKeys: string[], candidateRelativePaths: string[]): string | null {
+  const terrainMap = new Map<string, string>();
+  for (const raw of terrainUsdKeys) {
+    const key = String(raw ?? "").trim();
+    if (!key) continue;
+    terrainMap.set(normalizeWorkspaceFilePath(key), key);
+  }
+  for (const relativePath of candidateRelativePaths) {
+    const candidate = normalizeWorkspaceFilePath(`${LIBRARY_ROOT}/${sampleId}/${relativePath}`);
+    const matched = terrainMap.get(candidate);
+    if (matched) return matched;
+  }
+  return null;
+}
+
+function buildTerrainDialogOptions(selectedUsdKey: string, terrainUsdKeys: string[]): TerrainDialogOption[] {
+  const policy = resolveTerrainOptionPolicy(selectedUsdKey);
+  const sample = findLibrarySampleByWorkspaceKey(selectedUsdKey);
+  const samplePrefix = sample ? `${LIBRARY_ROOT}/${sample.id}/` : null;
+  const sampleFlatTerrainKey = sample
+    ? resolveSampleTerrainUsdKey(sample.id, terrainUsdKeys, ["terrain/flat_floor.usda", "terrain/flat_floor.usd"])
+    : null;
+  const sampleRoughPreviewTerrainKey = sample
+    ? resolveSampleTerrainUsdKey(sample.id, terrainUsdKeys, ["terrain/rough_preview.usda", "terrain/rough_preview.usd"])
+    : null;
+  const blockedExternalKeySet = new Set(
+    [sampleFlatTerrainKey, sampleRoughPreviewTerrainKey].map((key) => normalizeWorkspaceFilePath(String(key ?? "")))
+  );
+  const externalKeys = policy.allowExternalUsd
+    ? Array.from(
+        new Set(
+          terrainUsdKeys
+            .map((item) => String(item ?? "").trim())
+            .filter((item) => item.length > 0 && item !== selectedUsdKey)
+            .filter((item) =>
+              samplePrefix ? normalizeWorkspaceFilePath(item).startsWith(normalizeWorkspaceFilePath(samplePrefix)) : true
+            )
+            .filter((item) => {
+              if (!samplePrefix) return true;
+              const normalized = normalizeWorkspaceFilePath(item);
+              const terrainPrefix = normalizeWorkspaceFilePath(`${samplePrefix}terrain/`);
+              const envPrefix = normalizeWorkspaceFilePath(`${samplePrefix}environment/`);
+              return normalized.startsWith(terrainPrefix) || normalized.startsWith(envPrefix);
+            })
+            .filter((item) => !blockedExternalKeySet.has(normalizeWorkspaceFilePath(item)))
+        )
+      )
+    : [];
+
+  const options: TerrainDialogOption[] = [
+    {
+      value: TERRAIN_OPTION_NONE,
+      mode: "none",
+      usdKey: null,
+      label: "None (robot only)",
+      hint: "No extra terrain/scene will be imported for training.",
+    },
+  ];
+
+  if (policy.allowFlat) {
+    if (sampleFlatTerrainKey) {
+      const flatFile = sampleFlatTerrainKey.split("/").pop() ?? sampleFlatTerrainKey;
+      options.push({
+        value: sampleFlatTerrainKey,
+        mode: "usd",
+        usdKey: sampleFlatTerrainKey,
+        label: `Flat terrain (library USD) · ${flatFile}`,
+        hint: "Uses your library flat terrain USD for scene preview and training terrain override.",
+      });
+    }
+  }
+
+  if (policy.allowRough) {
+    options.push({
+      value: TERRAIN_OPTION_ROUGH,
+      mode: "generator",
+      usdKey: sampleRoughPreviewTerrainKey,
+      label: "Rough terrain (Isaac Lab runtime generator)",
+      hint: sampleRoughPreviewTerrainKey
+        ? "Uses Isaac Lab procedural rough terrain for training, and imports a library preview USD in scene."
+        : "Uses Isaac Lab procedural rough terrain at runtime (no scene USD upload).",
+    });
+  }
+
+  if (policy.allowFullScene && selectedUsdKey) {
+    const file = selectedUsdKey.split("/").pop() ?? selectedUsdKey;
+    options.push({
+      value: TERRAIN_OPTION_FULL_SCENE,
+      mode: "usd",
+      usdKey: selectedUsdKey,
+      label: `Import full scene · ${file}`,
+      hint: "Reuse the same USD as robot + scene container (full-scene import).",
+    });
+  }
+
+  for (const key of externalKeys) {
+    const detected = classifyTerrainKeyForUi(key);
+    options.push({
+      value: key,
+      mode: "usd",
+      usdKey: key,
+      label: detected.label,
+      hint: detected.hint,
+    });
+  }
+  return options;
+}
+
 function UsdImportDialogOverlay(props: {
   usdKey: string | null;
+  variantUsdKeys: string[];
+  terrainUsdKeys: string[];
+  initialTerrainUsdKey: string | null;
   initialOptions: UsdDialogFormOptions;
   onCancel: () => void;
-  onConfirm: (options: UsdDialogFormOptions) => void;
+  onConfirm: (input: {
+    options: UsdDialogFormOptions;
+    usdKey: string;
+    terrainUsdKey: string | null;
+    terrainMode: UsdDialogTerrainMode;
+  }) => void;
 }) {
-  const { usdKey, initialOptions, onCancel, onConfirm } = props;
+  const { usdKey, variantUsdKeys, terrainUsdKeys, initialTerrainUsdKey, initialOptions, onCancel, onConfirm } = props;
   const [floatingBase, setFloatingBase] = useState(initialOptions.floatingBase);
   const [selfCollision, setSelfCollision] = useState(initialOptions.selfCollision);
+  const variantOptions = useMemo(() => {
+    const cleaned = variantUsdKeys
+      .map((item) => String(item ?? "").trim())
+      .filter((item) => item.length > 0);
+    if (cleaned.length > 0) return Array.from(new Set(cleaned));
+    if (usdKey) return [usdKey];
+    return [];
+  }, [usdKey, variantUsdKeys]);
+  const [selectedUsdKey, setSelectedUsdKey] = useState<string>(variantOptions[0] ?? usdKey ?? "");
+  const terrainOptions = useMemo(
+    () => buildTerrainDialogOptions(selectedUsdKey, terrainUsdKeys),
+    [selectedUsdKey, terrainUsdKeys]
+  );
+  const [selectedTerrainOption, setSelectedTerrainOption] = useState<string>(
+    initialTerrainUsdKey && initialTerrainUsdKey.trim().length > 0 ? initialTerrainUsdKey.trim() : TERRAIN_OPTION_NONE
+  );
+
+  useEffect(() => {
+    if (terrainOptions.some((item) => item.value === selectedTerrainOption)) return;
+    setSelectedTerrainOption(TERRAIN_OPTION_NONE);
+  }, [selectedTerrainOption, terrainOptions]);
+
+  const selectedTerrainEntry = useMemo(
+    () => terrainOptions.find((item) => item.value === selectedTerrainOption) ?? terrainOptions[0] ?? null,
+    [selectedTerrainOption, terrainOptions]
+  );
 
   return (
     <div
@@ -235,8 +521,43 @@ function UsdImportDialogOverlay(props: {
           }}
           title={usdKey ?? undefined}
         >
-          {usdKey ?? "No USD file selected"}
+          {selectedUsdKey || usdKey || "No USD file selected"}
         </div>
+        {variantOptions.length > 1 && (
+          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+            <span>Robot variant</span>
+            <DarkSelect
+              value={selectedUsdKey}
+              onChange={(event) => setSelectedUsdKey(String(event.target.value ?? "").trim())}
+              style={{ background: "rgba(12,16,22,0.98)" }}
+            >
+              {variantOptions.map((variantKey) => (
+                <option key={variantKey} value={variantKey}>
+                  {variantKey.split("/").pop() ?? variantKey}
+                </option>
+              ))}
+            </DarkSelect>
+          </label>
+        )}
+        {terrainOptions.length > 0 && (
+          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+            <span>Environment (optional)</span>
+            <DarkSelect
+              value={selectedTerrainOption}
+              onChange={(event) => setSelectedTerrainOption(String(event.target.value ?? "").trim())}
+              style={{ background: "rgba(12,16,22,0.98)" }}
+            >
+              {terrainOptions.map((terrainOption) => (
+                <option key={terrainOption.value} value={terrainOption.value}>
+                  {terrainOption.label}
+                </option>
+              ))}
+            </DarkSelect>
+            {selectedTerrainEntry ? (
+              <div style={{ fontSize: 11, opacity: 0.7 }}>{selectedTerrainEntry.hint}</div>
+            ) : null}
+          </label>
+        )}
         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, lineHeight: 1.35 }}>
           <input type="checkbox" checked={floatingBase} onChange={(e) => setFloatingBase(e.target.checked)} />
           Floating base (free root joint)
@@ -262,8 +583,18 @@ function UsdImportDialogOverlay(props: {
             Cancel
           </button>
           <button
-            onClick={() => onConfirm({ floatingBase, selfCollision })}
-            disabled={!usdKey}
+            onClick={() =>
+              {
+                const resolvedTerrain = selectedTerrainEntry ?? terrainOptions[0] ?? null;
+                onConfirm({
+                  options: { floatingBase, selfCollision },
+                  usdKey: selectedUsdKey || usdKey || "",
+                  terrainUsdKey: resolvedTerrain?.usdKey ?? null,
+                  terrainMode: resolvedTerrain?.mode ?? "none",
+                });
+              }
+            }
+            disabled={!selectedUsdKey && !usdKey}
             style={{
               height: 28,
               padding: "0 12px",
@@ -271,8 +602,8 @@ function UsdImportDialogOverlay(props: {
               border: "1px solid rgba(130,90,255,0.4)",
               background: "rgba(130,90,255,0.25)",
               color: "rgba(255,255,255,0.95)",
-              cursor: usdKey ? "pointer" : "default",
-              opacity: usdKey ? 1 : 0.5,
+              cursor: selectedUsdKey || usdKey ? "pointer" : "default",
+              opacity: selectedUsdKey || usdKey ? 1 : 0.5,
               fontSize: 12,
               fontWeight: 600,
             }}
@@ -311,6 +642,9 @@ export default function ViewportPanel() {
   const usdDialogKey = useUsdImportDialogStore((s) => s.usdKey);
   const usdDialogOptionOverrides = useUsdImportDialogStore((s) => s.optionOverrides);
   const usdDialogBundleHintPaths = useUsdImportDialogStore((s) => s.bundleHintPaths);
+  const usdDialogVariantUsdKeys = useUsdImportDialogStore((s) => s.variantUsdKeys);
+  const usdDialogTerrainUsdKeys = useUsdImportDialogStore((s) => s.terrainUsdKeys);
+  const usdDialogSelectedTerrainUsdKey = useUsdImportDialogStore((s) => s.selectedTerrainUsdKey);
   const closeUsdImportDialog = useUsdImportDialogStore((s) => s.close);
   const usdOptions = useAssetStore((s) => s.usdOptions);
   const setUSD = useAssetStore((s) => s.setUSD);
@@ -418,11 +752,16 @@ export default function ViewportPanel() {
         }
 
         assetStore.setUSD(sampleKey);
+        const allUsdKeys = Object.keys(assetStore.assets).filter((key) => isUsdPath(key));
+        const variantUsdKeys = listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(assetStore.assets[key]));
+        const terrainUsdKeys = collectSampleTerrainUsdKeys(sample.id, allUsdKeys, variantUsdKeys);
         requestUsdImport({
           usdKey: sampleKey,
           source: "viewport-drop",
           optionOverrides: sample.defaultImportOptions?.usd,
           bundleHintPaths: sample.files,
+          variantUsdKeys,
+          terrainUsdKeys,
         });
         logInfo(`Viewport drop import request: Library sample ${sample.id} (USD)`, {
           scope: "assets",
@@ -449,11 +788,21 @@ export default function ViewportPanel() {
         if (!entry) return;
         assetStore.setUSD(payload.path);
         const sample = findLibrarySampleByWorkspaceKey(payload.path);
+        const allUsdKeys = Object.keys(assetStore.assets).filter((key) => isUsdPath(key));
+        const sampleVariantKeys = sample
+          ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(assetStore.assets[key]))
+          : [];
+        const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(payload.path)];
+        const terrainUsdKeys = sample
+          ? collectSampleTerrainUsdKeys(sample.id, allUsdKeys, variantUsdKeys)
+          : [];
         requestUsdImport({
           usdKey: payload.path,
           source: "viewport-drop",
           optionOverrides: sample?.defaultImportOptions?.usd,
           bundleHintPaths: sample?.files,
+          variantUsdKeys,
+          terrainUsdKeys,
         });
         logInfo(`Viewport drop USD import request: ${payload.path}`, { scope: "assets", data: { usdKey: payload.path } });
       }
@@ -518,23 +867,131 @@ export default function ViewportPanel() {
     };
   }, [usdDialogOptionOverrides, usdOptions]);
 
-  const confirmLoadUSD = useCallback(async (selectedOptions: UsdDialogFormOptions) => {
-    if (!usdDialogKey) return;
-    setUSD(usdDialogKey);
-    setUSDOptions(selectedOptions);
+  const usdDialogVariantOptions = useMemo(() => {
+    const cleaned = (usdDialogVariantUsdKeys ?? [])
+      .map((item) => String(item ?? "").trim())
+      .filter((item) => item.length > 0);
+    if (cleaned.length > 0) {
+      if (usdDialogKey && !cleaned.includes(usdDialogKey)) cleaned.unshift(usdDialogKey);
+      return Array.from(new Set(cleaned));
+    }
+    return usdDialogKey ? [usdDialogKey] : [];
+  }, [usdDialogKey, usdDialogVariantUsdKeys]);
+
+  const usdDialogTerrainOptions = useMemo(() => {
+    const cleaned = (usdDialogTerrainUsdKeys ?? [])
+      .map((item) => String(item ?? "").trim())
+      .filter((item) => item.length > 0);
+    return Array.from(new Set(cleaned));
+  }, [usdDialogTerrainUsdKeys]);
+
+  const confirmLoadUSD = useCallback(async (input: {
+    options: UsdDialogFormOptions;
+    usdKey: string;
+    terrainUsdKey: string | null;
+    terrainMode: UsdDialogTerrainMode;
+  }) => {
+    const selectedUsdKey = String(input.usdKey ?? "").trim();
+    if (!selectedUsdKey) return;
+    setUSD(selectedUsdKey);
+    setUSDOptions(input.options);
     closeUsdImportDialog();
     const assetStore = useAssetStore.getState();
-    await loadWorkspaceUSDIntoViewer({
-      usdKey: usdDialogKey,
+    const robotLoadResult = await loadWorkspaceUSDIntoViewer({
+      usdKey: selectedUsdKey,
       assets: assetStore.assets,
-      importOptions: selectedOptions satisfies UsdImportOptions,
-      bundleHintPaths: usdDialogBundleHintPaths ?? undefined,
+      importOptions: input.options satisfies UsdImportOptions,
+      bundleHintPaths: resolveScopedBundleHintPaths(selectedUsdKey, usdDialogBundleHintPaths),
+    });
+    if (!robotLoadResult) return;
+    const terrainUsdKey = String(input.terrainUsdKey ?? "").trim() || null;
+    const terrainMode = input.terrainMode ?? "none";
+    const preferredRobotId = useSceneStore.getState().selectedId ?? useAppStore.getState().selected?.id ?? null;
+    const restoreRobotSelection = () => {
+      if (!preferredRobotId) return;
+      const sceneState = useSceneStore.getState();
+      const robotNode = sceneState.nodes[preferredRobotId];
+      if (!robotNode) return;
+      sceneState.setSelected(preferredRobotId);
+      viewer.setSelected?.(preferredRobotId);
+      const worldPosition =
+        viewer.getObjectWorldPosition?.(preferredRobotId) ?? useAppStore.getState().selected?.position ?? { x: 0, y: 0, z: 0 };
+      setSelected({
+        id: preferredRobotId,
+        name: robotNode.name || preferredRobotId,
+        position: worldPosition,
+      });
+    };
+    const terrainAssetId: SceneAssetId | null = terrainMode === "plane" ? "floor" : null;
+    if (terrainAssetId) {
+      addSceneAsset(terrainAssetId);
+      restoreRobotSelection();
+      logInfo("Viewport terrain asset imported", {
+        scope: "assets",
+        data: {
+          terrainMode,
+          terrainAssetId,
+          robotUsdKey: selectedUsdKey,
+        },
+      });
+    } else if (terrainUsdKey && terrainUsdKey !== selectedUsdKey && (terrainMode === "usd" || terrainMode === "generator")) {
+      if (assetStore.assets[terrainUsdKey]) {
+        const terrainLoadResult = await loadWorkspaceUSDIntoViewer({
+          usdKey: terrainUsdKey,
+          assets: assetStore.assets,
+          importOptions: {
+            floatingBase: false,
+            selfCollision: false,
+          } satisfies UsdImportOptions,
+          sceneRole: "scene_asset",
+          rootName: stripFileExtension(terrainUsdKey.split("/").pop() ?? terrainUsdKey),
+          frameOnAdd: false,
+        });
+        if (!terrainLoadResult) return;
+        restoreRobotSelection();
+        logInfo("Viewport terrain USD preview imported", {
+          scope: "assets",
+          data: {
+            terrainMode,
+            terrainUsdKey,
+            robotUsdKey: selectedUsdKey,
+            rootId: terrainLoadResult.rootId,
+          },
+        });
+      } else {
+        logWarn("Viewport terrain USD preview key not found in workspace assets", {
+          scope: "assets",
+          data: {
+            terrainMode,
+            terrainUsdKey,
+            robotUsdKey: selectedUsdKey,
+          },
+        });
+      }
+    } else if (terrainMode === "generator") {
+      logInfo("Viewport terrain visualization skipped for runtime generator mode", {
+        scope: "assets",
+        data: {
+          terrainMode,
+          robotUsdKey: selectedUsdKey,
+        },
+      });
+    }
+    useTrainingImportContextStore.getState().setImportContext({
+      robotUsdKey: selectedUsdKey,
+      terrainUsdKey,
+      terrainMode,
     });
     logInfo("Viewport USD import confirmed", {
       scope: "assets",
-      data: { usdKey: usdDialogKey, options: selectedOptions },
+      data: {
+        usdKey: selectedUsdKey,
+        terrainUsdKey,
+        terrainMode,
+        options: input.options,
+      },
     });
-  }, [closeUsdImportDialog, setUSD, setUSDOptions, usdDialogBundleHintPaths, usdDialogKey]);
+  }, [closeUsdImportDialog, setSelected, setUSD, setUSDOptions, usdDialogBundleHintPaths, viewer]);
 
   const confirmLoadURDF = useCallback(async (selectedOptions: UrdfDialogFormOptions) => {
     if (!urdfDialogKey) return;
@@ -549,6 +1006,7 @@ export default function ViewportPanel() {
       assets: assetStore.assets,
       importOptions: selectedOptions,
     });
+    useTrainingImportContextStore.getState().clear();
     logInfo("Viewport URDF import confirmed", {
       scope: "assets",
       data: { urdfKey: urdfDialogKey, options: selectedOptions },
@@ -865,12 +1323,15 @@ export default function ViewportPanel() {
         )}
         {usdDialogOpen && (
           <UsdImportDialogOverlay
-            key={`${usdDialogKey ?? "usd-dialog"}-${usdDialogInitialOptions.floatingBase ? 1 : 0}-${usdDialogInitialOptions.selfCollision ? 1 : 0}`}
+            key={`${usdDialogKey ?? "usd-dialog"}-${usdDialogInitialOptions.floatingBase ? 1 : 0}-${usdDialogInitialOptions.selfCollision ? 1 : 0}-${usdDialogVariantOptions.length}-${usdDialogTerrainOptions.length}`}
             usdKey={usdDialogKey}
+            variantUsdKeys={usdDialogVariantOptions}
+            terrainUsdKeys={usdDialogTerrainOptions}
+            initialTerrainUsdKey={usdDialogSelectedTerrainUsdKey}
             initialOptions={usdDialogInitialOptions}
             onCancel={closeUsdImportDialog}
-            onConfirm={(options) => {
-              void confirmLoadUSD(options);
+            onConfirm={(input) => {
+              void confirmLoadUSD(input);
             }}
           />
         )}

@@ -20,6 +20,7 @@ import {
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
   LIBRARY_SAMPLES,
+  listLibrarySampleUsdWorkspaceKeys,
 } from "./librarySamples";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
 
@@ -79,6 +80,20 @@ const isUsdPath = (path: string) => {
   return USD_EXTS.some((ext) => lower.endsWith(ext));
 };
 
+const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
+
+function collectSampleTerrainUsdKeys(sampleId: string, allUsdKeys: string[], variantUsdKeys: string[]): string[] {
+  const prefix = `library/${sampleId}/`;
+  const blocked = new Set(variantUsdKeys.map((key) => normalizeWorkspaceFilePath(key)));
+  return Array.from(
+    new Set(
+      allUsdKeys
+        .map((key) => normalizeWorkspaceFilePath(key))
+        .filter((key) => key.startsWith(prefix) && !blocked.has(key))
+    )
+  );
+}
+
 const xacroCaption = (path: string) => (path.toLowerCase().endsWith(".xacro") ? "XACRO" : "URDF");
 
 const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
@@ -109,6 +124,19 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           top: "rgba(78, 117, 151, 0.55)",
           bottom: "rgba(32, 47, 64, 0.88)",
           caption: "PLANE",
+        },
+      },
+      {
+        id: "floor-rough",
+        label: "Rough Floor",
+        pathName: "RoughFloor",
+        description: "Adds a rough floor profile for locomotion previews.",
+        icon: "▨",
+        assetId: "floor:rough",
+        preview: {
+          top: "rgba(121, 146, 98, 0.55)",
+          bottom: "rgba(51, 68, 39, 0.88)",
+          caption: "ROUGH",
         },
       },
     ],
@@ -452,11 +480,21 @@ export default function AssetLibraryPanel() {
       const store = useAssetStore.getState();
       store.setUSD(path);
       const sample = findLibrarySampleByWorkspaceKey(path);
+      const allUsdKeys = Object.keys(store.assets).filter((key) => isUsdPath(key));
+      const sampleVariantKeys = sample
+        ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]))
+        : [];
+      const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(path)];
+      const terrainUsdKeys = sample
+        ? collectSampleTerrainUsdKeys(sample.id, allUsdKeys, variantUsdKeys)
+        : [];
       requestUsdImport({
         usdKey: path,
         source: "browser",
         optionOverrides: sample?.defaultImportOptions?.usd,
         bundleHintPaths: sample?.files,
+        variantUsdKeys,
+        terrainUsdKeys,
       });
       logInfo("Browser import request: Workspace USD", { scope: "assets", data: { usdKey: path } });
       return;
@@ -492,11 +530,16 @@ export default function AssetLibraryPanel() {
       }
 
       store.setUSD(sampleKey);
+      const allUsdKeys = Object.keys(store.assets).filter((key) => isUsdPath(key));
+      const variantUsdKeys = listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]));
+      const terrainUsdKeys = collectSampleTerrainUsdKeys(sample.id, allUsdKeys, variantUsdKeys);
       requestUsdImport({
         usdKey: sampleKey,
         source: "browser",
         optionOverrides: sample.defaultImportOptions?.usd,
         bundleHintPaths: sample.files,
+        variantUsdKeys,
+        terrainUsdKeys,
       });
       logInfo(`Browser import request: Library sample ${sample.id} (USD)`, {
         scope: "assets",

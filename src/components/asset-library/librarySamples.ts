@@ -11,6 +11,17 @@ export type LibrarySampleTrainingDefaults = {
   task: string;
 };
 
+export type LibrarySampleUsdVariant = {
+  id: string;
+  label: string;
+  entry: string;
+  description?: string;
+  bundleHintPaths?: string[];
+  trainingDefaults?: LibrarySampleTrainingDefaults;
+};
+
+export type LibrarySampleTerrainOption = "none" | "flat" | "rough" | "full_scene";
+
 export type LibrarySample = {
   id: string;
   label: string;
@@ -36,6 +47,10 @@ export type LibrarySample = {
     urdf?: Partial<UrdfImportOptions>;
     usd?: Partial<UsdImportOptions>;
   };
+  /** Optional alternate USD entries (modes/variants) for the same sample package. */
+  usdVariants?: LibrarySampleUsdVariant[];
+  /** Optional model-specific terrain options shown in the USD import dialog. */
+  terrainOptions?: LibrarySampleTerrainOption[];
   trainingDefaults?: LibrarySampleTrainingDefaults;
 };
 
@@ -72,17 +87,17 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
   {
     id: "ant",
     label: "Ant Sample",
-    description: "Isaac Lab Ant USD sample (instanceable).",
+    description: "Isaac Lab Ant USD sample.",
     kind: "usd",
-    entry: "ant_instanceable.usd",
+    entry: "ant.usd",
     files: [
       "ant-LICENSE.txt",
       "ant.usd",
       "ant_colored.usd",
-      "ant_instanceable.usd",
       "configuration/ant_colored_robot_schema.usd",
-      "configuration/ant_instanceable_robot_schema.usd",
       "configuration/ant_robot_schema.usd",
+      "terrain/flat_floor.usda",
+      "terrain/flat_scene_with_cubes.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -104,19 +119,32 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "ant_manager",
       task: "Isaac-Ant-v0",
     },
+    terrainOptions: ["none", "flat"],
+    usdVariants: [
+      {
+        id: "standard",
+        label: "Standard (default)",
+        entry: "ant.usd",
+      },
+      {
+        id: "colored",
+        label: "Colored",
+        entry: "ant_colored.usd",
+      },
+    ],
   },
   {
     id: "humanoid",
     label: "Humanoid Sample",
-    description: "Isaac Lab Humanoid USD sample (instanceable).",
+    description: "Isaac Lab Humanoid USD sample.",
     kind: "usd",
-    entry: "humanoid_instanceable.usd",
+    entry: "humanoid.usd",
     files: [
-      "configuration/humanoid_instanceable_robot_schema.usd",
       "configuration/humanoid_robot_schema.usd",
       "humanoid-LICENSE.txt",
       "humanoid.usd",
-      "humanoid_instanceable.usd",
+      "terrain/flat_floor.usda",
+      "terrain/flat_scene_with_cubes.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -138,6 +166,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "humanoid_manager",
       task: "Isaac-Humanoid-v0",
     },
+    terrainOptions: ["none", "flat"],
   },
   {
     id: "anymal_c",
@@ -187,6 +216,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "legacy/materials/thigh.jpg",
       "legacy/materials/top_shell.jpg",
       "legacy/materials/wide_angle_camera.jpg",
+      "terrain/flat_floor.usda",
+      "terrain/rough_preview.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -208,6 +239,70 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "anymal_c_manager",
       task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
+    terrainOptions: ["none", "flat", "rough"],
+    usdVariants: [
+      {
+        id: "anymal_c",
+        label: "ANYmal-C (default)",
+        entry: "anymal_c.usd",
+      },
+      {
+        id: "legacy",
+        label: "Legacy",
+        entry: "legacy/anymal.usd",
+      },
+    ],
+  },
+  {
+    id: "open_arm",
+    label: "Open Arm Sample",
+    description: "OpenArm manipulator sample with unimanual/bimanual USD variants.",
+    kind: "usd",
+    entry: "openarm_unimanual/openarm_unimanual.usd",
+    files: [
+      "openarm_unimanual/openarm_unimanual.usd",
+      "openarm_unimanual/configuration/openarm_unimanual_base.usd",
+      "openarm_unimanual/configuration/openarm_unimanual_physics.usd",
+      "openarm_unimanual/configuration/openarm_unimanual_sensor.usd",
+      "openarm_bimanual/openarm_bimanual.usd",
+      "openarm_bimanual/configuration/openarm_bimanual_base.usd",
+      "openarm_bimanual/configuration/openarm_bimanual_physics.usd",
+      "openarm_bimanual/configuration/openarm_bimanual_sensor.usd",
+      "terrain/table_scene.usda",
+    ],
+    badge: "USD",
+    importLabel: "Load sample",
+    icon: "🦾",
+    preview: {
+      top: "rgba(112, 122, 158, 0.58)",
+      bottom: "rgba(47, 57, 84, 0.92)",
+      caption: "OPEN ARM",
+    },
+    defaultImportOptions: {
+      usd: {
+        floatingBase: false,
+        selfCollision: false,
+      },
+    },
+    trainingDefaults: {
+      templateId: "isaaclab.generic.manager.v1",
+      recipeId: "isaaclab.generic.manager.v1",
+      taskTemplate: "generic_manager",
+      task: "Agent-Generic-Manager-v0",
+    },
+    terrainOptions: ["none", "full_scene"],
+    usdVariants: [
+      {
+        id: "unimanual",
+        label: "Unimanual (default)",
+        entry: "openarm_unimanual/openarm_unimanual.usd",
+      },
+      {
+        id: "bimanual",
+        label: "Bimanual",
+        entry: "openarm_bimanual/openarm_bimanual.usd",
+      },
+    ],
   },
 ];
 
@@ -219,10 +314,29 @@ export function buildLibrarySampleEntryKey(sample: LibrarySample): string {
   return `${LIBRARY_ROOT}/${sample.id}/${sample.entry}`;
 }
 
+export function listLibrarySampleUsdEntries(sample: LibrarySample): string[] {
+  if (sample.kind !== "usd") return [];
+  const entries = [
+    sample.entry,
+    ...(Array.isArray(sample.usdVariants) ? sample.usdVariants.map((variant) => variant.entry) : []),
+  ]
+    .map((entry) => normalizeLibraryFile(String(entry ?? "").trim()))
+    .filter((entry) => entry.length > 0);
+  return Array.from(new Set(entries));
+}
+
+export function listLibrarySampleUsdWorkspaceKeys(sample: LibrarySample): string[] {
+  return listLibrarySampleUsdEntries(sample).map((entry) => `${LIBRARY_ROOT}/${sample.id}/${entry}`);
+}
+
 export function findLibrarySampleKey(keys: string[], sample: LibrarySample): string | null {
   if (!keys.length) return null;
-  const entryKey = buildLibrarySampleEntryKey(sample);
-  if (keys.includes(entryKey)) return entryKey;
+  const sampleEntryKeys = sample.kind === "usd"
+    ? listLibrarySampleUsdWorkspaceKeys(sample)
+    : [buildLibrarySampleEntryKey(sample)];
+  for (const entryKey of sampleEntryKeys) {
+    if (keys.includes(entryKey)) return entryKey;
+  }
 
   const legacyKeys = sample.legacyKeys ?? [];
   for (const legacyKey of legacyKeys) {
@@ -233,10 +347,14 @@ export function findLibrarySampleKey(keys: string[], sample: LibrarySample): str
     if (bySuffix) return bySuffix;
   }
 
-  const byEntry = keys.find((key) => key.endsWith(`/${sample.entry}`));
-  if (byEntry) return byEntry;
-  const byName = keys.find((key) => key === sample.entry);
-  return byName ?? null;
+  const sampleEntries = sample.kind === "usd" ? listLibrarySampleUsdEntries(sample) : [sample.entry];
+  for (const entry of sampleEntries) {
+    const byEntry = keys.find((key) => key.endsWith(`/${entry}`));
+    if (byEntry) return byEntry;
+    const byName = keys.find((key) => key === entry);
+    if (byName) return byName;
+  }
+  return null;
 }
 
 export function findLibrarySampleByWorkspaceKey(
@@ -246,9 +364,18 @@ export function findLibrarySampleByWorkspaceKey(
   const normalized = normalizeLibraryFile(String(key ?? "").trim());
   if (!normalized) return null;
   for (const sample of samples) {
-    const entryKey = normalizeLibraryFile(buildLibrarySampleEntryKey(sample));
-    if (entryKey === normalized) return sample;
-    if (normalized === sample.entry || normalized.endsWith(`/${sample.entry}`)) return sample;
+    const entryKeys = sample.kind === "usd"
+      ? listLibrarySampleUsdWorkspaceKeys(sample)
+      : [buildLibrarySampleEntryKey(sample)];
+    for (const entryKeyRaw of entryKeys) {
+      const entryKey = normalizeLibraryFile(entryKeyRaw);
+      if (entryKey === normalized) return sample;
+    }
+
+    const sampleEntries = sample.kind === "usd" ? listLibrarySampleUsdEntries(sample) : [sample.entry];
+    for (const entry of sampleEntries) {
+      if (normalized === entry || normalized.endsWith(`/${entry}`)) return sample;
+    }
 
     const legacyKeys = sample.legacyKeys ?? [];
     for (const legacyKey of legacyKeys) {
@@ -288,10 +415,13 @@ const createFileWithRelativePath = (blob: Blob, filename: string, relativePath: 
   return file;
 };
 
-export async function fetchLibrarySampleFiles(sample: LibrarySample): Promise<File[]> {
+export async function fetchLibrarySampleFiles(sample: LibrarySample, filePaths?: string[]): Promise<File[]> {
   const baseUrl = resolveLibraryBaseUrl();
-  const uniqueFiles = new Set<string>(sample.files.map((file) => normalizeLibraryFile(file)));
-  if (!uniqueFiles.has(sample.entry)) uniqueFiles.add(sample.entry);
+  const sourcePaths =
+    Array.isArray(filePaths) && filePaths.length > 0 ? filePaths : sample.files;
+  const uniqueFiles = new Set<string>(sourcePaths.map((file) => normalizeLibraryFile(file)));
+  const normalizedEntry = normalizeLibraryFile(sample.entry);
+  if (!uniqueFiles.has(normalizedEntry)) uniqueFiles.add(normalizedEntry);
   const files = Array.from(uniqueFiles);
 
   const responses = await Promise.all(
@@ -316,9 +446,16 @@ export async function ensureLibrarySampleImported(
   assetsProvider: () => Record<string, AssetEntry>,
   importFiles: (files: File[] | FileList) => void
 ): Promise<string | null> {
-  const existingKey = findLibrarySampleKey(Object.keys(assetsProvider()), sample);
-  if (existingKey) return existingKey;
-  const files = await fetchLibrarySampleFiles(sample);
+  const assetKeys = Object.keys(assetsProvider()).map((key) => normalizeLibraryFile(key));
+  const existingKey = findLibrarySampleKey(assetKeys, sample);
+  const knownAssetKeySet = new Set(assetKeys);
+  const expectedFiles = new Set<string>(sample.files.map((file) => normalizeLibraryFile(file)));
+  expectedFiles.add(normalizeLibraryFile(sample.entry));
+  const missingFiles = Array.from(expectedFiles).filter(
+    (filePath) => !knownAssetKeySet.has(`${LIBRARY_ROOT}/${sample.id}/${filePath}`)
+  );
+  if (existingKey && missingFiles.length === 0) return existingKey;
+  const files = await fetchLibrarySampleFiles(sample, missingFiles.length > 0 ? missingFiles : undefined);
   importFiles(files);
   return findLibrarySampleKey(Object.keys(assetsProvider()), sample);
 }

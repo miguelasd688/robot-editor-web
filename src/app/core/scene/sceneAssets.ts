@@ -5,6 +5,7 @@ import { createDocId } from "./docIds";
 
 export type SceneAssetId =
   | "floor"
+  | "floor:rough"
   | "robot"
   | "link"
   | "joint"
@@ -158,6 +159,13 @@ export const sceneAssetCatalog: SceneAssetDefinition[] = [
     name: "Floor",
     description: "6m plane for grounding the scene",
     icon: "▦",
+    category: "geometry",
+  },
+  {
+    id: "floor:rough",
+    name: "Rough Floor",
+    description: "Floor with raised blocks for rough-terrain testing",
+    icon: "▨",
     category: "geometry",
   },
   {
@@ -352,6 +360,78 @@ export function createSceneAssetTree(
           },
         },
       ],
+    };
+  }
+
+  if (assetId === "floor:rough") {
+    const floorTransform = defaultTransform({
+      position: { x: 0, y: 0, z: -1.5 },
+    });
+    const basePlaneId = rootId;
+    const bumpSpecs: Array<{ x: number; y: number; z: number; sx: number; sy: number; sz: number }> = [
+      { x: -1.8, y: -1.6, z: 0.11, sx: 0.45, sy: 0.45, sz: 0.22 },
+      { x: -0.9, y: -0.9, z: 0.08, sx: 0.35, sy: 0.35, sz: 0.16 },
+      { x: 0.0, y: -1.5, z: 0.1, sx: 0.4, sy: 0.55, sz: 0.2 },
+      { x: 0.9, y: -0.8, z: 0.09, sx: 0.35, sy: 0.35, sz: 0.18 },
+      { x: 1.7, y: -1.7, z: 0.12, sx: 0.5, sy: 0.4, sz: 0.24 },
+      { x: -1.4, y: 0.2, z: 0.09, sx: 0.35, sy: 0.35, sz: 0.18 },
+      { x: -0.4, y: 0.7, z: 0.1, sx: 0.4, sy: 0.35, sz: 0.2 },
+      { x: 0.7, y: 0.4, z: 0.08, sx: 0.3, sy: 0.3, sz: 0.16 },
+      { x: 1.6, y: 0.1, z: 0.1, sx: 0.45, sy: 0.35, sz: 0.2 },
+      { x: -1.9, y: 1.6, z: 0.12, sx: 0.5, sy: 0.4, sz: 0.24 },
+      { x: -0.6, y: 1.5, z: 0.09, sx: 0.35, sy: 0.45, sz: 0.18 },
+      { x: 0.8, y: 1.4, z: 0.11, sx: 0.45, sy: 0.35, sz: 0.22 },
+      { x: 1.8, y: 1.7, z: 0.13, sx: 0.5, sy: 0.5, sz: 0.26 },
+    ];
+
+    const nodes: CreateNodeInput[] = [
+      {
+        id: basePlaneId,
+        name: "Rough Floor",
+        kind: "mesh",
+        parentId: null,
+        source: { kind: "primitive", shape: "plane" },
+        components: {
+          transform: floorTransform,
+          ...withPhysics({
+            mass: 0,
+            fixed: true,
+            useDensity: false,
+            friction: 1.2,
+            restitution: 0.0,
+            collisionsEnabled: true,
+          }),
+        },
+      },
+    ];
+
+    for (const [index, bump] of bumpSpecs.entries()) {
+      nodes.push({
+        id: createDocId(),
+        name: `Rough Bump ${index + 1}`,
+        kind: "mesh",
+        parentId: basePlaneId,
+        source: { kind: "primitive", shape: "cube" },
+        components: {
+          transform: defaultTransform({
+            position: { x: bump.x, y: bump.y, z: bump.z },
+            scale: { x: bump.sx, y: bump.sy, z: bump.sz },
+          }),
+          ...withPhysics({
+            mass: 0,
+            fixed: true,
+            useDensity: false,
+            friction: 1.2,
+            restitution: 0.0,
+            collisionsEnabled: true,
+          }),
+        },
+      });
+    }
+
+    return {
+      rootId: basePlaneId,
+      nodes,
     };
   }
 

@@ -8,6 +8,9 @@ type UsdImportDialogRequest = {
   source: UsdImportDialogSource;
   optionOverrides?: Partial<UsdImportOptions>;
   bundleHintPaths?: string[];
+  variantUsdKeys?: string[];
+  terrainUsdKeys?: string[];
+  selectedTerrainUsdKey?: string | null;
 };
 
 type UsdImportDialogState = {
@@ -16,7 +19,11 @@ type UsdImportDialogState = {
   source: UsdImportDialogSource | null;
   optionOverrides: Partial<UsdImportOptions> | null;
   bundleHintPaths: string[] | null;
+  variantUsdKeys: string[] | null;
+  terrainUsdKeys: string[] | null;
+  selectedTerrainUsdKey: string | null;
   requestImport: (request: UsdImportDialogRequest) => void;
+  setSelectedTerrainUsdKey: (usdKey: string | null) => void;
   close: () => void;
 };
 
@@ -26,6 +33,9 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
   source: null,
   optionOverrides: null,
   bundleHintPaths: null,
+  variantUsdKeys: null,
+  terrainUsdKeys: null,
+  selectedTerrainUsdKey: null,
   requestImport: (request) =>
     set({
       isOpen: true,
@@ -33,6 +43,17 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
       source: request.source,
       optionOverrides: request.optionOverrides ?? null,
       bundleHintPaths: Array.isArray(request.bundleHintPaths) ? request.bundleHintPaths : null,
+      variantUsdKeys: Array.isArray(request.variantUsdKeys)
+        ? request.variantUsdKeys.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0)
+        : null,
+      terrainUsdKeys: Array.isArray(request.terrainUsdKeys)
+        ? request.terrainUsdKeys.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0)
+        : null,
+      selectedTerrainUsdKey: request.selectedTerrainUsdKey ? String(request.selectedTerrainUsdKey).trim() : null,
+    }),
+  setSelectedTerrainUsdKey: (usdKey) =>
+    set({
+      selectedTerrainUsdKey: usdKey ? String(usdKey).trim() : null,
     }),
   close: () =>
     set({
@@ -41,5 +62,8 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
       source: null,
       optionOverrides: null,
       bundleHintPaths: null,
+      variantUsdKeys: null,
+      terrainUsdKeys: null,
+      selectedTerrainUsdKey: null,
     }),
 }));

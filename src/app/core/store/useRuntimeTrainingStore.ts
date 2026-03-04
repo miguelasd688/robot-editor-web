@@ -186,7 +186,16 @@ async function syncRemoteJobsOnce() {
     const remoteJobs = await listTrainingJobsRemote();
     useRuntimeTrainingStore.setState((current) => {
       const optimistic = current.jobs.filter((job) => optimisticJobIds.has(job.id));
-      const mergedJobs = sortJobs([...remoteJobs, ...optimistic]);
+      const existingById = new Map(current.jobs.map((job) => [job.id, job]));
+      const remoteWithContext = remoteJobs.map((job) => {
+        const existing = existingById.get(job.id);
+        if (!existing?.launchContext) return job;
+        return {
+          ...job,
+          launchContext: existing.launchContext,
+        };
+      });
+      const mergedJobs = sortJobs([...remoteWithContext, ...optimistic]);
 
       let nextRecordings = current.recordings;
       for (const job of remoteJobs) {
@@ -363,6 +372,47 @@ function isOptimisticLocalJobId(jobId: string) {
   return jobId.startsWith("local_job_");
 }
 
+function buildLaunchContextFromInput(
+  input: SubmitTrainingJobInput,
+  configValues: Record<string, unknown>
+): Record<string, unknown> {
+  const context: Record<string, unknown> = {
+    createdAt: new Date().toISOString(),
+    modelName: input.modelName,
+    dataset: input.dataset,
+    experimentName: input.experimentName ?? input.modelName,
+    envId: input.envId ?? input.dataset,
+    trainer: input.trainer ?? "rsl_rl",
+    epochs: input.epochs,
+    maxSteps: input.maxSteps ?? input.epochs,
+  };
+
+  const keysToCopy = [
+    "recipeId",
+    "executionMode",
+    "taskTemplate",
+    "task",
+    "agentId",
+    "catalogVersion",
+    "robotAssetId",
+    "sceneAssetId",
+    "baseConstraintMode",
+    "assetPipeline",
+    "environment",
+    "policy",
+    "policyRules",
+    "extraArgs",
+    "userModelMetadata",
+  ];
+  for (const key of keysToCopy) {
+    const value = configValues[key];
+    if (value === undefined) continue;
+    context[key] = value;
+  }
+
+  return context;
+}
+
 export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingState>> = create<RuntimeTrainingState>(
   (set, get) => ({
   jobs: [],
@@ -414,6 +464,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const envId = (input.envId ?? dataset).trim() || dataset;
       const trainer = input.trainer ?? "rsl_rl";
       const maxSteps = Math.max(1, Math.round(input.maxSteps ?? epochs));
+      const configObject = input.config ?? {};
+      const configValues = toObjectOrEmpty(configObject);
+      const launchContext = buildLaunchContextFromInput(input, configValues);
       const optimisticJob: TrainingJobSummary = {
         id: localId,
         modelName,
@@ -425,13 +478,12 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         loss: null,
         startedAt: now,
         updatedAt: now,
+        launchContext,
       };
 
       optimisticJobIds.add(localId);
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
-      const configObject = input.config ?? {};
-      const configValues = toObjectOrEmpty(configObject);
       const previewValues = toObjectOrEmpty(configValues.preview);
       const environmentValues = toObjectOrEmpty(configValues.environment);
       const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
@@ -500,12 +552,16 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       void submissionPromise
         .then((remoteJob) => {
           optimisticJobIds.delete(localId);
+          const enrichedRemoteJob: TrainingJobSummary = {
+            ...remoteJob,
+            launchContext,
+          };
           set((state) => {
             const withoutLocal = state.jobs.filter((job) => job.id !== localId && job.id !== remoteJob.id);
-            const merged = sortJobs([remoteJob, ...withoutLocal]);
+            const merged = sortJobs([enrichedRemoteJob, ...withoutLocal]);
             return {
               jobs: merged,
-              recordings: upsertRecordingFromCompletedJob(state.recordings, remoteJob),
+              recordings: upsertRecordingFromCompletedJob(state.recordings, enrichedRemoteJob),
             };
           });
           logInfo("Training job submitted to remote API", {
@@ -540,6 +596,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     const now = Date.now();
     const id = `job_${now}_${trainingJobCounter++}`;
     const epochs = Math.max(1, Math.round(input.epochs));
+    const launchContext = buildLaunchContextFromInput(input, toObjectOrEmpty(input.config ?? {}));
 
     const job: TrainingJobSummary = {
       id,
@@ -552,6 +609,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       loss: null,
       startedAt: now,
       updatedAt: now,
+      launchContext,
     };
 
     set((state) => ({ jobs: [job, ...state.jobs] }));

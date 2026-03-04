@@ -68,6 +68,7 @@ type MujocoState = {
   setRobotActuatorTorqueTarget: (robotId: string, joint: string, value: number) => void;
   setRobotActuatorInitialTargets: (robotId: string, targets: Record<string, number>) => void;
   setRobotActuatorConfigs: (robotId: string, configs: Record<string, JointActuatorConfig>) => void;
+  resetActuatorTargetsToInitial: (robotId?: string) => void;
   setActuatorsArmed: (armed: boolean) => void;
   getJointPositions: (names?: string[]) => Record<string, number>;
   setJointPositions: (positions: Record<string, number>) => void;
@@ -243,6 +244,12 @@ function buildZeroTargetsByRobot(registryByRobot: Record<string, ActuatorDescrip
     byRobot[robotId] = targets;
   }
   return byRobot;
+}
+
+function clampToRange(value: number, min?: number, max?: number) {
+  if (Number.isFinite(min) && value < (min as number)) return min as number;
+  if (Number.isFinite(max) && value > (max as number)) return max as number;
+  return value;
 }
 
 function applyPoseTargets(targets: Record<string, number>, preview: boolean, previewTargets?: Record<string, number>) {
@@ -562,6 +569,69 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
       }
       return { actuatorConfigsByRobot: byRobot, actuatorConfigs: merged };
     }),
+  resetActuatorTargetsToInitial: (robotId) =>
+    set((state) => {
+      const nextTargetsByRobot = cloneByRobot(state.actuatorTargetsByRobot);
+      const nextVelocityByRobot = cloneByRobot(state.actuatorVelocityTargetsByRobot);
+      const nextTorqueByRobot = cloneByRobot(state.actuatorTorqueTargetsByRobot);
+
+      const robotIds = robotId
+        ? [robotId]
+        : Array.from(
+            new Set([
+              ...Object.keys(state.actuatorRegistryByRobot),
+              ...Object.keys(nextTargetsByRobot),
+              ...Object.keys(nextVelocityByRobot),
+              ...Object.keys(nextTorqueByRobot),
+            ])
+          );
+
+      if (!robotIds.length) return {};
+
+      for (const id of robotIds) {
+        const entries = state.actuatorRegistryByRobot[id] ?? [];
+        const initialTargets = state.actuatorInitialTargetsByRobot[id] ?? {};
+        const nextTargets: Record<string, number> = {};
+        const nextVelocity: Record<string, number> = {};
+        const nextTorque: Record<string, number> = {};
+
+        for (const entry of entries) {
+          const fallback = entry.initialPosition;
+          const initial = Number.isFinite(initialTargets[entry.jointId])
+            ? (initialTargets[entry.jointId] as number)
+            : fallback;
+          const adjusted = clampToRange(initial, entry.range.min, entry.range.max);
+          nextTargets[entry.jointId] = adjusted;
+          nextVelocity[entry.jointId] = 0;
+          nextTorque[entry.jointId] = 0;
+        }
+
+        nextTargetsByRobot[id] = nextTargets;
+        nextVelocityByRobot[id] = nextVelocity;
+        nextTorqueByRobot[id] = nextTorque;
+      }
+
+      const mergedTargets = mapTargetsToMjcf(nextTargetsByRobot, state.nameMapsByRobot);
+      const mergedVelocity = mapTargetsToMjcf(nextVelocityByRobot, state.nameMapsByRobot);
+      const mergedTorque = mapTargetsToMjcf(nextTorqueByRobot, state.nameMapsByRobot);
+      const preview = shouldPreview();
+      const angularKeys = buildAngularKeySet(state.actuatorRegistryByRobot);
+      const previewTargets = preview ? convertTargetsToRadians(mergedTargets, angularKeys) : undefined;
+      applyPoseTargets(mergedTargets, preview, previewTargets);
+      for (const rt of runtimes.values()) {
+        rt.setActuatorVelocityTargets(mergedVelocity);
+        rt.setActuatorTorqueTargets(mergedTorque);
+      }
+
+      return {
+        actuatorTargetsByRobot: nextTargetsByRobot,
+        actuatorTargets: mergedTargets,
+        actuatorVelocityTargetsByRobot: nextVelocityByRobot,
+        actuatorVelocityTargets: mergedVelocity,
+        actuatorTorqueTargetsByRobot: nextTorqueByRobot,
+        actuatorTorqueTargets: mergedTorque,
+      };
+    }),
   setActuatorsArmed: (armed) => {
     set({ actuatorsArmed: armed });
     for (const rt of runtimes.values()) {
@@ -741,10 +811,6 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
               node.components?.robotModelSource ??
               (root.userData?.robotModelSource as Record<string, unknown> | undefined);
             const sourceIsCleanUsd = modelSource?.kind === "usd" && modelSource?.isDirty !== true;
-            const shouldRegenerateUrdf =
-              Boolean(sourceUrdf) ||
-              Boolean(urdfKeyForRobot) ||
-              (modelSource?.kind === "usd" && sourceIsCleanUsd !== true);
             const directMjcfSource =
               sourceIsCleanUsd && typeof root.userData?.mjcfSource === "string" && root.userData.mjcfSource.trim()
                 ? (root.userData.mjcfSource as string)
@@ -753,6 +819,13 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
               sourceIsCleanUsd && typeof root.userData?.mjcfAssetId === "string" && root.userData.mjcfAssetId.trim()
                 ? (root.userData.mjcfAssetId as string)
                 : null;
+            const hasDirectMjcf = Boolean(directMjcfSource || directMjcfKey);
+            const shouldRegenerateUrdf =
+              Boolean(sourceUrdf) ||
+              Boolean(urdfKeyForRobot) ||
+              // Dirty USD must regenerate from scene edits; clean USD can use cached MJCF directly.
+              // If cached MJCF is missing (legacy loads), regenerate as fallback.
+              (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf));
             if (shouldRegenerateUrdf) {
               try {
                 const exported = exportRobotToUrdf(doc, node.id);

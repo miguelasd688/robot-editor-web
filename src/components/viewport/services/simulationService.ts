@@ -14,6 +14,7 @@ export async function playSimulation() {
   logInfo("Simulation: play requested", { scope: "sim" });
   const ready = await ensureMujocoReady();
   if (ready) {
+    useMujocoStore.getState().resetActuatorTargetsToInitial();
     useAppStore.getState().play();
     logInfo("Simulation: playing", { scope: "sim" });
   } else {
@@ -30,6 +31,7 @@ export function pauseSimulation() {
 export async function reloadSimulation() {
   logInfo("Simulation: reload requested", { scope: "sim" });
   useAppStore.getState().pause();
+  useMujocoStore.getState().resetActuatorTargetsToInitial();
   await useMujocoStore.getState().reload();
 }
 

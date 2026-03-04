@@ -83,7 +83,7 @@ function resolveParentForAsset(doc: ReturnType<typeof editorEngine.getDoc>, asse
     return { parentId: null, parentKind: null as string | null };
   }
 
-  if (assetId === "floor") {
+  if (assetId === "floor" || assetId === "floor:rough") {
     return { parentId: null, parentKind: null as string | null };
   }
 

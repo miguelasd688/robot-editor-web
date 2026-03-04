@@ -6,10 +6,23 @@ import { useUrdfImportDialogStore } from "../../app/core/store/useUrdfImportDial
 import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialogStore";
 import { ExplorerToolbar } from "./ui/Toolbar";
 import { useWorkspaceImport } from "./services/workspaceImport";
-import { findLibrarySampleByWorkspaceKey } from "../asset-library/librarySamples";
+import { findLibrarySampleByWorkspaceKey, listLibrarySampleUsdWorkspaceKeys } from "../asset-library/librarySamples";
 
 const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
 const isUsdPath = (p: string) => USD_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(ext));
+const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
+
+function collectSampleTerrainUsdKeys(sampleId: string, allUsdKeys: string[], variantUsdKeys: string[]): string[] {
+  const prefix = `library/${sampleId}/`;
+  const blocked = new Set(variantUsdKeys.map((key) => normalizeWorkspaceFilePath(key)));
+  return Array.from(
+    new Set(
+      allUsdKeys
+        .map((key) => normalizeWorkspaceFilePath(key))
+        .filter((key) => key.startsWith(prefix) && !blocked.has(key))
+    )
+  );
+}
 
 export default function ExplorerPanel() {
   const assets = useAssetStore((s) => s.assets);
@@ -34,11 +47,21 @@ export default function ExplorerPanel() {
         return;
       }
       const sample = findLibrarySampleByWorkspaceKey(usdKey);
+      const allUsdKeys = Object.keys(assets).filter((key) => isUsdPath(key));
+      const sampleVariantKeys = sample
+        ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(assets[key]))
+        : [];
+      const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(usdKey)];
+      const terrainUsdKeys = sample
+        ? collectSampleTerrainUsdKeys(sample.id, allUsdKeys, variantUsdKeys)
+        : [];
       requestUsdImport({
         usdKey,
         source: "directories",
         optionOverrides: sample?.defaultImportOptions?.usd,
         bundleHintPaths: sample?.files,
+        variantUsdKeys,
+        terrainUsdKeys,
       });
       return;
     }

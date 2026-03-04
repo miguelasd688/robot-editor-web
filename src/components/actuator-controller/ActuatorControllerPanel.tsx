@@ -74,6 +74,7 @@ export default function ActuatorControllerPanel() {
   const setRobotActuatorVelocityTarget = useMujocoStore((s) => s.setRobotActuatorVelocityTarget);
   const setRobotActuatorTorqueTargets = useMujocoStore((s) => s.setRobotActuatorTorqueTargets);
   const setRobotActuatorTorqueTarget = useMujocoStore((s) => s.setRobotActuatorTorqueTarget);
+  const resetActuatorTargetsToInitial = useMujocoStore((s) => s.resetActuatorTargetsToInitial);
   const setRobotActuatorConfigs = useMujocoStore((s) => s.setRobotActuatorConfigs);
   const setRobotActuatorInitialTargets = useMujocoStore((s) => s.setRobotActuatorInitialTargets);
   const actuatorsArmed = useMujocoStore((s) => s.actuatorsArmed);
@@ -329,24 +330,7 @@ export default function ActuatorControllerPanel() {
 
   const handleResetTargets = () => {
     if (!selectedRobotId) return;
-    const nextTargets = { ...actuatorTargets };
-    const nextVelocity: Record<string, number> = {};
-    const nextTorque: Record<string, number> = {};
-
-    for (const entry of actuators) {
-      const fallback = entry.initialPosition;
-      const initial = Number.isFinite(actuatorInitialTargets[entry.jointId])
-        ? (actuatorInitialTargets[entry.jointId] as number)
-        : fallback;
-      const adjusted = clamp(initial, entry.range.min, entry.range.max);
-      nextTargets[entry.jointId] = adjusted;
-      nextVelocity[entry.jointId] = 0;
-      nextTorque[entry.jointId] = 0;
-    }
-
-    setRobotActuatorTargets(selectedRobotId, nextTargets);
-    setRobotActuatorVelocityTargets(selectedRobotId, nextVelocity);
-    setRobotActuatorTorqueTargets(selectedRobotId, nextTorque);
+    resetActuatorTargetsToInitial(selectedRobotId);
   };
 
   return (
