@@ -1742,6 +1742,62 @@ const attachUsdMeshSceneToRoot = (
     return null;
   };
 
+  const rebaseWorldPoseToTargetLocal = (
+    pose: {
+      position: [number, number, number];
+      quaternion: THREE.Quaternion;
+      scale: [number, number, number];
+      parentBody: string | null;
+    },
+    targetToken: string | null
+  ): {
+    position: [number, number, number];
+    quaternion: THREE.Quaternion;
+    scale: [number, number, number];
+  } => {
+    const payloadParentToken = normalizeBodyToken(pose.parentBody);
+    if (!targetToken || payloadParentToken) {
+      return {
+        position: [pose.position[0], pose.position[1], pose.position[2]],
+        quaternion: pose.quaternion.clone(),
+        scale: [pose.scale[0], pose.scale[1], pose.scale[2]],
+      };
+    }
+
+    const targetEntry = links.get(targetToken);
+    if (!targetEntry) {
+      return {
+        position: [pose.position[0], pose.position[1], pose.position[2]],
+        quaternion: pose.quaternion.clone(),
+        scale: [pose.scale[0], pose.scale[1], pose.scale[2]],
+      };
+    }
+
+    const parentObject = targetEntry.visual;
+    parentObject.updateWorldMatrix(true, false);
+    const parentInv = new THREE.Matrix4().copy(parentObject.matrixWorld).invert();
+    const worldMatrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(pose.position[0], pose.position[1], pose.position[2]),
+      pose.quaternion.clone(),
+      new THREE.Vector3(pose.scale[0], pose.scale[1], pose.scale[2])
+    );
+    const localMatrix = new THREE.Matrix4().multiplyMatrices(parentInv, worldMatrix);
+    const localPos = new THREE.Vector3();
+    const localQuat = new THREE.Quaternion();
+    const localScale = new THREE.Vector3();
+    localMatrix.decompose(localPos, localQuat, localScale);
+    if (localQuat.lengthSq() <= 1e-10) {
+      localQuat.identity();
+    } else {
+      localQuat.normalize();
+    }
+    return {
+      position: [localPos.x, localPos.y, localPos.z],
+      quaternion: localQuat,
+      scale: [localScale.x, localScale.y, localScale.z],
+    };
+  };
+
   for (const mesh of meshScene.meshes) {
     const targetToken = resolveTargetToken(mesh.parentBody, mesh.primPath);
     const targetKey = targetToken ?? "__root__";
@@ -1810,7 +1866,24 @@ const attachUsdMeshSceneToRoot = (
     const textureUrl = resolveUsdTextureUrl(mesh.baseColorTexture, options?.resolveResource);
     if (mesh.materialName || mesh.materialSource || textureUrl) materialsBound += 1;
     if (textureUrl) texturedMaterials += 1;
-    const visual = createUsdVisualMesh(mesh, { textureUrl });
+    const localPose = rebaseWorldPoseToTargetLocal(
+      {
+        position: mesh.position,
+        quaternion: mesh.quaternion,
+        scale: mesh.scale,
+        parentBody: mesh.parentBody,
+      },
+      targetToken
+    );
+    const visual = createUsdVisualMesh(
+      {
+        ...mesh,
+        position: localPose.position,
+        quaternion: localPose.quaternion,
+        scale: localPose.scale,
+      },
+      { textureUrl }
+    );
     const collision = attachCollisionProxies ? createUsdCollisionMeshFromVisual(visual) : null;
     attachPair(visual, collision, targetToken);
     targetsWithMeshVisual.add(targetKey);
@@ -1833,7 +1906,24 @@ const attachUsdMeshSceneToRoot = (
     const textureUrl = resolveUsdTextureUrl(primitive.baseColorTexture, options?.resolveResource);
     if (primitive.materialName || primitive.materialSource || textureUrl) materialsBound += 1;
     if (textureUrl) texturedMaterials += 1;
-    const visualPrimitive = createUsdVisualPrimitive(primitive, { textureUrl });
+    const localPose = rebaseWorldPoseToTargetLocal(
+      {
+        position: primitive.position,
+        quaternion: primitive.quaternion,
+        scale: primitive.scale,
+        parentBody: primitive.parentBody,
+      },
+      targetToken
+    );
+    const visualPrimitive = createUsdVisualPrimitive(
+      {
+        ...primitive,
+        position: localPose.position,
+        quaternion: localPose.quaternion,
+        scale: localPose.scale,
+      },
+      { textureUrl }
+    );
     if (!visualPrimitive) continue;
     const collisionPrimitive = attachCollisionProxies ? createUsdCollisionMeshFromVisual(visualPrimitive) : null;
     attachPair(visualPrimitive, collisionPrimitive, targetToken);

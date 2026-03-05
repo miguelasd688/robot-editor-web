@@ -5,6 +5,7 @@ const BROWSER_ITEM_PREVIEW_IMAGES: Record<string, string> = {
   "robot-sample-ant": "/browser-previews/robots/ant.webp",
   "robot-sample-humanoid": "/browser-previews/robots/humanoid.webp",
   "robot-sample-anymal_c": "/browser-previews/robots/anymal-c.webp",
+  "robot-sample-ur10": "/browser-previews/robots/ur10.png",
   "robot-sample-open_arm": "/browser-previews/robots/open-arm.webp",
   "link-cube": "/browser-previews/links/cube-link.png",
   "link-sphere": "/browser-previews/links/sphere-link.png",
@@ -16,6 +17,7 @@ const LIBRARY_SAMPLE_PREVIEW_IMAGES: Record<string, string> = {
   ant: "/browser-previews/robots/ant.webp",
   humanoid: "/browser-previews/robots/humanoid.webp",
   anymal_c: "/browser-previews/robots/anymal-c.webp",
+  ur10: "/browser-previews/robots/ur10.png",
   open_arm: "/browser-previews/robots/open-arm.webp",
 };
 

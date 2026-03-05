@@ -13,7 +13,7 @@ import { useBrowserPreviewStore } from "../../app/core/store/useBrowserPreviewSt
 import { loadWorkspaceURDFIntoViewer } from "../../app/core/loaders/urdfLoader";
 import { loadWorkspaceUSDIntoViewer } from "../../app/core/loaders/usdLoader";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
-import { logInfo } from "../../app/core/services/logger";
+import { logInfo, logWarn } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import { isUrdfLikePath } from "../../app/core/urdf/urdfFileTypes";
 import { DarkSelect } from "../../app/ui/DarkSelect";
@@ -555,6 +555,7 @@ export default function ViewportPanel() {
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
   const [snapActive, setSnapActive] = useState(false);
   const [simFps, setSimFps] = useState<number | null>(null);
+  const [viewerInitError, setViewerInitError] = useState<string | null>(null);
   const fpsAccumRef = useRef({ elapsedSec: 0, frames: 0 });
   const fpsLastFrameRef = useRef<number | null>(null);
   const handleDebugChange = useCallback(
@@ -1030,98 +1031,123 @@ export default function ViewportPanel() {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+    setViewerInitError(null);
+    let unsubscribeDoc: (() => void) | null = null;
+    let ro: ResizeObserver | null = null;
 
-    viewer.init(canvas, {
-      onPick: (pick) => {
-        if (!pick) {
-          viewer.setSelected?.(null);
-          setSelected(null);
-          setSceneSelected(null);
-          return;
-        }
-        viewer.setSelected?.(pick.id);
-        setSelected(pick);
-        setSceneSelected(pick.id);
-      },
-      onTransformDragging: (dragging) => {
-        setTransformDragging(dragging);
-      },
-      onTransformChange: (id) => {
-        if (useAppStore.getState().simState === "playing") return;
-        adapterRef.current?.syncTransformFromViewer(id, { recordHistory: false });
-      },
-      onTransformEnd: (id) => {
-        if (useAppStore.getState().simState === "playing") return;
-        useMujocoStore.getState().markSceneDirty();
-        if (id) adapterRef.current?.syncTransformFromViewer(id, { recordHistory: true });
-      },
-      onPointerDown: (event) => {
-        if (useAppStore.getState().simState !== "playing") return false;
-        if (!event.altKey) return false;
-        if (!event.ray) return false;
+    try {
+      viewer.init(canvas, {
+        onPick: (pick) => {
+          if (!pick) {
+            viewer.setSelected?.(null);
+            setSelected(null);
+            setSceneSelected(null);
+            return;
+          }
+          viewer.setSelected?.(pick.id);
+          setSelected(pick);
+          setSceneSelected(pick.id);
+        },
+        onTransformDragging: (dragging) => {
+          setTransformDragging(dragging);
+        },
+        onTransformChange: (id) => {
+          if (useAppStore.getState().simState === "playing") return;
+          adapterRef.current?.syncTransformFromViewer(id, { recordHistory: false });
+        },
+        onTransformEnd: (id) => {
+          if (useAppStore.getState().simState === "playing") return;
+          useMujocoStore.getState().markSceneDirty();
+          if (id) adapterRef.current?.syncTransformFromViewer(id, { recordHistory: true });
+        },
+        onPointerDown: (event) => {
+          if (useAppStore.getState().simState !== "playing") return false;
+          if (!event.altKey) return false;
+          if (!event.ray) return false;
 
-        const depth = Number.isFinite(event.pick?.distance)
-          ? Math.max(0.2, Math.min(50, event.pick?.distance ?? 2.5))
-          : 2.5;
-        const startPoint = event.pick?.point ?? pointerPointFromRay(event.ray, depth);
-        const mode = useMujocoStore.getState().beginPointerInteraction(event.pick?.id ?? null, startPoint);
-        if (mode === "none") return false;
+          const depth = Number.isFinite(event.pick?.distance)
+            ? Math.max(0.2, Math.min(50, event.pick?.distance ?? 2.5))
+            : 2.5;
+          const startPoint = event.pick?.point ?? pointerPointFromRay(event.ray, depth);
+          const mode = useMujocoStore.getState().beginPointerInteraction(event.pick?.id ?? null, startPoint);
+          if (mode === "none") return false;
 
-        pointerInteractionRef.current = { pointerId: event.pointerId, depth };
-        viewer.setOrbitEnabled(false);
-        useMujocoStore.getState().updatePointerTarget(startPoint);
-        return true;
-      },
-      onPointerMove: (event) => {
-        const active = pointerInteractionRef.current;
-        if (!active) return;
-        if (active.pointerId !== event.pointerId) return;
-        if (!event.ray) return;
-        const nextPoint = pointerPointFromRay(event.ray, active.depth);
-        useMujocoStore.getState().updatePointerTarget(nextPoint);
-      },
-      onPointerUp: (event) => {
-        const active = pointerInteractionRef.current;
-        if (!active || active.pointerId !== event.pointerId) return;
-        pointerInteractionRef.current = null;
-        useMujocoStore.getState().endPointerInteraction();
-        viewer.setOrbitEnabled(true);
-        viewer.setPointerSpringVisual(null);
-      },
-      onPointerCancel: (event) => {
-        const active = pointerInteractionRef.current;
-        if (!active || active.pointerId !== event.pointerId) return;
-        pointerInteractionRef.current = null;
-        useMujocoStore.getState().endPointerInteraction();
-        viewer.setOrbitEnabled(true);
-        viewer.setPointerSpringVisual(null);
-      },
-    });
-    setViewer(viewer);
-    adapterRef.current = new ThreeSceneAdapter(editorEngine, viewer);
-    setThreeAdapter(adapterRef.current);
-    adapterRef.current.applyDoc(editorEngine.getDoc(), { reason: "viewport:init" });
-    const unsubscribeDoc = editorEngine.on("doc:changed", (event) => {
-      adapterRef.current?.applyDoc(event.doc, { reason: event.reason });
-    });
+          pointerInteractionRef.current = { pointerId: event.pointerId, depth };
+          viewer.setOrbitEnabled(false);
+          useMujocoStore.getState().updatePointerTarget(startPoint);
+          return true;
+        },
+        onPointerMove: (event) => {
+          const active = pointerInteractionRef.current;
+          if (!active) return;
+          if (active.pointerId !== event.pointerId) return;
+          if (!event.ray) return;
+          const nextPoint = pointerPointFromRay(event.ray, active.depth);
+          useMujocoStore.getState().updatePointerTarget(nextPoint);
+        },
+        onPointerUp: (event) => {
+          const active = pointerInteractionRef.current;
+          if (!active || active.pointerId !== event.pointerId) return;
+          pointerInteractionRef.current = null;
+          useMujocoStore.getState().endPointerInteraction();
+          viewer.setOrbitEnabled(true);
+          viewer.setPointerSpringVisual(null);
+        },
+        onPointerCancel: (event) => {
+          const active = pointerInteractionRef.current;
+          if (!active || active.pointerId !== event.pointerId) return;
+          pointerInteractionRef.current = null;
+          useMujocoStore.getState().endPointerInteraction();
+          viewer.setOrbitEnabled(true);
+          viewer.setPointerSpringVisual(null);
+        },
+      });
+      setViewer(viewer);
+      adapterRef.current = new ThreeSceneAdapter(editorEngine, viewer);
+      setThreeAdapter(adapterRef.current);
+      adapterRef.current.applyDoc(editorEngine.getDoc(), { reason: "viewport:init" });
+      unsubscribeDoc = editorEngine.on("doc:changed", (event) => {
+        adapterRef.current?.applyDoc(event.doc, { reason: event.reason });
+      });
 
-    const ro = new ResizeObserver(() => {
-      const r = container.getBoundingClientRect();
-      viewer.resize(r.width, r.height);
-    });
-    ro.observe(container);
+      ro = new ResizeObserver(() => {
+        const r = container.getBoundingClientRect();
+        viewer.resize(r.width, r.height);
+      });
+      ro.observe(container);
 
-    const r0 = container.getBoundingClientRect();
-    viewer.resize(r0.width, r0.height);
+      const r0 = container.getBoundingClientRect();
+      viewer.resize(r0.width, r0.height);
 
-    const mujoco = useMujocoStore.getState();
-    if (!mujoco.isLoading && (!mujoco.isReady || mujoco.isDirty)) {
-      void mujoco.reload();
+      const mujoco = useMujocoStore.getState();
+      if (!mujoco.isLoading && (!mujoco.isReady || mujoco.isDirty)) {
+        void mujoco.reload();
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error ?? "unknown");
+      const webglBlocked = reason.toLowerCase().includes("webgl");
+      setViewerInitError(
+        webglBlocked
+          ? "WebGL no esta disponible en esta sesion del navegador. Activa aceleracion por hardware o prueba otro navegador."
+          : `No se pudo iniciar el visor: ${reason}`
+      );
+      logWarn("Viewport init failed", {
+        scope: "viewer",
+        data: { reason },
+      });
+      adapterRef.current = null;
+      setThreeAdapter(null);
+      pointerInteractionRef.current = null;
+      useMujocoStore.getState().endPointerInteraction();
+      viewer.dispose();
+      setViewer(null);
+      setTransformDragging(false);
+      return;
     }
 
     return () => {
-      ro.disconnect();
-      unsubscribeDoc();
+      ro?.disconnect();
+      unsubscribeDoc?.();
       adapterRef.current = null;
       setThreeAdapter(null);
       pointerInteractionRef.current = null;
@@ -1196,6 +1222,26 @@ export default function ViewportPanel() {
         onDrop={onViewportDrop}
       >
         <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+        {viewerInitError && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 12,
+              borderRadius: 10,
+              border: "1px solid rgba(255,150,140,0.48)",
+              background: "rgba(34,8,8,0.84)",
+              color: "rgba(255,238,234,0.94)",
+              padding: 12,
+              display: "grid",
+              gap: 8,
+              alignContent: "start",
+              zIndex: 35,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Viewer unavailable</div>
+            <div style={{ fontSize: 12, lineHeight: 1.4 }}>{viewerInitError}</div>
+          </div>
+        )}
         {dropActive && (
           <div
             style={{
