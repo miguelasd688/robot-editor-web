@@ -10,6 +10,7 @@ export type LibrarySampleTrainingDefaults = {
   recipeId: string;
   taskTemplate: string;
   task: string;
+  ikModelId?: string;
 };
 
 export type LibrarySampleUsdVariant = {
@@ -256,7 +257,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
   {
     id: "ur10",
     label: "UR10 Sample",
-    description: "Isaac Lab UR10 manipulation sample with reach variants.",
+    description: "Isaac Lab UR10 sample with Reach manager and original cube-stack IK manager variants.",
     kind: "usd",
     entry: "ur10.usd",
     files: [
@@ -316,6 +317,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
           recipeId: "isaaclab.ur10.reach.manager.v1",
           taskTemplate: "ur10_reach_manager",
           task: "Isaac-Reach-UR10-v0",
+          ikModelId: "none",
         },
       },
       {
@@ -323,10 +325,11 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
         label: "Long suction",
         entry: "Legacy/ur10_long_suction.usd",
         trainingDefaults: {
-          templateId: "isaaclab.ur10.reach.manager.v1",
-          recipeId: "isaaclab.ur10.reach.manager.v1",
-          taskTemplate: "ur10_reach_manager",
-          task: "Isaac-Reach-UR10-v0",
+          templateId: "isaaclab.ur10.stack_ik.manager.v1",
+          recipeId: "isaaclab.ur10.stack_ik.manager.v1",
+          taskTemplate: "ur10_stack_ik_manager",
+          task: "Agent-Stack-Cube-UR10-Long-Suction-IK-Rel-v0",
+          ikModelId: "native_stack_ik",
         },
       },
       {
@@ -334,10 +337,11 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
         label: "Short suction",
         entry: "Legacy/ur10_short_suction.usd",
         trainingDefaults: {
-          templateId: "isaaclab.ur10.reach.manager.v1",
-          recipeId: "isaaclab.ur10.reach.manager.v1",
-          taskTemplate: "ur10_reach_manager",
-          task: "Isaac-Reach-UR10-v0",
+          templateId: "isaaclab.ur10.stack_ik.manager.v1",
+          recipeId: "isaaclab.ur10.stack_ik.manager.v1",
+          taskTemplate: "ur10_stack_ik_manager",
+          task: "Agent-Stack-Cube-UR10-Short-Suction-IK-Rel-v0",
+          ikModelId: "native_stack_ik",
         },
       },
     ],

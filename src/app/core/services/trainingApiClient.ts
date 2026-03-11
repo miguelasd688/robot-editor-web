@@ -372,9 +372,7 @@ export type TrainingPreviewMeta = {
   warning?: string;
 };
 
-export type TrainingRecordingMeta = {
-  jobId: string;
-  runnerJobId: string | null;
+export type TrainingRecordingViewMeta = {
   available: boolean;
   updatedAt: string;
   sizeBytes?: number;
@@ -407,6 +405,15 @@ export type TrainingRecordingMeta = {
   previewSource?: string;
   unavailableReason?: string;
   warning?: string;
+};
+
+export type TrainingRecordingMeta = {
+  jobId: string;
+  runnerJobId: string | null;
+} & TrainingRecordingViewMeta & {
+  defaultViewId?: string;
+  viewOrder?: string[];
+  views?: Record<string, TrainingRecordingViewMeta>;
 };
 
 const rawBaseUrl = String(import.meta.env.VITE_TRAINING_API_BASE_URL ?? "").trim();
@@ -547,7 +554,7 @@ export async function getTrainingRecordingMetaRemote(jobId: string): Promise<Tra
 
 export async function getTrainingRecordingLatestRemote(
   jobId: string,
-  options?: { clipIndex?: number; state?: string }
+  options?: { clipIndex?: number; state?: string; view?: string }
 ): Promise<Blob> {
   const params = new URLSearchParams();
   const clipIndex = Number(options?.clipIndex);
@@ -557,6 +564,10 @@ export async function getTrainingRecordingLatestRemote(
   const state = String(options?.state ?? "").trim();
   if (state) {
     params.set("state", state);
+  }
+  const view = String(options?.view ?? "").trim();
+  if (view) {
+    params.set("view", view);
   }
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/recording/latest${suffix}`), {
