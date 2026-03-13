@@ -416,6 +416,14 @@ export type TrainingRecordingMeta = {
   views?: Record<string, TrainingRecordingViewMeta>;
 };
 
+export type TrainingMetricsSseEvent = {
+  jobId: string;
+  runnerJobId?: string | null;
+  step: number;
+  metrics: Record<string, unknown>;
+  occurredAt?: string;
+};
+
 const rawBaseUrl = String(import.meta.env.VITE_TRAINING_API_BASE_URL ?? "").trim();
 const baseUrl = rawBaseUrl.replace(/\/+$/, "");
 const rawApiToken = String(import.meta.env.VITE_TRAINING_API_TOKEN ?? "").trim();
@@ -485,9 +493,9 @@ export async function listTrainingArtifactsRemote(
   kind?: TrainingArtifactKind
 ): Promise<TrainingArtifactSummary[]> {
   const params = new URLSearchParams();
-  params.set("jobId", jobId);
   if (kind) params.set("kind", kind);
-  const response = await fetch(buildUrl(`/v1/artifacts?${params.toString()}`), {
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/artifacts${suffix}`), {
     method: "GET",
     headers: buildHeaders({ accept: "application/json" }),
   });
@@ -498,7 +506,7 @@ export async function listTrainingArtifactsRemote(
 export async function listTrainingJobEventsRemote(jobId: string, limit = 100): Promise<TrainingJobEventSummary[]> {
   const bounded = Math.min(Math.max(1, Math.round(limit)), 20_000);
   const response = await fetch(
-    buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/events?limit=${bounded}`),
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/events?limit=${bounded}`),
     {
       method: "GET",
       headers: buildHeaders({ accept: "application/json" }),
@@ -511,7 +519,7 @@ export async function listTrainingJobEventsRemote(jobId: string, limit = 100): P
 export async function getTrainingRunnerLogsRemote(jobId: string, tail = 250): Promise<TrainingRunnerLogsSummary> {
   const bounded = Math.min(Math.max(20, Math.round(tail)), 2000);
   const response = await fetch(
-    buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/runner-logs?tail=${bounded}`),
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/runner-logs?tail=${bounded}`),
     {
       method: "GET",
       headers: buildHeaders({ accept: "application/json" }),
@@ -521,7 +529,7 @@ export async function getTrainingRunnerLogsRemote(jobId: string, tail = 250): Pr
 }
 
 export async function getTrainingPreviewMetaRemote(jobId: string): Promise<TrainingPreviewMeta> {
-  const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/preview/meta`), {
+  const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/preview/meta`), {
     method: "GET",
     headers: buildHeaders({ accept: "application/json" }),
   });
@@ -531,8 +539,8 @@ export async function getTrainingPreviewMetaRemote(jobId: string): Promise<Train
 export async function getTrainingPreviewFrameRemote(jobId: string, step?: number): Promise<Blob> {
   const path =
     typeof step === "number" && Number.isFinite(step)
-      ? `/v1/debug/jobs/${encodeURIComponent(jobId)}/preview/frame/${Math.max(1, Math.round(step))}.svg`
-      : `/v1/debug/jobs/${encodeURIComponent(jobId)}/preview/latest.svg`;
+      ? `/v1/training/jobs/${encodeURIComponent(jobId)}/preview/frame/${Math.max(1, Math.round(step))}.svg`
+      : `/v1/training/jobs/${encodeURIComponent(jobId)}/preview/latest.svg`;
   const response = await fetch(buildUrl(path), {
     method: "GET",
     headers: buildHeaders({ accept: "image/svg+xml" }),
@@ -545,7 +553,7 @@ export async function getTrainingPreviewFrameRemote(jobId: string, step?: number
 }
 
 export async function getTrainingRecordingMetaRemote(jobId: string): Promise<TrainingRecordingMeta> {
-  const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/recording/meta`), {
+  const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/meta`), {
     method: "GET",
     headers: buildHeaders({ accept: "application/json" }),
   });
@@ -570,7 +578,7 @@ export async function getTrainingRecordingLatestRemote(
     params.set("view", view);
   }
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(buildUrl(`/v1/debug/jobs/${encodeURIComponent(jobId)}/recording/latest${suffix}`), {
+  const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/latest${suffix}`), {
     method: "GET",
     headers: buildHeaders({ accept: "video/*,application/octet-stream" }),
   });

@@ -248,7 +248,7 @@ When `VITE_TRAINING_API_BASE_URL` is set, runtime plugins use the remote control
 - Training panel:
   - launch/cancel jobs
   - live status/progress
-  - job inspector with artifacts (`/v1/artifacts`) and events (`/v1/debug/jobs/{jobId}/events`)
+  - job inspector with canonical job-detail routes (`/v1/training/jobs/{jobId}/artifacts`, `/v1/training/jobs/{jobId}/events`, `/v1/training/jobs/{jobId}/runner-logs`)
 - Recordings panel:
   - completed runs and derived quality metrics
   - `Resolve video` / `Open video` using artifact kind `video`

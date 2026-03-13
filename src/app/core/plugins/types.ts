@@ -70,6 +70,7 @@ export type TrainingRunnerLogsSummary = {
 export type TrainingRecordingSummary = {
   id: string;
   jobId: string;
+  tenantId?: string;
   title: string;
   createdAt: number;
   previewUrl: string | null;
@@ -83,6 +84,7 @@ export type PluginHostAPI = {
   training: {
     submitJob: (input: SubmitTrainingJobInput) => string;
     cancelJob: (jobId: string) => void;
+    deleteJob: (jobId: string, tenantId?: string) => void;
     startJobSync: () => () => void;
     getJobs: () => TrainingJobSummary[];
     getRecordings: () => TrainingRecordingSummary[];
