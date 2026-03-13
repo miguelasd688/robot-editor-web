@@ -11,6 +11,7 @@ export const pluginHostApi: PluginHostAPI = {
   training: {
     submitJob: (input) => useRuntimeTrainingStore.getState().submitTrainingJob(input),
     cancelJob: (jobId) => useRuntimeTrainingStore.getState().cancelTrainingJob(jobId),
+    startJobSync: () => useRuntimeTrainingStore.getState().startRemoteJobSync(),
     getJobs: () => useRuntimeTrainingStore.getState().jobs.map((job) => ({ ...job })),
     getRecordings: () => useRuntimeTrainingStore.getState().recordings.map((recording) => ({ ...recording })),
     getTrainingTokens: () => useRuntimeTrainingStore.getState().trainingTokens,

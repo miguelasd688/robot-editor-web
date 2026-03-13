@@ -26,6 +26,7 @@ type RuntimeTrainingState = {
   recordings: TrainingRecordingSummary[];
   trainingTokens: number;
   trainingTokenCost: number;
+  startRemoteJobSync: () => () => void;
   submitTrainingJob: (input: SubmitTrainingJobInput) => string;
   cancelTrainingJob: (jobId: string) => void;
   listTrainingArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
@@ -36,6 +37,7 @@ type RuntimeTrainingState = {
 const runningIntervals = new Map<string, number>();
 const optimisticJobIds = new Set<string>();
 let remotePollingTimer: number | null = null;
+let remoteSyncConsumerCount = 0;
 let remoteSyncInFlight = false;
 let trainingJobCounter = 0;
 let recordingCounter = 0;
@@ -219,12 +221,40 @@ async function syncRemoteJobsOnce() {
 
 function ensureRemotePolling() {
   if (!trainingApiEnabled) return;
-  if (remotePollingTimer !== null) return;
+  if (remotePollingTimer !== null || remoteSyncConsumerCount <= 0) return;
 
   void syncRemoteJobsOnce();
   remotePollingTimer = window.setInterval(() => {
     void syncRemoteJobsOnce();
   }, 2000);
+}
+
+function stopRemotePollingIfIdle() {
+  if (remoteSyncConsumerCount > 0) return;
+  if (remotePollingTimer === null) return;
+  window.clearInterval(remotePollingTimer);
+  remotePollingTimer = null;
+}
+
+function requestRemoteJobsSyncOnce() {
+  if (!trainingApiEnabled) return;
+  void syncRemoteJobsOnce();
+}
+
+function startRemoteJobSyncSession() {
+  if (!trainingApiEnabled) return () => {};
+
+  remoteSyncConsumerCount += 1;
+  ensureRemotePolling();
+  requestRemoteJobsSyncOnce();
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    remoteSyncConsumerCount = Math.max(0, remoteSyncConsumerCount - 1);
+    stopRemotePollingIfIdle();
+  };
 }
 
 function clearTrainingTimer(jobId: string) {
@@ -419,6 +449,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
   recordings: [],
   trainingTokens: initialTrainingTokens,
   trainingTokenCost: trainingTokenCost,
+  startRemoteJobSync: () => {
+    return startRemoteJobSyncSession();
+  },
 
   submitTrainingJob: (input) => {
     const modelName = input.modelName.trim() || "default-model";
@@ -455,7 +488,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     }));
 
     if (trainingApiEnabled) {
-      ensureRemotePolling();
+      requestRemoteJobsSyncOnce();
 
       const now = Date.now();
       const localId = `local_job_${now}_${trainingJobCounter++}`;
@@ -568,7 +601,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             scope: "runtime-training",
             data: { localId, remoteId: remoteJob.id },
           });
-          void syncRemoteJobsOnce();
+          requestRemoteJobsSyncOnce();
         })
         .catch((error) => {
           optimisticJobIds.delete(localId);
@@ -666,7 +699,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           });
         })
         .finally(() => {
-          void syncRemoteJobsOnce();
+          requestRemoteJobsSyncOnce();
         });
       return;
     }

@@ -83,6 +83,7 @@ export type PluginHostAPI = {
   training: {
     submitJob: (input: SubmitTrainingJobInput) => string;
     cancelJob: (jobId: string) => void;
+    startJobSync: () => () => void;
     getJobs: () => TrainingJobSummary[];
     getRecordings: () => TrainingRecordingSummary[];
     getTrainingTokens: () => number;
