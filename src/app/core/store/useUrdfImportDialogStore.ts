@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { UrdfImportOptions } from "../urdf/urdfImportOptions";
+import { useDockStore } from "./useDockStore";
 
 type UrdfImportDialogSource = "directories" | "browser" | "viewport-drop";
 
@@ -23,13 +24,15 @@ export const useUrdfImportDialogStore = create<UrdfImportDialogState>((set) => (
   urdfKey: null,
   source: null,
   optionOverrides: null,
-  requestImport: (request) =>
+  requestImport: (request) => {
+    useDockStore.getState().revealPanel("viewport", "main");
     set({
       isOpen: true,
       urdfKey: request.urdfKey,
       source: request.source,
       optionOverrides: request.optionOverrides ?? null,
-    }),
+    });
+  },
   close: () =>
     set({
       isOpen: false,

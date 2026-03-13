@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { UsdImportOptions } from "../usd/usdImportOptions";
+import { useDockStore } from "./useDockStore";
 
 type UsdImportDialogSource = "directories" | "browser" | "viewport-drop";
 
@@ -36,7 +37,8 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
   variantUsdKeys: null,
   terrainUsdKeys: null,
   selectedTerrainUsdKey: null,
-  requestImport: (request) =>
+  requestImport: (request) => {
+    useDockStore.getState().revealPanel("viewport", "main");
     set({
       isOpen: true,
       usdKey: request.usdKey,
@@ -50,7 +52,8 @@ export const useUsdImportDialogStore = create<UsdImportDialogState>((set) => ({
         ? request.terrainUsdKeys.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0)
         : null,
       selectedTerrainUsdKey: request.selectedTerrainUsdKey ? String(request.selectedTerrainUsdKey).trim() : null,
-    }),
+    });
+  },
   setSelectedTerrainUsdKey: (usdKey) =>
     set({
       selectedTerrainUsdKey: usdKey ? String(usdKey).trim() : null,

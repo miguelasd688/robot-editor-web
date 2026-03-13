@@ -11,6 +11,7 @@ type DockState = {
   initialized: boolean;
 
   setActive: (dock: DockId, panel: PanelId) => void;
+  revealPanel: (panel: PanelId, preferredDock?: DockId) => void;
 
   initFromPanels: (panels: Array<{ id: PanelId; defaultDock?: DockId }>) => void;
   openPanel: (dock: DockId, panel: PanelId) => void;
@@ -60,6 +61,15 @@ export const useDockStore = create<DockState>((set, get) => ({
       if (!area.tabs.includes(panel)) return s;
       return { areas: { ...s.areas, [dock]: { ...area, active: panel } } };
     }),
+
+  revealPanel: (panel, preferredDock = "main") => {
+    const opened = get().isOpen(panel);
+    if (opened) {
+      get().setActive(opened.dock, panel);
+      return;
+    }
+    get().openPanel(preferredDock, panel);
+  },
 
   initFromPanels: (panels) =>
     set((s) => {
