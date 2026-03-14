@@ -6,6 +6,7 @@ import type { JointActuatorConfig } from "../../app/core/physics/mujoco/MujocoRu
 import type { UrdfJoint } from "../../app/core/urdf/urdfModel";
 import { editorEngine } from "../../app/core/editor/engineSingleton";
 import { DarkSelect } from "../../app/ui/DarkSelect";
+import { NumericInputField } from "../../app/ui/NumericInputField";
 import { formatSignificant } from "../../app/ui/numberFormat";
 
 const EMPTY_TARGETS: Record<string, number> = {};
@@ -20,7 +21,7 @@ const ACTUATOR_TYPES = ["position", "velocity", "torque", "muscle"] as const;
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
-type RangeEditState = { jointId: string; field: "min" | "max"; value: string };
+type RangeEditState = { jointId: string; field: "min" | "max"; value: number };
 
 export default function ActuatorControllerPanel() {
   const sceneNodes = useSceneStore((s) => s.nodes);
@@ -142,7 +143,7 @@ export default function ActuatorControllerPanel() {
   };
 
   const beginRangeEdit = (jointId: string, field: "min" | "max", current: number) => {
-    setRangeEdit({ jointId, field, value: String(current) });
+    setRangeEdit({ jointId, field, value: current });
   };
 
   const cancelRangeEdit = () => setRangeEdit(null);
@@ -150,11 +151,7 @@ export default function ActuatorControllerPanel() {
   const commitRangeEdit = (entry: (typeof actuators)[number]) => {
     if (!rangeEdit) return;
     if (rangeEdit.jointId !== entry.jointId) return;
-    const nextValue = Number(rangeEdit.value);
-    if (!Number.isFinite(nextValue)) {
-      setRangeEdit(null);
-      return;
-    }
+    const nextValue = rangeEdit.value;
 
     const limitValue = entry.angular ? nextValue * DEG2RAD : nextValue;
 
@@ -519,11 +516,12 @@ export default function ActuatorControllerPanel() {
                   ) : (
                     <>
                       {rangeEdit?.jointId === entry.jointId && rangeEdit.field === "min" ? (
-                        <input
-                          type="number"
+                        <NumericInputField
                           step={0.001}
                           value={rangeEdit.value}
-                          onChange={(e) => setRangeEdit((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+                          onChange={(nextValue) =>
+                            setRangeEdit((prev) => (prev ? { ...prev, value: nextValue } : prev))
+                          }
                           onBlur={() => commitRangeEdit(entry)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") commitRangeEdit(entry);
@@ -540,6 +538,8 @@ export default function ActuatorControllerPanel() {
                             color: "rgba(255,255,255,0.9)",
                             fontSize: 10,
                           }}
+                          containerStyle={{ display: "block" }}
+                          ariaLabel={`lower limit ${entry.jointName}`}
                         />
                       ) : (
                         <span
@@ -552,11 +552,12 @@ export default function ActuatorControllerPanel() {
                       )}
                       <span>→</span>
                       {rangeEdit?.jointId === entry.jointId && rangeEdit.field === "max" ? (
-                        <input
-                          type="number"
+                        <NumericInputField
                           step={0.001}
                           value={rangeEdit.value}
-                          onChange={(e) => setRangeEdit((prev) => (prev ? { ...prev, value: e.target.value } : prev))}
+                          onChange={(nextValue) =>
+                            setRangeEdit((prev) => (prev ? { ...prev, value: nextValue } : prev))
+                          }
                           onBlur={() => commitRangeEdit(entry)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") commitRangeEdit(entry);
@@ -573,6 +574,8 @@ export default function ActuatorControllerPanel() {
                             color: "rgba(255,255,255,0.9)",
                             fontSize: 10,
                           }}
+                          containerStyle={{ display: "block" }}
+                          ariaLabel={`upper limit ${entry.jointName}`}
                         />
                       ) : (
                         <span
@@ -611,13 +614,12 @@ export default function ActuatorControllerPanel() {
                         onChange={(e) => handleChange(Number(e.target.value))}
                       />
                     )}
-                    <input
-                      type="number"
+                    <NumericInputField
                       step={0.001}
                       min={hasPositionLimits ? entry.range.min : undefined}
                       max={hasPositionLimits ? entry.range.max : undefined}
                       value={safeTarget}
-                      onChange={(e) => handleChange(Number(e.target.value))}
+                      onChange={handleChange}
                       style={{
                         height: 26,
                         padding: "0 6px",
@@ -627,6 +629,8 @@ export default function ActuatorControllerPanel() {
                         color: "rgba(255,255,255,0.9)",
                         fontSize: 12,
                       }}
+                      containerStyle={{ display: "block" }}
+                      ariaLabel={`target ${entry.jointName}`}
                     />
                   </div>
                 </div>
@@ -644,13 +648,12 @@ export default function ActuatorControllerPanel() {
                       value={safeVelocity}
                       onChange={(e) => handleVelocityChange(Number(e.target.value))}
                     />
-                    <input
-                      type="number"
+                    <NumericInputField
                       step={0.01}
                       min={velocityDisplayRange.min}
                       max={velocityDisplayRange.max}
                       value={safeVelocity}
-                      onChange={(e) => handleVelocityChange(Number(e.target.value))}
+                      onChange={handleVelocityChange}
                       style={{
                         height: 26,
                         padding: "0 6px",
@@ -660,6 +663,8 @@ export default function ActuatorControllerPanel() {
                         color: "rgba(255,255,255,0.9)",
                         fontSize: 12,
                       }}
+                      containerStyle={{ display: "block" }}
+                      ariaLabel={`velocity ${entry.jointName}`}
                     />
                   </div>
                 </div>
@@ -677,13 +682,12 @@ export default function ActuatorControllerPanel() {
                       value={safeTorque}
                       onChange={(e) => handleTorqueChange(Number(e.target.value))}
                     />
-                    <input
-                      type="number"
+                    <NumericInputField
                       step={0.01}
                       min={entry.effortRange.min}
                       max={entry.effortRange.max}
                       value={safeTorque}
-                      onChange={(e) => handleTorqueChange(Number(e.target.value))}
+                      onChange={handleTorqueChange}
                       style={{
                         height: 26,
                         padding: "0 6px",
@@ -693,6 +697,8 @@ export default function ActuatorControllerPanel() {
                         color: "rgba(255,255,255,0.9)",
                         fontSize: 12,
                       }}
+                      containerStyle={{ display: "block" }}
+                      ariaLabel={`torque ${entry.jointName}`}
                     />
                   </div>
                 </div>
@@ -700,13 +706,12 @@ export default function ActuatorControllerPanel() {
               {showInitial && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 90px", gap: 8, alignItems: "center" }}>
                   <div style={{ fontSize: 11, opacity: 0.6 }}>Inicial</div>
-                  <input
-                    type="number"
+                  <NumericInputField
                     step={0.001}
                     min={hasPositionLimits ? entry.range.min : undefined}
                     max={hasPositionLimits ? entry.range.max : undefined}
                     value={safeInitial}
-                    onChange={(e) => handleInitialChange(Number(e.target.value))}
+                    onChange={handleInitialChange}
                     style={{
                       height: 26,
                       padding: "0 6px",
@@ -716,6 +721,8 @@ export default function ActuatorControllerPanel() {
                       color: "rgba(255,255,255,0.9)",
                       fontSize: 12,
                     }}
+                    containerStyle={{ display: "block" }}
+                    ariaLabel={`initial ${entry.jointName}`}
                   />
                 </div>
               )}

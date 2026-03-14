@@ -5,6 +5,7 @@ import { useRuntimeTrainingStore } from "../core/store/useRuntimeTrainingStore";
 import { useSceneStore } from "../core/store/useSceneStore";
 import { useAssetStore } from "../core/store/useAssetStore";
 import DockArea from "../ui/DockArea";
+import { useDismissOnOutsideInteraction } from "../ui/useDismissOnOutsideInteraction";
 import { copySelection, deleteSelection, duplicateSelection, pasteSelection, redo, undo } from "../core/editor/actions/editorActions";
 import { editorEngine } from "../core/editor/engineSingleton";
 import { exportRobotToUrdf } from "../core/urdf/urdfExport";
@@ -143,6 +144,12 @@ export default function EditorLayout() {
     setShowExportDialog(true);
   };
 
+  useDismissOnOutsideInteraction({
+    open: menuOpen !== null,
+    refs: [menuRef],
+    onDismiss: () => setMenuOpen(null),
+  });
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -188,16 +195,6 @@ export default function EditorLayout() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      const target = e.target as Node | null;
-      if (menuRef.current && target && menuRef.current.contains(target)) return;
-      setMenuOpen(null);
-    };
-    window.addEventListener("mousedown", onClick);
-    return () => window.removeEventListener("mousedown", onClick);
   }, []);
 
   useEffect(() => {

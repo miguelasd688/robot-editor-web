@@ -3,6 +3,7 @@ import type { DockId, PanelId } from "../core/dock/types";
 import { getPanelById, getPanelRegistry } from "../core/dock/registry";
 import { useDockStore } from "../core/store/useDockStore";
 import TabBar from "./TabBar";
+import { useDismissOnOutsideInteraction } from "./useDismissOnOutsideInteraction";
 
 type Props = {
   dock: DockId;
@@ -17,7 +18,6 @@ export default function DockArea({ dock, variant = "side" }: Props) {
 
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // ✅ Ref para detectar clicks fuera
   const menuRootRef = useRef<HTMLDivElement | null>(null);
 
   const available = useMemo(() => getPanelRegistry(), []);
@@ -28,40 +28,17 @@ export default function DockArea({ dock, variant = "side" }: Props) {
     initFromPanels(available);
   }, [available, initFromPanels]);
 
-  // ✅ Cerrar al click fuera + Escape
-  useEffect(() => {
-    if (!menuOpen) return;
-
-    const onPointerDown = (e: PointerEvent) => {
-      const root = menuRootRef.current;
-      if (!root) return;
-
-      // Si el click es dentro del menú/botón -> no cerrar
-      if (root.contains(e.target as Node)) return;
-
-      setMenuOpen(false);
-    };
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-
-    // capture=true para pillar el evento antes de stops
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [menuOpen]);
+  useDismissOnOutsideInteraction({
+    open: menuOpen,
+    refs: [menuRootRef],
+    onDismiss: () => setMenuOpen(false),
+  });
 
   const headerRight = (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {HeaderActions && activePanel && <HeaderActions dock={dock} panelId={activePanel.id} />}
       <div ref={menuRootRef} style={{ position: "relative" }}>
         <button
-          // ✅ mejor en mouse/pointer down para evitar parpadeos
           onMouseDown={(e) => {
             e.preventDefault();
             e.stopPropagation();

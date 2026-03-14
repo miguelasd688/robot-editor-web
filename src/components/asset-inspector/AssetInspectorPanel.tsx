@@ -8,6 +8,7 @@ import type { UrdfInstance, UrdfJoint, UrdfLink } from "../../app/core/urdf/urdf
 import { reparentNode } from "../../app/core/editor/actions/sceneHierarchyActions";
 import { editorEngine } from "../../app/core/editor/engineSingleton";
 import { DarkSelect } from "../../app/ui/DarkSelect";
+import { NumericInputField } from "../../app/ui/NumericInputField";
 import {
   findJointChildLinkId,
   findJointParentLinkId,
@@ -40,11 +41,6 @@ const jointAxisPresets = [
 ] as const;
 
 const JOINT_AXIS_PRESET_EPSILON = 1e-6;
-
-function clampNumber(value: string) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
 
 function rgbaToHex(rgba: RgbaColor): string {
   const r = Math.round(Math.min(1, Math.max(0, rgba[0])) * 255).toString(16).padStart(2, "0");
@@ -420,8 +416,6 @@ export default function AssetInspectorPanel() {
     return next;
   };
 
-  const parseOptionalNumber = (value: string) => (value === "" ? undefined : clampNumber(value));
-
   const renderVecRow = (
     label: string,
     value: [number, number, number],
@@ -432,13 +426,14 @@ export default function AssetInspectorPanel() {
       <div style={{ fontSize: 12, opacity: 0.75 }}>{label}</div>
       <div style={{ display: "flex", gap: 6 }}>
         {(["x", "y", "z"] as const).map((axis, index) => (
-          <input
+          <NumericInputField
             key={axis}
-            type="number"
             step={step}
             value={value[index]}
-            onChange={(e) => onChange(updateVecArray(value, index, clampNumber(e.target.value)))}
+            onChange={(nextValue) => onChange(updateVecArray(value, index, nextValue))}
             style={inputStyle}
+            containerStyle={{ display: "block" }}
+            ariaLabel={`${label} ${axis}`}
           />
         ))}
       </div>
@@ -498,13 +493,14 @@ export default function AssetInspectorPanel() {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           {(["x", "y", "z"] as const).map((axis, index) => (
-            <input
+            <NumericInputField
               key={axis}
-              type="number"
               step={step}
               value={value[index]}
-              onChange={(e) => onChange(updateVecArray(value, index, clampNumber(e.target.value)))}
+              onChange={(nextValue) => onChange(updateVecArray(value, index, nextValue))}
               style={inputStyle}
+              containerStyle={{ display: "block" }}
+              ariaLabel={`${label} ${axis}`}
             />
           ))}
         </div>
@@ -532,12 +528,13 @@ export default function AssetInspectorPanel() {
           return (
             <div key={cell.label} style={{ display: "grid", gap: 4 }}>
               <div style={{ fontSize: 10, opacity: 0.6 }}>{cell.label}</div>
-              <input
-                type="number"
+              <NumericInputField
                 step={0.001}
                 value={cell.value}
-                onChange={(e) => onChange(cell.label, clampNumber(e.target.value))}
+                onChange={(nextValue) => onChange(cell.label, nextValue)}
                 style={inputWideStyle}
+                containerStyle={{ display: "block" }}
+                ariaLabel={cell.label}
               />
             </div>
           );
@@ -567,12 +564,13 @@ export default function AssetInspectorPanel() {
       return (
         <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginBottom: 8 }}>
           <div style={{ fontSize: 12, opacity: 0.75 }}>radius</div>
-          <input
-            type="number"
+          <NumericInputField
             step={0.01}
             value={geom.radius}
-            onChange={(e) => onChange({ ...geom, radius: clampNumber(e.target.value) })}
+            onChange={(radius) => onChange({ ...geom, radius })}
             style={inputStyle}
+            containerStyle={{ display: "block" }}
+            ariaLabel="sphere radius"
           />
         </div>
       );
@@ -582,22 +580,24 @@ export default function AssetInspectorPanel() {
         <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
           <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
             <div style={{ fontSize: 12, opacity: 0.75 }}>radius</div>
-            <input
-              type="number"
+            <NumericInputField
               step={0.01}
               value={geom.radius}
-              onChange={(e) => onChange({ ...geom, radius: clampNumber(e.target.value) })}
+              onChange={(radius) => onChange({ ...geom, radius })}
               style={inputStyle}
+              containerStyle={{ display: "block" }}
+              ariaLabel="cylinder radius"
             />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
             <div style={{ fontSize: 12, opacity: 0.75 }}>length</div>
-            <input
-              type="number"
+            <NumericInputField
               step={0.01}
               value={geom.length}
-              onChange={(e) => onChange({ ...geom, length: clampNumber(e.target.value) })}
+              onChange={(length) => onChange({ ...geom, length })}
               style={inputStyle}
+              containerStyle={{ display: "block" }}
+              ariaLabel="cylinder length"
             />
           </div>
         </div>
@@ -905,13 +905,14 @@ export default function AssetInspectorPanel() {
               <div style={{ fontSize: 12, opacity: 0.75 }}>{field}</div>
               <div style={{ display: "flex", gap: 6 }}>
                 {(["x", "y", "z"] as const).map((axis) => (
-                  <input
+                  <NumericInputField
                     key={axis}
-                    type="number"
                     step={field === "rotation" ? 1 : 0.01}
                     value={transformForField[field][axis]}
-                    onChange={(e) => updateVec(field, axis, clampNumber(e.target.value), transformTarget.id)}
+                    onChange={(nextValue) => updateVec(field, axis, nextValue, transformTarget.id)}
                     style={inputStyle}
+                    containerStyle={{ display: "block" }}
+                    ariaLabel={`${field} ${axis}`}
                   />
                 ))}
               </div>
@@ -929,16 +930,17 @@ export default function AssetInspectorPanel() {
           {showMass && (
             <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginBottom: 8 }}>
               <div style={{ fontSize: 12, opacity: 0.75 }}>Mass</div>
-              <input
-                type="number"
+              <NumericInputField
                 step={0.1}
                 value={instance.physics.mass}
-                onChange={(e) => {
-                  updatePhysics(instance.id, { mass: clampNumber(e.target.value) });
+                onChange={(mass) => {
+                  updatePhysics(instance.id, { mass });
                   markSceneDirty();
                 }}
                 disabled={instance.physics.fixed || instance.physics.useDensity}
                 style={inputStyle}
+                containerStyle={{ display: "block" }}
+                ariaLabel="mass"
               />
             </div>
           )}
@@ -946,15 +948,16 @@ export default function AssetInspectorPanel() {
           {showDensity && (
             <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginBottom: 8 }}>
               <div style={{ fontSize: 12, opacity: 0.75 }}>Density</div>
-              <input
-                type="number"
+              <NumericInputField
                 step={0.01}
                 value={instance.physics.density}
-                onChange={(e) => {
-                  updatePhysics(instance.id, { density: clampNumber(e.target.value) });
+                onChange={(density) => {
+                  updatePhysics(instance.id, { density });
                   markSceneDirty();
                 }}
                 style={inputStyle}
+                containerStyle={{ display: "block" }}
+                ariaLabel="density"
               />
             </div>
           )}
@@ -998,15 +1001,16 @@ export default function AssetInspectorPanel() {
           {showFriction && (
             <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, marginBottom: 8 }}>
               <div style={{ fontSize: 12, opacity: 0.75 }}>Geom fric.</div>
-              <input
-                type="number"
+              <NumericInputField
                 step={0.01}
                 value={instance.physics.friction}
-                onChange={(e) => {
-                  updatePhysics(instance.id, { friction: clampNumber(e.target.value) });
+                onChange={(friction) => {
+                  updatePhysics(instance.id, { friction });
                   markSceneDirty();
                 }}
                 style={inputStyle}
+                containerStyle={{ display: "block" }}
+                ariaLabel="geometry friction"
               />
             </div>
           )}
@@ -1014,15 +1018,16 @@ export default function AssetInspectorPanel() {
           {showRestitution && (
             <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
               <div style={{ fontSize: 12, opacity: 0.75 }}>Restit.</div>
-              <input
-                type="number"
+              <NumericInputField
                 step={0.01}
                 value={instance.physics.restitution}
-                onChange={(e) => {
-                  updatePhysics(instance.id, { restitution: clampNumber(e.target.value) });
+                onChange={(restitution) => {
+                  updatePhysics(instance.id, { restitution });
                   markSceneDirty();
                 }}
                 style={inputStyle}
+                containerStyle={{ display: "block" }}
+                ariaLabel="restitution"
               />
             </div>
           )}
@@ -1105,17 +1110,18 @@ export default function AssetInspectorPanel() {
                       )}
                       <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8 }}>
                         <div style={{ fontSize: 12, opacity: 0.75 }}>mass</div>
-                        <input
-                          type="number"
+                        <NumericInputField
                           step={0.01}
                           value={urdf.link.inertial.mass}
-                          onChange={(e) =>
+                          onChange={(mass) =>
                             updateLink((link) => ({
                               ...link,
-                              inertial: link.inertial ? { ...link.inertial, mass: clampNumber(e.target.value) } : link.inertial,
+                              inertial: link.inertial ? { ...link.inertial, mass } : link.inertial,
                             }))
                           }
                           style={inputStyle}
+                          containerStyle={{ display: "block" }}
+                          ariaLabel="inertial mass"
                         />
                       </div>
                       <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Inertia</div>
@@ -1231,20 +1237,21 @@ export default function AssetInspectorPanel() {
                                 }}
                                 style={{ width: 32, height: 24, borderRadius: 4, border: "1px solid rgba(255,255,255,0.12)", cursor: "pointer", padding: 2, background: "transparent" }}
                               />
-                              <input
-                                type="number"
+                              <NumericInputField
                                 min={0}
                                 max={1}
                                 step={0.05}
-                                value={(currentRgba?.[3] ?? 1).toFixed(2)}
+                                value={currentRgba?.[3] ?? 1}
                                 disabled={!materialEditable}
-                                onChange={(e) => {
-                                  const alpha = Math.min(1, Math.max(0, parseFloat(e.target.value) || 1));
+                                onChange={(alpha) => {
                                   const hex = currentRgba ? rgbaToHex(currentRgba) : "#888888";
                                   handleVisualColorChange(visualNode.id, hexToRgba(hex, alpha));
                                 }}
                                 style={{ ...inputStyle, width: 52 }}
+                                containerStyle={{ display: "block" }}
+                                roundTo={2}
                                 title="Opacity (0–1)"
+                                ariaLabel="visual opacity"
                               />
                               {currentRgba && (
                                 <button
@@ -1344,12 +1351,15 @@ export default function AssetInspectorPanel() {
                     ] as const).map(([label, value]) => (
                       <div key={label} style={{ display: "grid", gap: 4 }}>
                         <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
-                        <input
-                          type="number"
+                        <NumericInputField
                           step={0.01}
-                          value={value ?? ""}
-                          onChange={(e) => updateJointLimitField(label, parseOptionalNumber(e.target.value))}
+                          value={value}
+                          required={false}
+                          onChange={(nextValue) => updateJointLimitField(label, nextValue)}
+                          onEmpty={() => updateJointLimitField(label, undefined)}
                           style={inputStyle}
+                          containerStyle={{ display: "block" }}
+                          ariaLabel={`joint limit ${label}`}
                         />
                       </div>
                     ))}
@@ -1366,13 +1376,16 @@ export default function AssetInspectorPanel() {
                     ] as const).map(([label, value]) => (
                       <div key={label} style={{ display: "grid", gap: 4 }}>
                         <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
-                        <input
-                          type="number"
+                        <NumericInputField
                           step={0.01}
-                          value={value ?? ""}
+                          value={value}
+                          required={false}
                           placeholder={String(dynamicsDefaults[label])}
-                          onChange={(e) => updateJointDynamicsField(label, parseOptionalNumber(e.target.value))}
+                          onChange={(nextValue) => updateJointDynamicsField(label, nextValue)}
+                          onEmpty={() => updateJointDynamicsField(label, undefined)}
                           style={inputStyle}
+                          containerStyle={{ display: "block" }}
+                          ariaLabel={`joint dynamics ${label}`}
                         />
                       </div>
                     ))}
@@ -1465,18 +1478,21 @@ export default function AssetInspectorPanel() {
                           ] as const).map(([label, value]) => (
                             <div key={label} style={{ display: "grid", gap: 4 }}>
                               <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
-                              <input
-                                type="number"
+                              <NumericInputField
                                 step={0.01}
-                                value={value ?? ""}
+                                value={value}
+                                required={false}
                                 placeholder={
                                   Number.isFinite((actuatorDefaults as Record<string, number>)[label])
                                     ? String(actuatorDefaults[label])
                                     : undefined
                                 }
-                                onChange={(e) => updateJointActuatorField(label, parseOptionalNumber(e.target.value))}
+                                onChange={(nextValue) => updateJointActuatorField(label, nextValue)}
+                                onEmpty={() => updateJointActuatorField(label, undefined)}
                                 disabled={!jointActuatorEnabled}
                                 style={inputStyle}
+                                containerStyle={{ display: "block" }}
+                                ariaLabel={`joint actuator ${label}`}
                               />
                             </div>
                           ))}
@@ -1484,34 +1500,36 @@ export default function AssetInspectorPanel() {
                           <>
                             <div style={{ display: "grid", gap: 4 }}>
                               <div style={{ fontSize: 10, opacity: 0.6 }}>range min</div>
-                              <input
-                                type="number"
+                              <NumericInputField
                                 step={0.01}
                                 value={urdf.joint.muscle?.range?.[0] ?? muscleDefaults.range[0]}
-                                onChange={(e) =>
+                                onChange={(nextValue) =>
                                   updateJointMuscle((muscle) => ({
                                     ...muscle,
-                                    range: [clampNumber(e.target.value), muscle.range?.[1] ?? muscleDefaults.range[1]],
+                                    range: [nextValue, muscle.range?.[1] ?? muscleDefaults.range[1]],
                                   }))
                                 }
                                 disabled={!jointActuatorEnabled}
                                 style={inputStyle}
+                                containerStyle={{ display: "block" }}
+                                ariaLabel="joint muscle range min"
                               />
                             </div>
                             <div style={{ display: "grid", gap: 4 }}>
                               <div style={{ fontSize: 10, opacity: 0.6 }}>range max</div>
-                              <input
-                                type="number"
+                              <NumericInputField
                                 step={0.01}
                                 value={urdf.joint.muscle?.range?.[1] ?? muscleDefaults.range[1]}
-                                onChange={(e) =>
+                                onChange={(nextValue) =>
                                   updateJointMuscle((muscle) => ({
                                     ...muscle,
-                                    range: [muscle.range?.[0] ?? muscleDefaults.range[0], clampNumber(e.target.value)],
+                                    range: [muscle.range?.[0] ?? muscleDefaults.range[0], nextValue],
                                   }))
                                 }
                                 disabled={!jointActuatorEnabled}
                                 style={inputStyle}
+                                containerStyle={{ display: "block" }}
+                                ariaLabel="joint muscle range max"
                               />
                             </div>
                             {([
@@ -1521,18 +1539,19 @@ export default function AssetInspectorPanel() {
                             ] as const).map(([label, value]) => (
                               <div key={label} style={{ display: "grid", gap: 4 }}>
                                 <div style={{ fontSize: 10, opacity: 0.6 }}>{label}</div>
-                                <input
-                                  type="number"
+                                <NumericInputField
                                   step={0.01}
                                   value={value}
-                                  onChange={(e) =>
+                                  onChange={(nextValue) =>
                                     updateJointMuscle((muscle) => ({
                                       ...muscle,
-                                      [label]: clampNumber(e.target.value),
+                                      [label]: nextValue,
                                     }))
                                   }
                                   disabled={!jointActuatorEnabled}
                                   style={inputStyle}
+                                  containerStyle={{ display: "block" }}
+                                  ariaLabel={`joint muscle ${label}`}
                                 />
                               </div>
                             ))}
