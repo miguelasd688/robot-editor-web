@@ -52,6 +52,8 @@ type CachedVideoClipRow = {
   blob: Blob;
   contentType: string;
   sizeBytes: number;
+  episodeNumber?: number;
+  videoStep?: number;
   createdAtMs: number;
   accessedAtMs: number;
 };
@@ -225,6 +227,16 @@ export async function getCachedVideoClip(input: {
   viewId: string;
   clipIndex: number;
 }): Promise<Blob | null> {
+  const entry = await getCachedVideoClipEntry(input);
+  return entry?.blob ?? null;
+}
+
+export async function getCachedVideoClipEntry(input: {
+  tenantId: string;
+  jobId: string;
+  viewId: string;
+  clipIndex: number;
+}): Promise<{ blob: Blob; clipIndex: number; episodeNumber: number | null; videoStep: number | null } | null> {
   const db = await openCacheDb();
   if (!db) return null;
   const cacheKey = buildVideoCacheKey(input.tenantId, input.jobId, input.viewId, input.clipIndex);
@@ -241,7 +253,16 @@ export async function getCachedVideoClip(input: {
     accessedAtMs: Date.now(),
   });
   await transactionDone(writeTx);
-  return row.blob;
+  return {
+    blob: row.blob,
+    clipIndex: Math.max(1, Math.round(Number(row.clipIndex) || 1)),
+    episodeNumber: Number.isFinite(Number(row.episodeNumber))
+      ? Math.max(0, Math.round(Number(row.episodeNumber)))
+      : null,
+    videoStep: Number.isFinite(Number(row.videoStep))
+      ? Math.max(0, Math.round(Number(row.videoStep)))
+      : null,
+  };
 }
 
 export async function getCachedVideoClipForView(input: {
@@ -249,7 +270,7 @@ export async function getCachedVideoClipForView(input: {
   jobId: string;
   viewId: string;
   clipIndex?: number | null;
-}): Promise<{ blob: Blob; clipIndex: number } | null> {
+}): Promise<{ blob: Blob; clipIndex: number; episodeNumber: number | null; videoStep: number | null } | null> {
   const db = await openCacheDb();
   if (!db) return null;
   const tenantId = resolveTrainingCacheTenantId(input.tenantId);
@@ -259,9 +280,7 @@ export async function getCachedVideoClipForView(input: {
   const requestedClipIndex = Number(input.clipIndex);
   if (Number.isFinite(requestedClipIndex) && requestedClipIndex > 0) {
     const clipIndex = Math.max(1, Math.round(requestedClipIndex));
-    const blob = await getCachedVideoClip({ tenantId, jobId, viewId, clipIndex });
-    if (!blob) return null;
-    return { blob, clipIndex };
+    return await getCachedVideoClipEntry({ tenantId, jobId, viewId, clipIndex });
   }
 
   const readTx = db.transaction(VIDEO_STORE, "readonly");
@@ -288,7 +307,47 @@ export async function getCachedVideoClipForView(input: {
   return {
     blob: chosen.blob,
     clipIndex: chosen.clipIndex,
+    episodeNumber: Number.isFinite(Number(chosen.episodeNumber))
+      ? Math.max(0, Math.round(Number(chosen.episodeNumber)))
+      : null,
+    videoStep: Number.isFinite(Number(chosen.videoStep))
+      ? Math.max(0, Math.round(Number(chosen.videoStep)))
+      : null,
   };
+}
+
+export async function listCachedVideoClipIndexesForView(input: {
+  tenantId: string;
+  jobId: string;
+  viewId: string;
+  maxClipIndex?: number | null;
+}): Promise<Set<number>> {
+  const db = await openCacheDb();
+  if (!db) return new Set<number>();
+  const tenantId = resolveTrainingCacheTenantId(input.tenantId);
+  const jobId = String(input.jobId ?? "").trim();
+  if (!jobId) return new Set<number>();
+  const viewId = String(input.viewId || "global").trim() || "global";
+  const requestedMaxClipIndex = Number(input.maxClipIndex);
+  const maxClipIndex =
+    Number.isFinite(requestedMaxClipIndex) && requestedMaxClipIndex > 0
+      ? Math.max(1, Math.round(requestedMaxClipIndex))
+      : null;
+
+  const tx = db.transaction(VIDEO_STORE, "readonly");
+  const store = tx.objectStore(VIDEO_STORE);
+  const index = store.index("byJobAccessedAt");
+  const jobKey = buildJobKey(tenantId, jobId);
+  const range = IDBKeyRange.bound([jobKey, 0], [jobKey, Number.MAX_SAFE_INTEGER]);
+  const rows = (await requestToPromise(index.getAll(range))) as CachedVideoClipRow[];
+  const clipIndexes = new Set<number>();
+  for (const row of rows) {
+    if (row.viewId !== viewId) continue;
+    const clipIndex = Math.max(1, Math.round(Number(row.clipIndex) || 1));
+    if (maxClipIndex !== null && clipIndex > maxClipIndex) continue;
+    clipIndexes.add(clipIndex);
+  }
+  return clipIndexes;
 }
 
 export async function putCachedVideoClip(input: {
@@ -298,6 +357,8 @@ export async function putCachedVideoClip(input: {
   clipIndex: number;
   blob: Blob;
   contentType?: string;
+  episodeNumber?: number | null;
+  videoStep?: number | null;
 }): Promise<void> {
   await withCacheWrite(async (db) => {
     const now = Date.now();
@@ -313,6 +374,12 @@ export async function putCachedVideoClip(input: {
       blob: input.blob,
       contentType: String(input.contentType ?? input.blob.type ?? "application/octet-stream"),
       sizeBytes: Math.max(0, Number(input.blob.size || 0)),
+      episodeNumber: Number.isFinite(Number(input.episodeNumber))
+        ? Math.max(0, Math.round(Number(input.episodeNumber)))
+        : undefined,
+      videoStep: Number.isFinite(Number(input.videoStep))
+        ? Math.max(0, Math.round(Number(input.videoStep)))
+        : undefined,
       createdAtMs: now,
       accessedAtMs: now,
     };
