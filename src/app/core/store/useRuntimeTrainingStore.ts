@@ -726,9 +726,13 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         .then((remoteJob) => {
           unmarkTrainingJobDeleted(remoteJob);
           optimisticJobIds.delete(localId);
+          const launchContextWithSource = {
+            ...launchContext,
+            sourceLocalJobId: localId,
+          };
           const enrichedRemoteJob: TrainingJobSummary = {
             ...remoteJob,
-            launchContext,
+            launchContext: launchContextWithSource,
           };
           set((state) => {
             const withoutLocal = state.jobs.filter((job) => job.id !== localId && job.id !== remoteJob.id);
