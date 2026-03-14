@@ -112,6 +112,12 @@ export type PhysicsDiagnostics = {
   hasCloneRisk: boolean;
 };
 
+export type BaseConstraintDiagnostics = {
+  hasFixedRootJoint: boolean;
+  effectiveBaseConstraintMode: "fix_base" | "source_weld";
+  forceFixRootLink: boolean;
+};
+
 export type UsdIntrospectionMeta = {
   assetId: string;
   filename: string;
@@ -143,6 +149,8 @@ export type ConfigDerivationPreview = {
   derivedConfig: DerivedTrainingConfig;
   taskConfig: Record<string, unknown>;
   physicsDiagnostics?: PhysicsDiagnostics;
+  baseDiagnostics?: BaseConstraintDiagnostics;
+  expressionHints?: TrainingExpressionHints;
   message: string;
 };
 
@@ -196,6 +204,7 @@ export type TaskAutocompletePreview = {
   derivedConfig: DerivedTrainingConfig;
   taskConfig: Record<string, unknown>;
   physicsDiagnostics?: PhysicsDiagnostics;
+  expressionHints?: TrainingExpressionHints;
   environmentPreview: Record<string, unknown>;
   resolvedAgent?: AgentVariant;
   warnings?: string[];
@@ -224,6 +233,7 @@ export type TaskAutocompleteLaunchResponse = {
       stageUpAxis?: StageUpAxis;
     };
     derivedConfig: DerivedTrainingConfig;
+    expressionHints?: TrainingExpressionHints;
   };
 };
 
@@ -273,6 +283,14 @@ export type TrainingExpressionHints = {
   commonSymbols: string[];
   fieldSymbols: TrainingExpressionFieldSymbols;
   resetOperators: Array<"==" | "!=" | ">" | ">=" | "<" | "<=">;
+  typedSymbols?: Record<string, TrainingExpressionSymbolMetadata>;
+};
+
+export type TrainingExpressionSymbolMetadata = {
+  type: string;
+  source: string;
+  arity?: number;
+  description?: string;
 };
 
 export type AgentVariant = {
@@ -319,6 +337,16 @@ export type AgentCatalogResponse = {
   models: AgentCatalogModel[];
   genericTemplate: AgentCatalogEnvironment;
   runnerCapabilities?: Record<string, unknown>;
+};
+
+export type TrainingRunnerStatus = {
+  runnerMode: string;
+  requiresRunner: boolean;
+  available: boolean;
+  checkedAt: string;
+  reason?: string;
+  details?: Record<string, unknown>;
+  error?: string;
 };
 
 export type AssetPipelineDecision = {
@@ -712,6 +740,14 @@ export async function listTrainingTaskCatalogRemote(): Promise<TrainingTaskCatal
   });
   const payload = await parseJson<TrainingTaskCatalogResponse>(response);
   return Array.isArray(payload.items) ? payload.items : [];
+}
+
+export async function getTrainingRunnerStatusRemote(): Promise<TrainingRunnerStatus> {
+  const response = await fetch(buildUrl("/v1/training/runner/status"), {
+    method: "GET",
+    headers: buildHeaders({ accept: "application/json" }),
+  });
+  return await parseJson<TrainingRunnerStatus>(response);
 }
 
 export async function listAgentCatalogRemote(): Promise<AgentCatalogResponse> {
