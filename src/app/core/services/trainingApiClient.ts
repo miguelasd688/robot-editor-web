@@ -164,6 +164,7 @@ export type TaskAutocompleteRequest = {
   taskTemplate?: string;
   task?: string;
   robotAssetId: string;
+  rootAssetId?: string;
   sceneAssetId?: string;
   tenantId?: string;
   experimentName?: string;
@@ -776,8 +777,9 @@ export async function resolveAgentRemote(input: AgentResolveRequest): Promise<Ag
 export async function submitTrainingTaskRemote(
   input: TaskAutocompleteRequest
 ): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse> {
+  const resolvedRobotAssetId = String(input.robotAssetId ?? input.rootAssetId ?? "").trim();
   const payload: Record<string, unknown> = {
-    robotAssetId: String(input.robotAssetId ?? "").trim(),
+    robotAssetId: resolvedRobotAssetId,
   };
 
   const recipeId = String(input.recipeId ?? "").trim();
