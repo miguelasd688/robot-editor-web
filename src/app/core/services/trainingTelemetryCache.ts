@@ -364,8 +364,20 @@ export async function putCachedVideoClip(input: {
     const now = Date.now();
     const tx = db.transaction(VIDEO_STORE, "readwrite");
     const store = tx.objectStore(VIDEO_STORE);
+    const cacheKey = buildVideoCacheKey(input.tenantId, input.jobId, input.viewId, input.clipIndex);
+    const existing = (await requestToPromise(store.get(cacheKey))) as CachedVideoClipRow | undefined;
+    const normalizedEpisodeNumber = Number.isFinite(Number(input.episodeNumber))
+      ? Math.max(0, Math.round(Number(input.episodeNumber)))
+      : Number.isFinite(Number(existing?.episodeNumber))
+        ? Math.max(0, Math.round(Number(existing?.episodeNumber)))
+        : undefined;
+    const normalizedVideoStep = Number.isFinite(Number(input.videoStep))
+      ? Math.max(0, Math.round(Number(input.videoStep)))
+      : Number.isFinite(Number(existing?.videoStep))
+        ? Math.max(0, Math.round(Number(existing?.videoStep)))
+        : undefined;
     const row: CachedVideoClipRow = {
-      cacheKey: buildVideoCacheKey(input.tenantId, input.jobId, input.viewId, input.clipIndex),
+      cacheKey,
       tenantId: input.tenantId,
       jobId: input.jobId,
       jobKey: buildJobKey(input.tenantId, input.jobId),
@@ -374,13 +386,11 @@ export async function putCachedVideoClip(input: {
       blob: input.blob,
       contentType: String(input.contentType ?? input.blob.type ?? "application/octet-stream"),
       sizeBytes: Math.max(0, Number(input.blob.size || 0)),
-      episodeNumber: Number.isFinite(Number(input.episodeNumber))
-        ? Math.max(0, Math.round(Number(input.episodeNumber)))
-        : undefined,
-      videoStep: Number.isFinite(Number(input.videoStep))
-        ? Math.max(0, Math.round(Number(input.videoStep)))
-        : undefined,
-      createdAtMs: now,
+      episodeNumber: normalizedEpisodeNumber,
+      videoStep: normalizedVideoStep,
+      createdAtMs: Number.isFinite(Number(existing?.createdAtMs))
+        ? Math.max(0, Math.round(Number(existing?.createdAtMs)))
+        : now,
       accessedAtMs: now,
     };
     store.put(row);
