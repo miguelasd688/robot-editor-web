@@ -276,11 +276,19 @@ const withSceneOrigins = (
     return items.map((item, index) => {
       const source = nodesByKind[index];
       const transform = resolveTransform(source);
+      const sourcePose = poseFromTransform(transform);
+      // USD imports often keep geom transforms on child meshes while the direct
+      // visual/collision wrapper stays identity. Prefer the mesh-descendant pose
+      // when available, otherwise preserve prior fallback behavior.
+      const resolvedOrigin =
+        isIdentityPose(sourcePose) && !isIdentityPose(item.origin)
+          ? clonePose(item.origin)
+          : sourcePose;
       const sceneOverrideRgba = kind === "visual" ? source?.components?.visual?.rgba : undefined;
       return {
         name: item.name,
         geom: cloneGeom(item.geom),
-        origin: poseFromTransform(transform),
+        origin: resolvedOrigin,
         rgba: cloneRgba(sceneOverrideRgba ?? item.rgba),
       };
     });

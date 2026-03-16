@@ -2,6 +2,7 @@ import type * as THREE from "three";
 import type { AssetEntry } from "../../assets/assetRegistryTypes";
 import type { Viewer } from "../../viewer/Viewer";
 import type { ProjectDoc, SceneNode } from "../../editor/document/types";
+import type { CompiledEnvironmentSnapshot } from "../../environment/EnvironmentCompilationManager";
 import type { MujocoModelSource } from "./MujocoRuntime";
 import type { MjcfNameMap } from "./mjcfNames";
 import { buildModelSource, mergeMjcfSources } from "./mujocoModelSource";
@@ -17,7 +18,7 @@ type UrdfRuntimeDefaults = {
 };
 
 export type MujocoEnvironmentBuildInput = {
-  doc: ProjectDoc;
+  compilation: CompiledEnvironmentSnapshot;
   viewer: Viewer;
   roots: THREE.Object3D[];
   assets: Record<string, AssetEntry>;
@@ -65,6 +66,8 @@ async function buildRobotSource(input: {
     sourceIsCleanUsd &&
     Array.isArray(usdIntrospection?.joints) &&
     usdIntrospection.joints.some((joint) => Boolean(joint?.frame0Local || joint?.frame1Local));
+  // Preserve kinematic alignment for imports that expose explicit USD joint frames.
+  // In those cases, direct converter MJCF can drift from the editor link/joint layout.
   const canUseDirectMjcf = sourceIsCleanUsd && !hasUsdFrameIntrospection;
   const cachedDirectMjcfSource =
     sourceIsCleanUsd && typeof root.userData?.mjcfSource === "string" && root.userData.mjcfSource.trim()
@@ -80,7 +83,12 @@ async function buildRobotSource(input: {
   const shouldRegenerateUrdf =
     Boolean(sourceUrdf) ||
     Boolean(urdfKeyForRobot) ||
-    (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf || hasUsdFrameIntrospection));
+    (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf));
+  if (sourceIsCleanUsd && hasUsdFrameIntrospection && (cachedDirectMjcfSource || cachedDirectMjcfKey)) {
+    warnings.push(
+      `[robot:${node.name || node.id}] USD introspection frames detected; regenerating URDF from posed scene for joint/link coherence.`
+    );
+  }
   if (shouldRegenerateUrdf) {
     try {
       const exported = exportRobotToUrdf(doc, node.id);
@@ -134,7 +142,9 @@ async function buildRobotSource(input: {
 
 export class MujocoEnvironmentManager {
   async buildRuntimeSource(input: MujocoEnvironmentBuildInput): Promise<MujocoEnvironmentBuildResult> {
-    const robotNodes = listRobotNodes(input.doc);
+    const doc = input.compilation.normalizedDoc;
+    const environmentWarnings = input.compilation.diagnostics.map((diagnostic) => `[${diagnostic.code}] ${diagnostic.message}`);
+    const robotNodes = listRobotNodes(doc);
     if (robotNodes.length === 0) {
       const built = await buildModelSource({
         assets: input.assets,
@@ -145,11 +155,11 @@ export class MujocoEnvironmentManager {
       return {
         source: built.source,
         nameMapsByRobot: {},
-        warnings: built.warnings,
+        warnings: [...environmentWarnings, ...built.warnings],
       };
     }
 
-    const warnings: string[] = [];
+    const warnings: string[] = [...environmentWarnings];
     const sources: MujocoModelSource[] = [];
     const nameMaps: Array<MjcfNameMap | undefined> = [];
     const nameMapsByRobot: Record<string, MjcfNameMap> = {};
@@ -160,7 +170,7 @@ export class MujocoEnvironmentManager {
       const result = await buildRobotSource({
         node,
         root,
-        doc: input.doc,
+        doc,
         assets: input.assets,
         urdfDefaults: input.urdfDefaults,
       });

@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as THREE from "three";
 import URDFLoader from "urdf-loader";
-import type { Viewer } from "../viewer/Viewer";
 import { createAssetResolver } from "./assetResolver";
 import type { AssetEntry } from "../assets/assetRegistryTypes";
 import {
@@ -558,7 +557,6 @@ export async function loadURDFObject(params: URDFLoaderParams): Promise<THREE.Ob
 }
 
 export type URDFImportDeps = {
-  viewer: Viewer | null;
   urdfKey: string | null;
   assets: Record<string, AssetEntry>;
   importOptions?: URDFLoaderParams["importOptions"];

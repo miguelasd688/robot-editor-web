@@ -1,6 +1,8 @@
 import type { SubmitTrainingJobInput } from "../plugins/types";
-import type { EnvironmentDiagnostic, EnvironmentDoc } from "../editor/document/types";
+import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../editor/document/types";
+import { editorEngine } from "../editor/engineSingleton";
 import { useTrainingImportContextStore } from "../store/useTrainingImportContextStore";
+import { environmentCompilationManager } from "../environment/EnvironmentCompilationManager";
 
 type CustomTrainingEnvironmentPayload = {
   id: string;
@@ -100,16 +102,68 @@ function cloneEnvironmentSnapshot(snapshot: EnvironmentDoc | null): EnvironmentD
   return JSON.parse(JSON.stringify(snapshot)) as EnvironmentDoc;
 }
 
+function normalizeDiagnostics(value: unknown): EnvironmentDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  const diagnostics: EnvironmentDiagnostic[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const code = toTextOrEmpty(raw.code);
+    const message = toTextOrEmpty(raw.message);
+    if (!code || !message) continue;
+    const severity = raw.severity === "error" ? "error" : "warning";
+    const source =
+      raw.source === "import" || raw.source === "document" || raw.source === "simulation" || raw.source === "training"
+        ? raw.source
+        : "document";
+    const diagnostic: EnvironmentDiagnostic = {
+      code,
+      message,
+      severity,
+      source,
+    };
+    if (raw.context && typeof raw.context === "object" && !Array.isArray(raw.context)) {
+      diagnostic.context = raw.context as Record<string, unknown>;
+    }
+    diagnostics.push(diagnostic);
+  }
+  return diagnostics;
+}
+
+function mergeDiagnostics(...sources: Array<EnvironmentDiagnostic[]>): EnvironmentDiagnostic[] {
+  const result: EnvironmentDiagnostic[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    for (const diagnostic of source) {
+      const key = `${diagnostic.code}|${diagnostic.severity}|${diagnostic.source}|${diagnostic.message}|${JSON.stringify(
+        diagnostic.context ?? {}
+      )}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(diagnostic);
+    }
+  }
+  return result;
+}
+
 export class IsaacLabEnvironmentManager {
   buildCustomTaskRequest(input: {
     submit: SubmitTrainingJobInput;
     config: Record<string, unknown>;
+    doc?: ProjectDoc;
   }): CustomTrainingTaskBuildResult {
     const configValues = toObjectOrEmpty(input.config);
     const previewValues = toObjectOrEmpty(configValues.preview);
     const environmentValues = toObjectOrEmpty(configValues.environment);
     const context = useTrainingImportContextStore.getState();
-    const diagnostics = Array.isArray(context.diagnostics) ? context.diagnostics : [];
+    const compiled = environmentCompilationManager.compileProjectDoc({
+      doc: input.doc ?? editorEngine.getDoc(),
+      target: "training",
+    });
+    const diagnostics = mergeDiagnostics(
+      normalizeDiagnostics(context.diagnostics),
+      normalizeDiagnostics(compiled.diagnostics)
+    );
     const experimentName =
       toTextOrEmpty(input.submit.experimentName) || toTextOrEmpty(configValues.experimentName) || input.submit.modelName || "custom-experiment";
     const maxSteps = Math.max(1, Math.round(input.submit.maxSteps ?? input.submit.epochs));
@@ -145,7 +199,7 @@ export class IsaacLabEnvironmentManager {
     const environment: CustomTrainingEnvironmentPayload = {
       id: toTextOrEmpty(input.submit.envId) || toTextOrEmpty(configValues.taskTemplate) || input.submit.dataset || "custom_environment",
       sourceOfTruth: "project_doc_environment_v1",
-      snapshot: cloneEnvironmentSnapshot(context.environmentSnapshot),
+      snapshot: cloneEnvironmentSnapshot(compiled.environment),
       robotAssetId: robotAssetId || undefined,
       sceneAssetId: sceneAssetId || undefined,
       robotUsdKey: context.robotUsdKey,
@@ -154,6 +208,8 @@ export class IsaacLabEnvironmentManager {
       metadata: {
         ...metadata,
         ...environmentValues,
+        compilationTarget: compiled.target,
+        compilationStats: compiled.stats,
       },
     };
 

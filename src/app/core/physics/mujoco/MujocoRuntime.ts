@@ -99,6 +99,13 @@ const DEFAULT_SCENE_JOINT_DAMPING = Number(import.meta.env.VITE_MUJOCO_SCENE_JOI
 const DEFAULT_SCENE_JOINT_ARMATURE = Number(import.meta.env.VITE_MUJOCO_SCENE_JOINT_ARMATURE ?? "0.01");
 const DEFAULT_CONTACT_SOLREF = String(import.meta.env.VITE_MUJOCO_CONTACT_SOLREF ?? "0.02 1.2");
 const DEFAULT_CONTACT_SOLIMP = String(import.meta.env.VITE_MUJOCO_CONTACT_SOLIMP ?? "0.9 0.95 0.001");
+const TERRAIN_CONTACT_SOLREF = String(import.meta.env.VITE_MUJOCO_TERRAIN_CONTACT_SOLREF ?? "0.008 1.3");
+const TERRAIN_CONTACT_SOLIMP = String(import.meta.env.VITE_MUJOCO_TERRAIN_CONTACT_SOLIMP ?? "0.95 0.99 0.0005");
+const TERRAIN_TORSIONAL_FRICTION_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_TORSIONAL_FRICTION ?? "0.02");
+const TERRAIN_ROLLING_FRICTION_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_ROLLING_FRICTION ?? "0.001");
+const MUJOCO_MIN_SOLVER_ITERATIONS_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_SOLVER_ITERATIONS ?? "120");
+const MUJOCO_MIN_NOSLIP_ITERATIONS_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_NOSLIP_ITERATIONS ?? "8");
+const MUJOCO_MIN_IMPRATIO_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_IMPRATIO ?? "5");
 const POINTER_CURSOR_BODY_NAME = "__pointer_cursor_body";
 const POINTER_CURSOR_PARK_Z_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_PARK_Z ?? "-1000");
 const POINTER_CURSOR_RADIUS_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_RADIUS ?? "0.06");
@@ -121,6 +128,20 @@ const ACTUATOR_MAX_ANGULAR_ERROR_RAD = Number.isFinite(ACTUATOR_MAX_ANGULAR_ERRO
 const ACTUATOR_MAX_LINEAR_ERROR = Number.isFinite(ACTUATOR_MAX_LINEAR_ERROR_RAW)
   ? Math.max(0.01, ACTUATOR_MAX_LINEAR_ERROR_RAW)
   : 0.25;
+const TERRAIN_TORSIONAL_FRICTION = Number.isFinite(TERRAIN_TORSIONAL_FRICTION_RAW)
+  ? Math.max(0, TERRAIN_TORSIONAL_FRICTION_RAW)
+  : 0.02;
+const TERRAIN_ROLLING_FRICTION = Number.isFinite(TERRAIN_ROLLING_FRICTION_RAW)
+  ? Math.max(0, TERRAIN_ROLLING_FRICTION_RAW)
+  : 0.001;
+const MUJOCO_MIN_SOLVER_ITERATIONS = Number.isFinite(MUJOCO_MIN_SOLVER_ITERATIONS_RAW)
+  ? Math.max(40, Math.round(MUJOCO_MIN_SOLVER_ITERATIONS_RAW))
+  : 120;
+const MUJOCO_MIN_NOSLIP_ITERATIONS = Number.isFinite(MUJOCO_MIN_NOSLIP_ITERATIONS_RAW)
+  ? Math.max(0, Math.round(MUJOCO_MIN_NOSLIP_ITERATIONS_RAW))
+  : 8;
+const MUJOCO_MIN_IMPRATIO = Number.isFinite(MUJOCO_MIN_IMPRATIO_RAW) ? Math.max(1, MUJOCO_MIN_IMPRATIO_RAW) : 5;
+const TERRAIN_NAME_RE = /(floor|ground|terrain|rough)/i;
 const debugLog = (...args: unknown[]) => {
   if (MUJOCO_DEBUG) console.info("[mujoco][runtime]", ...args);
 };
@@ -241,6 +262,97 @@ function mjtObjValue(raw: any) {
 
 type CollisionMask = { contype: number; conaffinity: number };
 
+function resolveExtraSceneCollisionMask(selfCollisionEnabled: boolean): CollisionMask {
+  if (selfCollisionEnabled) {
+    return { contype: 1, conaffinity: 1 };
+  }
+  // Extra scene roots (floor/terrain/props) must collide with:
+  // - URDF-converted robots (commonly contype=1, conaffinity=2)
+  // - direct MJCF robots (commonly contype=1, conaffinity=1)
+  // Using dual-bit masks keeps compatibility across both pipelines.
+  return { contype: 3, conaffinity: 3 };
+}
+
+function buildGeomContactAttr(solrefRaw: string, solimpRaw: string): string {
+  const solref = String(solrefRaw ?? "").trim();
+  const solimp = String(solimpRaw ?? "").trim();
+  return `${solref ? ` solref="${solref}"` : ""}${solimp ? ` solimp="${solimp}"` : ""}`;
+}
+
+function hasTerrainSourceInChain(obj: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = obj;
+  while (current) {
+    const source = current.userData?.sceneAssetSource as { role?: string } | undefined;
+    if (String(source?.role ?? "").trim().toLowerCase() === "terrain") return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function isTerrainObject(obj: THREE.Object3D): boolean {
+  if (hasTerrainSourceInChain(obj)) return true;
+  const name = String(obj.name ?? "").trim();
+  if (TERRAIN_NAME_RE.test(name)) return true;
+  const instance = ensureUserInstance(obj);
+  if (instance.physics.fixed === true && instance.physics.mass <= 0 && TERRAIN_NAME_RE.test(String(getDocId(obj)))) {
+    return true;
+  }
+  return false;
+}
+
+function maybePromoteTerrainMeshToPlane(
+  obj: THREE.Object3D,
+  inferred: ReturnType<typeof inferGeomInfo>
+): ReturnType<typeof inferGeomInfo> {
+  if (inferred.type === "plane") return inferred;
+  if (!(obj as any).isMesh) return inferred;
+  if (!isTerrainObject(obj)) return inferred;
+
+  obj.updateWorldMatrix(true, false);
+  const bounds = new THREE.Box3().setFromObject(obj);
+  const size = new THREE.Vector3();
+  bounds.getSize(size);
+  const dims = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)].filter((v) => Number.isFinite(v) && v > 0);
+  if (dims.length < 3) return inferred;
+  const sorted = dims.slice().sort((a, b) => a - b);
+  const thickness = sorted[0] ?? 0;
+  const spanA = sorted[1] ?? 0;
+  const spanB = sorted[2] ?? 0;
+  if (spanA <= 0 || spanB <= 0) return inferred;
+  const flatRatio = thickness / Math.max(spanA, spanB);
+  if (!Number.isFinite(flatRatio) || flatRatio > 0.08) return inferred;
+
+  const hx = Math.max(0.25, Math.abs(size.x) * 0.5);
+  const hy = Math.max(0.25, Math.abs(size.y) * 0.5);
+  return {
+    type: "plane",
+    size: `${hx.toFixed(4)} ${hy.toFixed(4)} 0.1`,
+    halfSize: new THREE.Vector3(hx, hy, 0.001),
+  };
+}
+
+function tightenSolverPrecision(model: MjModel): void {
+  const opt = (model as any).opt as Record<string, unknown> | undefined;
+  if (!opt) return;
+  const changes: Array<{ key: string; value: number }> = [];
+
+  const setMin = (key: string, minValue: number) => {
+    if (!Object.prototype.hasOwnProperty.call(opt, key)) return;
+    const current = Number(opt[key]);
+    if (Number.isFinite(current) && current >= minValue) return;
+    (opt as any)[key] = minValue;
+    changes.push({ key, value: minValue });
+  };
+
+  setMin("iterations", MUJOCO_MIN_SOLVER_ITERATIONS);
+  setMin("noslip_iterations", MUJOCO_MIN_NOSLIP_ITERATIONS);
+  setMin("impratio", MUJOCO_MIN_IMPRATIO);
+
+  if (changes.length > 0) {
+    debugLog("solver precision upgraded", { changes });
+  }
+}
+
 function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) {
   const bodies: Array<{ name: string; object: THREE.Object3D }> = [];
   const lines: string[] = [];
@@ -251,9 +363,8 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     Number.isFinite(DEFAULT_SCENE_JOINT_ARMATURE) && DEFAULT_SCENE_JOINT_ARMATURE > 0
       ? DEFAULT_SCENE_JOINT_ARMATURE
       : 0;
-  const contactSolref = DEFAULT_CONTACT_SOLREF.trim();
-  const contactSolimp = DEFAULT_CONTACT_SOLIMP.trim();
-  const contactAttr = `${contactSolref ? ` solref="${contactSolref}"` : ""}${contactSolimp ? ` solimp="${contactSolimp}"` : ""}`;
+  const contactAttr = buildGeomContactAttr(DEFAULT_CONTACT_SOLREF, DEFAULT_CONTACT_SOLIMP);
+  const terrainContactAttr = buildGeomContactAttr(TERRAIN_CONTACT_SOLREF, TERRAIN_CONTACT_SOLIMP);
 
   lines.push(`<mujoco model="scene">`);
   lines.push(`  <option gravity="0 0 -9.81" integrator="implicitfast" timestep="0.002" iterations="80" />`);
@@ -459,7 +570,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     return { name: sanitizeMjcfName(jointName, "joint"), robotId: null };
   };
 
-  const buildGeomEntriesForLink = (linkObj: THREE.Object3D) => {
+  const buildGeomEntriesForLink = (linkObj: THREE.Object3D, terrainLike: boolean) => {
     const collisionNodes = findCollisionNodes(linkObj);
     const geomEntries: Array<{
       info: ReturnType<typeof inferGeomInfo>;
@@ -467,7 +578,8 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       quat?: THREE.Quaternion;
     }> = [];
     const appendEntry = (geomTarget: THREE.Object3D) => {
-      const info = inferGeomInfo(geomTarget);
+      const inferred = inferGeomInfo(geomTarget);
+      const info = terrainLike ? maybePromoteTerrainMeshToPlane(geomTarget, inferred) : inferred;
       const { pos, quat } = resolveRelativeTransform(linkObj, geomTarget);
       geomEntries.push({ info, pos, quat });
     };
@@ -574,12 +686,13 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
 
     const instance = ensureUserInstance(linkObj);
     const physics = instance.physics;
-    const geomEntries = buildGeomEntriesForLink(linkObj);
+    const terrainLike = isTerrainObject(linkObj);
+    const geomEntries = buildGeomEntriesForLink(linkObj, terrainLike);
     const geomInfo = geomEntries[0]?.info;
     const rawMass = safe(physics.mass, 0);
     const mass = physics.fixed ? 0 : Math.max(0, rawMass);
     const safeMass = mass < 1e-4 ? 0 : mass;
-    const friction = Math.max(0, safe(physics.friction, 0.5));
+    const friction = Math.max(0, safe(physics.friction, terrainLike ? 1 : 0.5));
     const collisionsEnabled = physics.collisionsEnabled !== false && geomEntries.length > 0;
     const bodyName = sanitizeMjcfName(getDocId(linkObj), "body");
     bodies.push({ name: bodyName, object: linkObj });
@@ -641,7 +754,9 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       }
     }
 
-    const frictionAttr = ` friction="${friction.toFixed(4)} 0.005 0.0001"${contactAttr}`;
+    const frictionAttr = terrainLike
+      ? ` friction="${friction.toFixed(4)} ${TERRAIN_TORSIONAL_FRICTION.toFixed(6)} ${TERRAIN_ROLLING_FRICTION.toFixed(6)}"${terrainContactAttr}`
+      : ` friction="${friction.toFixed(4)} 0.005 0.0001"${contactAttr}`;
     const collisionAttr = collisionsEnabled
       ? collisionMask
         ? ` contype="${collisionMask.contype}" conaffinity="${collisionMask.conaffinity}"`
@@ -672,12 +787,14 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
 
     const instance = ensureUserInstance(obj);
     const physics = instance.physics;
-    const geomInfo = inferGeomInfo(obj);
+    const terrainLike = isTerrainObject(obj);
+    const inferred = inferGeomInfo(obj);
+    const geomInfo = terrainLike ? maybePromoteTerrainMeshToPlane(obj, inferred) : inferred;
     const isPlane = geomInfo.type === "plane";
     const rawMass = safe(physics.mass, 0);
     const mass = physics.fixed || isPlane ? 0 : Math.max(0, rawMass);
     const safeMass = mass < 1e-4 ? 0 : mass;
-    const friction = Math.max(0, safe(physics.friction, 0.5));
+    const friction = Math.max(0, safe(physics.friction, terrainLike ? 1 : 0.5));
     const collisionsEnabled = physics.collisionsEnabled !== false;
     const bodyName = sanitizeMjcfName(getDocId(obj), "body");
     bodies.push({ name: bodyName, object: obj });
@@ -686,7 +803,9 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const quat = tmpQuat.clone();
     const posAttr = `${safe(pos.x).toFixed(4)} ${safe(pos.y).toFixed(4)} ${safe(pos.z).toFixed(4)}`;
     const quatAttr = `${safe(quat.w, 1).toFixed(6)} ${safe(quat.x).toFixed(6)} ${safe(quat.y).toFixed(6)} ${safe(quat.z).toFixed(6)}`;
-    const frictionAttr = ` friction="${friction.toFixed(4)} 0.005 0.0001"${contactAttr}`;
+    const frictionAttr = terrainLike
+      ? ` friction="${friction.toFixed(4)} ${TERRAIN_TORSIONAL_FRICTION.toFixed(6)} ${TERRAIN_ROLLING_FRICTION.toFixed(6)}"${terrainContactAttr}`
+      : ` friction="${friction.toFixed(4)} 0.005 0.0001"${contactAttr}`;
     const collisionAttr = collisionsEnabled
       ? collisionMask
         ? ` contype="${collisionMask.contype}" conaffinity="${collisionMask.conaffinity}"`
@@ -1357,9 +1476,7 @@ export function createMujocoRuntime(): MujocoRuntime {
         xmlToWrite = source.content;
         const extraRoots = roots.filter((root) => !isUrdfRoot(root) && root.userData?.editorRobotRoot !== true);
         if (extraRoots.length) {
-          const extraCollisionMask = MUJOCO_SELF_COLLIDE
-            ? { contype: 1, conaffinity: 1 }
-            : { contype: 2, conaffinity: 3 };
+          const extraCollisionMask = resolveExtraSceneCollisionMask(MUJOCO_SELF_COLLIDE);
           const built = buildSceneMJCF(extraRoots, extraCollisionMask);
           extraBodies = built.bodies;
           const extraWorld = extractWorldbodyContent(built.xml);
@@ -1419,6 +1536,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       if (!data) throw new Error("Failed to create MuJoCo data.");
 
       setGravity(model, [0, 0, -9.81]);
+      tightenSolverPrecision(model);
       mujoco.mj_forward(model, data);
 
       debugLog("model stats", {

@@ -4,7 +4,14 @@ import type { EditorEngine } from "../../EditorEngine";
 import { sceneSnapshotToDoc } from "./snapshotAdapter";
 import { applyTransformToObject, objectToTransform } from "./transformAdapter";
 import { ensureUserInstance, setInitialFromObject } from "../../../assets/assetInstance";
-import type { ProjectDoc, RobotModelSource, SceneNode, Transform, VisualComponent } from "../../document/types";
+import type {
+  ProjectDoc,
+  RobotModelSource,
+  SceneAssetSource,
+  SceneNode,
+  Transform,
+  VisualComponent,
+} from "../../document/types";
 import type { InstancePhysics, PhysicsFields } from "../../../assets/types";
 import type { Pose, UrdfInstance } from "../../../urdf/urdfModel";
 import type { UrdfImportOptions } from "../../../urdf/urdfImportOptions";
@@ -45,6 +52,48 @@ const worldPoseForLog = (obj: THREE.Object3D | null) => {
     scale: { x: scale.x, y: scale.y, z: scale.z },
   };
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function toOptionalText(value: unknown): string | null {
+  const token = String(value ?? "").trim();
+  return token.length > 0 ? token : null;
+}
+
+function readSceneAssetSourceFromObject(obj: THREE.Object3D): SceneAssetSource | undefined {
+  const userData = asRecord(obj.userData) ?? {};
+  const explicit = asRecord(userData.sceneAssetSource) ?? {};
+  const explicitRole = String(explicit.role ?? "").trim().toLowerCase();
+  const role =
+    explicitRole === "terrain"
+      ? "terrain"
+      : explicitRole === "scene_asset"
+        ? "scene_asset"
+        : userData.usdSceneAsset === true
+          ? "scene_asset"
+          : null;
+  if (!role) return undefined;
+
+  const explicitKind = String(explicit.kind ?? "").trim().toLowerCase();
+  const kind =
+    explicitKind === "usd" || explicitKind === "mjcf" || explicitKind === "mesh" || explicitKind === "generated"
+      ? explicitKind
+      : "usd";
+  const source: SceneAssetSource = {
+    kind,
+    role,
+    workspaceKey: toOptionalText(explicit.workspaceKey ?? userData.usdWorkspaceKey),
+    converterAssetId: toOptionalText(explicit.converterAssetId ?? userData.converterAssetId),
+    trainingAssetId: toOptionalText(explicit.trainingAssetId ?? userData.trainingAssetId),
+    sourceUrl: toOptionalText(explicit.sourceUrl ?? userData.usdUrl),
+    importOptions: asRecord(explicit.importOptions ?? null),
+    metadata: asRecord(explicit.metadata ?? null) ?? undefined,
+  };
+  return source;
+}
 
 const poseFromTransform = (transform: {
   position: { x: number; y: number; z: number };
@@ -477,6 +526,22 @@ export class ThreeSceneAdapter {
       if (components?.robotModelSource !== undefined) {
         obj.userData.robotModelSource = components.robotModelSource;
       }
+      if (components?.sceneAssetSource !== undefined) {
+        obj.userData.sceneAssetSource = components.sceneAssetSource;
+        obj.userData.usdSceneAsset = true;
+        if (components.sceneAssetSource.workspaceKey !== undefined) {
+          obj.userData.usdWorkspaceKey = components.sceneAssetSource.workspaceKey;
+        }
+        if (components.sceneAssetSource.converterAssetId !== undefined) {
+          obj.userData.converterAssetId = components.sceneAssetSource.converterAssetId;
+        }
+        if (components.sceneAssetSource.trainingAssetId !== undefined) {
+          obj.userData.trainingAssetId = components.sceneAssetSource.trainingAssetId;
+        }
+        if (components.sceneAssetSource.sourceUrl !== undefined) {
+          obj.userData.usdUrl = components.sceneAssetSource.sourceUrl;
+        }
+      }
       // Apply visual color override when present
       if (components?.visual !== undefined) {
         const prevRgba = obj.userData.visualRgba as VisualComponent["rgba"] | null | undefined;
@@ -667,6 +732,7 @@ export class ThreeSceneAdapter {
         urdfKey: obj.userData?.urdfKey as string | undefined,
         urdfImportOptions: obj.userData?.urdfImportOptions as UrdfImportOptions | undefined,
         robotModelSource: obj.userData?.robotModelSource as RobotModelSource | undefined,
+        sceneAssetSource: readSceneAssetSourceFromObject(obj),
         // Sync visual rgba: prefer explicit userData (set by user/loader), fallback to reading from mesh material
         visual: ((): VisualComponent | undefined => {
           const prev = node.components?.visual;

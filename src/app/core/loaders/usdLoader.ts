@@ -1,11 +1,21 @@
 import * as THREE from "three";
 import type { UsdImportOptions } from "../usd/usdImportOptions";
+import {
+  collectUsdBundleFiles as collectUsdBundleFilesFromCollector,
+  type CollectedUsdBundle,
+  type UsdWorkspaceAssetEntry,
+} from "../usd/usdBundleCollector";
 import type { UsdModelSource } from "../editor/document/types";
 import type { Pose, UrdfCollision, UrdfGeom, UrdfJoint, UrdfLink } from "../urdf/urdfModel";
 import { basename, createAssetResolver } from "./assetResolver";
 import { logInfo, logWarn } from "../services/logger";
 import { useLoaderStore } from "../store/useLoaderStore";
 import { disposeObject3D } from "../viewer/objectRegistry";
+import {
+  applyDefaultFloorAppearanceToMesh,
+  createDefaultFloorMaterial,
+  isDefaultFloorWorkspaceKey,
+} from "../assets/floorAppearance";
 
 export type USDLoaderParams = {
   usdUrl: string;
@@ -25,12 +35,6 @@ export type USDLoaderParams = {
   converterAssetId?: string;
   assetsByKey?: Record<string, UsdWorkspaceAssetEntry>;
   bundleHintPaths?: string[];
-};
-
-export type UsdWorkspaceAssetEntry = {
-  url: string;
-  key: string;
-  file?: File;
 };
 
 type MjcfGeomDef = {
@@ -334,7 +338,6 @@ const FILE_EXT_SKIP_RE = /\.(png|jpg|jpeg|webp|tiff|bmp|hdr|exr|mtl|obj|stl|dae|
 const DEFAULT_VISUAL_RGBA: [number, number, number, number] = [0.72, 0.79, 0.9, 1];
 const ISAAC_LAB_DEFAULT_SURFACE_FRICTION = 1.0;
 const ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION = 0.0;
-const BUNDLE_FALLBACK_INCLUDE_EXT_RE = /\.(usd|usda|usdc|usdz|png|jpg|jpeg|webp|tif|tiff|bmp|hdr|exr|mtl|obj|stl|dae|fbx|gltf|glb)$/i;
 const ABSOLUTE_URL_RE = /^(?:https?:\/\/|blob:|data:)/i;
 const usdTextureLoader = new THREE.TextureLoader();
 const usdTextureCache = new Map<string, THREE.Texture>();
@@ -347,6 +350,47 @@ type UsdPrimNode = {
 };
 
 const stripFileExtension = (name: string) => name.replace(/\.[^/.]+$/, "");
+
+const inferSceneAssetSourceRole = (workspaceKey: string): "scene_asset" | "terrain" => {
+  const normalized = String(workspaceKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
+  if (!normalized) return "scene_asset";
+  if (normalized.includes("/terrain/")) return "terrain";
+  if (/(^|\/)(floor|ground|terrain)[^/]*\.(usd|usda|usdc|usdz)$/i.test(normalized)) return "terrain";
+  return "scene_asset";
+};
+
+const isInsideCollisionBranch = (node: THREE.Object3D): boolean => {
+  let current: THREE.Object3D | null = node;
+  while (current) {
+    const kind = String(current.userData?.editorKind ?? "")
+      .trim()
+      .toLowerCase();
+    if (kind === "collision") return true;
+    current = current.parent;
+  }
+  return false;
+};
+
+const applyDefaultFloorAppearanceToSceneAsset = (root: THREE.Object3D): number => {
+  const sharedFloorMaterial = createDefaultFloorMaterial();
+  let styledMeshes = 0;
+
+  root.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    if (isInsideCollisionBranch(node)) return;
+    applyDefaultFloorAppearanceToMesh(node, sharedFloorMaterial);
+    node.userData.usdMaterialInfo = {
+      materialName: "Default Floor",
+      materialSource: "editor.default_floor",
+      baseColorTexture: null,
+      textureUrl: null,
+      editable: false,
+    };
+    styledMeshes += 1;
+  });
+
+  return styledMeshes;
+};
 
 const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) => {
   const rootWithRobotFlag = root as THREE.Object3D & { isRobot?: boolean };
@@ -382,17 +426,6 @@ const applySceneAssetPhysicsDefaults = (root: THREE.Object3D) => {
       restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
     };
   });
-};
-
-export type CollectedUsdBundleFile = {
-  path: string;
-  file: File;
-  contentType: string;
-};
-
-export type CollectedUsdBundle = {
-  entryPath: string;
-  files: CollectedUsdBundleFile[];
 };
 
 const toTuple3 = (value: string | null | undefined, fallback: [number, number, number]): [number, number, number] => {
@@ -951,6 +984,32 @@ const buildRobotFromMjcf = (
     };
   };
 
+  const FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M = 0.01;
+
+  const computeChildPoseFromFrame1 = (frame1: { position: [number, number, number]; quaternion: THREE.Quaternion }) => {
+    const childQuat = frame1.quaternion.clone().invert();
+    const childPos = new THREE.Vector3(-frame1.position[0], -frame1.position[1], -frame1.position[2]).applyQuaternion(childQuat);
+    return { position: childPos, quaternion: childQuat };
+  };
+
+  const compareFramePairAgainstBodyPose = (
+    frame0: { position: [number, number, number]; quaternion: THREE.Quaternion },
+    frame1: { position: [number, number, number]; quaternion: THREE.Quaternion },
+    bodyDef: MjcfBodyDef
+  ) => {
+    const childPoseInJoint = computeChildPoseFromFrame1(frame1);
+    const frame0Pos = new THREE.Vector3(frame0.position[0], frame0.position[1], frame0.position[2]);
+    const impliedChildPos = frame0Pos.add(childPoseInJoint.position.clone().applyQuaternion(frame0.quaternion));
+    const impliedChildQuat = frame0.quaternion.clone().multiply(childPoseInJoint.quaternion).normalize();
+    const bodyPos = new THREE.Vector3(bodyDef.pos[0], bodyDef.pos[1], bodyDef.pos[2]);
+    const bodyQuat = bodyDef.quat.clone().normalize();
+    return {
+      positionError: impliedChildPos.distanceTo(bodyPos),
+      rotationError: impliedChildQuat.angleTo(bodyQuat),
+      childPoseInJoint,
+    };
+  };
+
   const resolveIntrospectionJoint = (
     rawJoint: MjcfJointDef | null,
     parentLinkName: string,
@@ -1101,10 +1160,41 @@ const buildRobotFromMjcf = (
             : null)
       );
       const hasFramePair = Boolean(frame0Local && frame1Local);
+      const frameMismatchDistance = Number(introspectionJoint?.frameMismatchDistance);
+      const framePairMismatchOk =
+        !Number.isFinite(frameMismatchDistance) || frameMismatchDistance <= FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M;
+      const useFramePair = hasFramePair && framePairMismatchOk;
+      const framePairComparison =
+        frame0Local && frame1Local ? compareFramePairAgainstBodyPose(frame0Local, frame1Local, body) : null;
+
+      if (hasFramePair && !useFramePair) {
+        logWarn("USD joint frame pair reports large frame mismatch; falling back to MJCF local pose for this joint.", {
+          scope: "usd",
+          data: {
+            jointName,
+            parentLinkName,
+            childLinkName: linkName,
+            frameMismatchDistance,
+            frameMismatchTolerance: FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M,
+          },
+        });
+      } else if (useFramePair && framePairComparison && framePairComparison.positionError > 1e-4) {
+        logWarn("USD frame pair and MJCF body pose diverge; keeping USD frame pair for local chain coherence.", {
+          scope: "usd",
+          data: {
+            jointName,
+            parentLinkName,
+            childLinkName: linkName,
+            mjcfBodyPositionError: framePairComparison.positionError,
+            mjcfBodyRotationErrorRad: framePairComparison.rotationError,
+          },
+        });
+      }
       const rawJointAxis = introspectionJoint?.axisLocal ?? introspectionJoint?.axis ?? rawJoint?.axis ?? [0, 0, 1];
-      const jointAxis = frame0Local
+      const fallbackAxis = rawJoint?.axis ?? introspectionJoint?.axisLocal ?? introspectionJoint?.axis ?? [0, 0, 1];
+      const jointAxis = useFramePair && frame0Local
         ? axisInJointFrame([rawJointAxis[0], rawJointAxis[1], rawJointAxis[2]], frame0Local.quaternion)
-        : normalizeAxisTuple([rawJointAxis[0], rawJointAxis[1], rawJointAxis[2]]);
+        : normalizeAxisTuple([fallbackAxis[0], fallbackAxis[1], fallbackAxis[2]]);
       const actuator = rawJoint ? parsed.actuatorsByJoint.get(rawJoint.name) : undefined;
       const muscleFromActuator =
         actuator?.type === "muscle"
@@ -1127,8 +1217,8 @@ const buildRobotFromMjcf = (
       jointFlags.isURDFJoint = true;
       jointFlags.urdfName = jointName;
       joint.userData.editorKind = "joint";
-      const jointPosePosition = frame0Local?.position ?? body.pos;
-      const jointPoseQuaternion = frame0Local?.quaternion ?? body.quat;
+      const jointPosePosition = useFramePair && frame0Local ? frame0Local.position : body.pos;
+      const jointPoseQuaternion = useFramePair && frame0Local ? frame0Local.quaternion : body.quat;
       joint.position.set(jointPosePosition[0], jointPosePosition[1], jointPosePosition[2]);
       joint.quaternion.copy(jointPoseQuaternion);
 
@@ -1179,15 +1269,9 @@ const buildRobotFromMjcf = (
 
       joint.userData.urdf = { kind: "joint", joint: urdfJoint };
 
-      if (hasFramePair && frame1Local) {
-        const childQuat = frame1Local.quaternion.clone().invert();
-        const childPos = new THREE.Vector3(
-          -frame1Local.position[0],
-          -frame1Local.position[1],
-          -frame1Local.position[2]
-        ).applyQuaternion(childQuat);
-        link.position.set(childPos.x, childPos.y, childPos.z);
-        link.quaternion.copy(childQuat);
+      if (useFramePair && framePairComparison) {
+        link.position.copy(framePairComparison.childPoseInJoint.position);
+        link.quaternion.copy(framePairComparison.childPoseInJoint.quaternion);
       } else if (forcePoseOnLink) {
         link.position.set(body.pos[0], body.pos[1], body.pos[2]);
         link.quaternion.copy(body.quat);
@@ -1528,6 +1612,15 @@ const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: Norm
   if (!meshScene || meshScene.bodies.length === 0) return 0;
   const links = collectUsdLinkGroups(root, false);
   const bodyByName = new Map(meshScene.bodies.map((body) => [normalizeBodyToken(body.name) ?? body.name, body]));
+  const introspectionJoints = Array.isArray(root.userData?.usdIntrospection?.joints)
+    ? (root.userData.usdIntrospection.joints as Array<{ frame0Local?: unknown; frame1Local?: unknown }>)
+    : [];
+  const jointsWithExplicitFramePair = introspectionJoints.filter(
+    (joint) => Boolean(joint?.frame0Local) && Boolean(joint?.frame1Local)
+  ).length;
+  const hasRichJointFrames =
+    introspectionJoints.length > 0 &&
+    jointsWithExplicitFramePair >= Math.max(2, Math.ceil(introspectionJoints.length * 0.4));
 
   const resolveSceneParentLinkToken = (link: THREE.Group): string | null => {
     let current: THREE.Object3D | null = link.parent;
@@ -1606,6 +1699,10 @@ const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: Norm
     comparableJoints >= 3 &&
     currentToLocalError > comparableJoints * 0.05 &&
     currentToGlobalError + 1e-6 < currentToLocalError * 0.9;
+  // When explicit joint frame pairs exist on an already posed chain, re-applying
+  // mesh body poses can double-transform downstream links.
+  // Keep pose recovery enabled for genuinely collapsed skeletons.
+  if (hasRichJointFrames && !hasCollapsedLayout) return 0;
   if (!hasCollapsedLayout && !looksGlobalInLocalSlots) return 0;
 
   let applied = 0;
@@ -1954,46 +2051,6 @@ const attachUsdMeshSceneToRoot = (
 
 const normalizeSlashPath = (value: string) => value.replace(/\\/g, "/").replace(/\/+/g, "/");
 
-const stripQueryAndHash = (value: string) => value.replace(/[?#].*$/, "");
-
-const normalizeBundlePath = (value: string): string | null => {
-  const normalized = normalizeSlashPath(stripQueryAndHash(value).trim());
-  if (!normalized) return null;
-  const rawParts = normalized.replace(/^\/+/, "").split("/");
-  const parts: string[] = [];
-  for (const rawPart of rawParts) {
-    const part = rawPart.trim();
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (parts.length > 0) {
-        parts.pop();
-      }
-      continue;
-    }
-    parts.push(part);
-  }
-  if (!parts.length) return null;
-  return parts.join("/");
-};
-
-const dirnameBundlePath = (value: string) => {
-  const normalized = normalizeBundlePath(value);
-  if (!normalized) return "";
-  const slash = normalized.lastIndexOf("/");
-  if (slash < 0) return "";
-  return normalized.slice(0, slash);
-};
-
-const resolveReferenceBundlePath = (basePath: string, reference: string): string | null => {
-  const normalizedRef = normalizeSlashPath(stripQueryAndHash(reference).trim());
-  if (!normalizedRef) return null;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalizedRef)) return null;
-  if (normalizedRef.startsWith("//")) return null;
-  if (normalizedRef.startsWith("/")) return normalizeBundlePath(normalizedRef);
-  const baseDir = dirnameBundlePath(basePath);
-  return normalizeBundlePath(baseDir ? `${baseDir}/${normalizedRef}` : normalizedRef);
-};
-
 const normalizePrimPath = (value: string): string | null => {
   const cleaned = normalizeSlashPath(value.trim())
     .replace(/^["']+|["']+$/g, "")
@@ -2060,38 +2117,6 @@ const extractReferences = (tokens: string[]): string[] => {
     refs.add(normalized);
   }
   return Array.from(refs);
-};
-
-const createFileFromBytes = (bytes: Uint8Array, path: string, fallbackType = "application/octet-stream") => {
-  const name = path.split("/").pop() ?? "asset.usd";
-  // Create a non-shared backing buffer to satisfy DOM File BlobPart typing.
-  const stable = new Uint8Array(bytes.byteLength);
-  stable.set(bytes);
-  return new File([stable], name, { type: fallbackType });
-};
-
-const resolveWorkspaceKeyFromUrl = (
-  urlToKey: Map<string, string>,
-  resolvedUrl: string,
-  basePath: string,
-  reference: string
-) => {
-  const fromUrl = urlToKey.get(resolvedUrl);
-  if (fromUrl) return fromUrl;
-  const fromReference = resolveReferenceBundlePath(basePath, reference);
-  return fromReference;
-};
-
-const hasHiddenBundleSegment = (path: string) =>
-  path
-    .split("/")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .some((item) => item.startsWith("."));
-
-const isBundleFallbackCandidatePath = (path: string) => {
-  if (hasHiddenBundleSegment(path)) return false;
-  return BUNDLE_FALLBACK_INCLUDE_EXT_RE.test(path.toLowerCase());
 };
 
 const parseStageUpAxis = (value: unknown): "X" | "Y" | "Z" | "unknown" => {
@@ -2572,161 +2597,7 @@ export async function collectUsdBundleFiles(params: {
   bundleHintPaths?: string[];
   maxFiles?: number;
 }): Promise<CollectedUsdBundle> {
-  const entryPath = normalizeBundlePath(params.usdKey);
-  if (!entryPath) {
-    throw new Error(`Invalid USD workspace key '${params.usdKey}'.`);
-  }
-
-  const assetsByKey = params.assetsByKey ?? {};
-  const urlToKey = new Map<string, string>();
-  const keyToAsset = new Map<string, UsdWorkspaceAssetEntry>();
-  for (const [key, entry] of Object.entries(assetsByKey)) {
-    const normalizedKey = normalizeBundlePath(key);
-    if (!normalizedKey) continue;
-    keyToAsset.set(normalizedKey, entry);
-    urlToKey.set(entry.url, normalizedKey);
-  }
-
-  const queue: Array<{ url: string; path: string; file?: File }> = [];
-  queue.push({
-    url: params.usdUrl,
-    path: entryPath,
-    file: params.usdFile ?? keyToAsset.get(entryPath)?.file,
-  });
-
-  const visitedUrls = new Set<string>();
-  const filesByPath = new Map<string, CollectedUsdBundleFile>();
-  const maxFiles = Math.max(1, Math.min(256, params.maxFiles ?? 128));
-  const entryDir = dirnameBundlePath(entryPath);
-
-  while (queue.length > 0 && filesByPath.size < maxFiles) {
-    const current = queue.shift() as { url: string; path: string; file?: File };
-    if (visitedUrls.has(current.url)) continue;
-    visitedUrls.add(current.url);
-
-    let bytes: Uint8Array;
-    let contentType = current.file?.type || "application/octet-stream";
-    if (current.file instanceof File) {
-      bytes = new Uint8Array(await current.file.arrayBuffer());
-      contentType = current.file.type || contentType;
-    } else {
-      bytes = await readUsdBytes(current.url);
-      const fromAsset = keyToAsset.get(current.path);
-      contentType = fromAsset?.file?.type || contentType;
-    }
-
-    if (!filesByPath.has(current.path)) {
-      const file = current.file instanceof File ? current.file : createFileFromBytes(bytes, current.path, contentType);
-      filesByPath.set(current.path, {
-        path: current.path,
-        file,
-        contentType,
-      });
-    }
-
-    if (!params.resolveResource) continue;
-
-    const tokens = extractPrintableTokens(bytes);
-    const references = extractReferences(tokens);
-    for (const reference of references) {
-      const resolvedUrl = params.resolveResource(reference);
-      if (!resolvedUrl || visitedUrls.has(resolvedUrl)) continue;
-
-      const resolvedKey = resolveWorkspaceKeyFromUrl(urlToKey, resolvedUrl, current.path, reference);
-      const normalizedKey = normalizeBundlePath(resolvedKey ?? "");
-      if (!normalizedKey) continue;
-      const fromAsset = keyToAsset.get(normalizedKey);
-      queue.push({
-        url: resolvedUrl,
-        path: normalizedKey,
-        file: fromAsset?.file,
-      });
-    }
-  }
-
-  const addBundleFileByPath = async (candidatePath: string) => {
-    if (filesByPath.size >= maxFiles || filesByPath.has(candidatePath)) return;
-    const fromAsset = keyToAsset.get(candidatePath);
-    const fromAssetUrl = fromAsset?.url ?? "";
-
-    let resolvedUrl = fromAssetUrl;
-    if (!resolvedUrl && params.resolveResource) {
-      const relativeCandidate =
-        entryDir && candidatePath.startsWith(`${entryDir}/`)
-          ? candidatePath.slice(entryDir.length + 1)
-          : candidatePath;
-      resolvedUrl = params.resolveResource(relativeCandidate) ?? params.resolveResource(candidatePath) ?? "";
-    }
-    if (!resolvedUrl) return;
-
-    let file: File;
-    let contentType = fromAsset?.file?.type || "application/octet-stream";
-    if (fromAsset?.file instanceof File) {
-      file = fromAsset.file;
-      contentType = fromAsset.file.type || contentType;
-    } else {
-      const bytes = await readUsdBytes(resolvedUrl);
-      file = createFileFromBytes(bytes, candidatePath, contentType);
-    }
-
-    filesByPath.set(candidatePath, {
-      path: candidatePath,
-      file,
-      contentType,
-    });
-  };
-
-  const normalizedHintPaths = Array.isArray(params.bundleHintPaths)
-    ? params.bundleHintPaths
-        .map((rawPath) => String(rawPath ?? "").trim())
-        .filter((rawPath) => rawPath.length > 0)
-        .map((rawPath) => {
-          const relativeCandidate = normalizeBundlePath(resolveReferenceBundlePath(entryPath, rawPath) ?? "");
-          if (relativeCandidate && keyToAsset.has(relativeCandidate)) return relativeCandidate;
-          return normalizeBundlePath(rawPath);
-        })
-        .filter((item): item is string => Boolean(item))
-    : [];
-
-  const missingHints = normalizedHintPaths.filter((path) => !filesByPath.has(path));
-  const referenceDiscoveryLooksIncomplete = filesByPath.size <= 1 || missingHints.length > 0;
-  if (referenceDiscoveryLooksIncomplete) {
-    const baselineCount = filesByPath.size;
-    const fallbackCandidates = new Set<string>();
-    for (const hintPath of missingHints) fallbackCandidates.add(hintPath);
-    for (const candidatePath of keyToAsset.keys()) {
-      if (!isBundleFallbackCandidatePath(candidatePath)) continue;
-      if (entryDir) {
-        if (!candidatePath.startsWith(`${entryDir}/`)) continue;
-      } else if (candidatePath.includes("/")) {
-        continue;
-      }
-      fallbackCandidates.add(candidatePath);
-    }
-
-    const orderedCandidates = Array.from(fallbackCandidates).sort((a, b) => a.localeCompare(b));
-    for (const candidatePath of orderedCandidates) {
-      if (filesByPath.size >= maxFiles) break;
-      await addBundleFileByPath(candidatePath);
-    }
-
-    logInfo("USD bundle fallback enrichment applied", {
-      scope: "usd",
-      data: {
-        entryPath,
-        originalCount: baselineCount,
-        finalCount: filesByPath.size,
-        missingHints: missingHints.length,
-      },
-    });
-  }
-
-  const files = Array.from(filesByPath.values()).sort((a, b) => a.path.localeCompare(b.path));
-  if (!files.find((item) => item.path === entryPath)) {
-    throw new Error(`USD entry '${entryPath}' missing from resolved bundle.`);
-  }
-
-  return { entryPath, files };
+  return await collectUsdBundleFilesFromCollector(params);
 }
 
 const classifyPrimKind = (name: string, path: string): UsdPrimNode["kind"] => {
@@ -3578,14 +3449,48 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   }
 
   if (importSceneRole === "scene_asset") {
+    const sceneAssetRole = inferSceneAssetSourceRole(usdKey);
+    const usesManagedDefaultFloor = sceneAssetRole === "terrain" && isDefaultFloorWorkspaceKey(usdKey);
+    let styledFloorMeshes = 0;
+    if (usesManagedDefaultFloor) {
+      styledFloorMeshes = applyDefaultFloorAppearanceToSceneAsset(root);
+    }
+    const sceneAssetMetadata: Record<string, unknown> = {
+      importSceneRole,
+    };
+    if (usesManagedDefaultFloor) {
+      sceneAssetMetadata.managedTerrainAssetId = "floor";
+      sceneAssetMetadata.visualStyle = "default_floor";
+      sceneAssetMetadata.styledMeshCount = styledFloorMeshes;
+    }
     retagUsdRootAsSceneAsset(root, stripFileExtension(displayName) || displayName);
     applySceneAssetPhysicsDefaults(root);
     root.userData.usdUrl = usdUrl;
     root.userData.usdWorkspaceKey = usdKey;
+    root.userData.sceneAssetSource = {
+      kind: "usd",
+      role: sceneAssetRole,
+      workspaceKey: usdKey,
+      converterAssetId: resolvedConverterAssetId ?? null,
+      trainingAssetId: null,
+      sourceUrl: usdUrl,
+      importOptions: importOptions ? { ...importOptions } : null,
+      metadata: sceneAssetMetadata,
+    };
     if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
     if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
     if (mjcfXml) root.userData.mjcfSource = mjcfXml;
     if (mjcfBodiesPatchedFromMeshScene > 0) root.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
+    if (usesManagedDefaultFloor) {
+      logInfo("USD default floor scene asset restyled to editor floor material", {
+        scope: "usd",
+        data: {
+          usdKey,
+          styledFloorMeshes,
+          managedTerrainAssetId: "floor",
+        },
+      });
+    }
     logInfo("USD scene asset import completed", {
       scope: "usd",
       data: {
@@ -3594,6 +3499,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         converterAssetId: resolvedConverterAssetId,
         attachedMeshes: meshAttach.attachedMeshes,
         attachedPrimitives: meshAttach.attachedPrimitives,
+        usesManagedDefaultFloor,
       },
     });
     return root;

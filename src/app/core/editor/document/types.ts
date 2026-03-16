@@ -65,6 +65,20 @@ export type UsdModelSource = {
 
 export type RobotModelSource = UrdfModelSource | UsdModelSource;
 
+export type EnvironmentSourceRole = "robot" | "scene_asset" | "terrain";
+export type SceneAssetSourceKind = "usd" | "mjcf" | "mesh" | "generated";
+
+export type SceneAssetSource = {
+  kind: SceneAssetSourceKind;
+  role: Exclude<EnvironmentSourceRole, "robot">;
+  workspaceKey?: string | null;
+  converterAssetId?: string | null;
+  trainingAssetId?: string | null;
+  sourceUrl?: string | null;
+  importOptions?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type NodeComponents = {
   transform?: Transform;
   physics?: InstancePhysics;
@@ -78,6 +92,8 @@ export type NodeComponents = {
   urdfImportOptions?: UrdfImportOptions;
   /** Generic robot model source — set for robots imported from any format (urdf, usd, …) */
   robotModelSource?: RobotModelSource;
+  /** Source metadata for imported non-robot scene/environment assets (USD terrain/full-scene bundles). */
+  sceneAssetSource?: SceneAssetSource;
   visual?: VisualComponent;
   mirror?: MirrorComponent;
 };
@@ -143,6 +159,7 @@ export type EnvironmentDiagnostic = {
 export type EnvironmentAsset = {
   id: string;
   kind: EnvironmentAssetKind;
+  role?: EnvironmentSourceRole;
   workspaceKey?: string | null;
   converterAssetId?: string | null;
   trainingAssetId?: string | null;
@@ -156,6 +173,7 @@ export type EnvironmentEntity = {
   nodeId?: string | null;
   name: string;
   kind: EnvironmentEntityKind;
+  sourceRole?: EnvironmentSourceRole;
   parentId: string | null;
   children: string[];
   sourceAssetId?: string | null;

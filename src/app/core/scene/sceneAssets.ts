@@ -334,21 +334,43 @@ export function createSceneAssetTree(
   }
 
   if (assetId === "floor") {
+    const floorGroupId = rootId;
+    const floorLinkId = createDocId();
+    const floorVisualId = createDocId();
+    const floorCollisionId = createDocId();
+    const floorMeshId = createDocId();
     const floorTransform = defaultTransform({
       position: { x: 0, y: 0, z: -1.5 },
     });
 
     return {
-      rootId,
+      rootId: floorGroupId,
       nodes: [
         {
-          id: rootId,
+          id: floorGroupId,
           name: "Floor",
-          kind: "mesh",
+          kind: "group",
           parentId: null,
-          source: { kind: "primitive", shape: "plane" },
           components: {
             transform: floorTransform,
+            sceneAssetSource: {
+              kind: "generated",
+              role: "terrain",
+              metadata: {
+                generatedFrom: "scene_asset_catalog",
+                managedTerrainAssetId: "floor",
+                sceneAssetId: "floor",
+              },
+            },
+          },
+        },
+        {
+          id: floorLinkId,
+          name: "Link",
+          kind: "link",
+          parentId: floorGroupId,
+          components: {
+            transform: defaultTransform(),
             ...withPhysics({
               mass: 0,
               fixed: true,
@@ -358,6 +380,16 @@ export function createSceneAssetTree(
               collisionsEnabled: true,
             }),
           },
+        },
+        createVisualNode(floorVisualId, floorLinkId),
+        createCollisionNode(floorCollisionId, floorLinkId),
+        {
+          id: floorMeshId,
+          name: "Floor Mesh",
+          kind: "mesh",
+          parentId: floorVisualId,
+          source: { kind: "primitive", shape: "plane" },
+          components: { transform: defaultTransform() },
         },
       ],
     };

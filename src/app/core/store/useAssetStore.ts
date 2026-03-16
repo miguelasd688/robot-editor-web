@@ -63,9 +63,10 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     for (const f of list) {
       const rawKey = (f as any).webkitRelativePath || f.name;
       const key = normPath(rawKey);
-      if (!next[key]) {
-        next[key] = { file: f, url: URL.createObjectURL(f), key };
-      }
+      const previous = next[key];
+      const url = URL.createObjectURL(f);
+      if (previous) URL.revokeObjectURL(previous.url);
+      next[key] = { file: f, url, key };
     }
 
     // auto-detect urdf si no hay

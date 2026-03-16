@@ -243,6 +243,17 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
 
   const rootLinks = computeRootLinks(links, joints);
 
+  const isFootLinkName = (name: string) => /(^|[_:.-])foot([_:.-]|$)/i.test(name);
+  const isLegLinkName = (name: string) => /(^|[_:.-])leg([_:.-]|$)/i.test(name);
+  const footLinkCount = Array.from(links.keys()).filter((name) => isFootLinkName(name)).length;
+  const legLinkCount = Array.from(links.keys()).filter((name) => isLegLinkName(name) && !isFootLinkName(name)).length;
+  const applyFootGroundCollisionPolicy = footLinkCount >= 2 && legLinkCount >= 2;
+  if (applyFootGroundCollisionPolicy) {
+    warnings.push(
+      "Applied foot/leg collision policy: *_foot links keep collisions, *_leg links disable collisions to reduce self-interference."
+    );
+  }
+
   const nameMap: UrdfToMjcfResult["nameMap"] = { links: {}, joints: {}, linksByMjcf: {}, jointsByMjcf: {} };
   const linkNames = new NameRegistry("link", warn, "link");
   const jointNames = new NameRegistry("joint", warn, "joint");
@@ -471,6 +482,9 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
     }
 
     const geoms = link.collisions.length ? link.collisions : link.visuals;
+    const footLink = applyFootGroundCollisionPolicy && isFootLinkName(link.name);
+    const legLink = applyFootGroundCollisionPolicy && isLegLinkName(link.name) && !footLink;
+    const collisionsEnabledForLink = !legLink;
     const fallbackRadius = (() => {
       if (meshMode === "mesh") return null;
       const inertial = link.inertial;
@@ -544,7 +558,11 @@ export function convertUrdfToMjcf(options: UrdfToMjcfOptions): UrdfToMjcfResult 
       const baseQuat = quatFromRpy(origin.rpy);
       const quat = formatQuat(baseQuat);
       const geomName = `${mjcfLinkName}_${i}_geom`;
-      const collisionAttr = selfCollision ? "" : ` contype="1" conaffinity="2"`;
+      const collisionAttr = collisionsEnabledForLink
+        ? selfCollision
+          ? ""
+          : ` contype="1" conaffinity="2"`
+        : ` contype="0" conaffinity="0"`;
       const rawFriction =
         geomFrictionByLink && Number.isFinite(geomFrictionByLink[link.name])
           ? geomFrictionByLink[link.name]

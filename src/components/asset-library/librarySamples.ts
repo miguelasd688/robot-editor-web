@@ -54,7 +54,11 @@ export type LibrarySample = {
   usdVariants?: LibrarySampleUsdVariant[];
   /** Optional model-specific terrain options shown in the USD import dialog. */
   terrainOptions?: LibrarySampleTerrainOption[];
-  /** Optional environment bundle entries (relative to sample root) that can be loaded as full scene. */
+  /**
+   * Optional environment bundle entries for full-scene import.
+   * Entries may be sample-relative (e.g. `terrain/foo.usda`) or absolute workspace keys
+   * under `library/` (e.g. `library/floors/flat_floor.usda`).
+   */
   environmentUsdEntries?: string[];
   trainingDefaults?: LibrarySampleTrainingDefaults;
 };
@@ -104,6 +108,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "configuration/ant_colored_robot_schema.usd",
       "configuration/ant_instanceable_robot_schema.usd",
       "configuration/ant_robot_schema.usd",
+      "library/floors/flat_floor.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -127,7 +132,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Ant-v0",
     },
     terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["ant.usd", "ant_colored.usd"],
+    environmentUsdEntries: ["library/floors/flat_floor.usda"],
     usdVariants: [
       {
         id: "standard",
@@ -153,6 +158,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "humanoid_instanceable.usd",
       "configuration/humanoid_instanceable_robot_schema.usd",
       "configuration/humanoid_robot_schema.usd",
+      "library/floors/flat_floor.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -176,7 +182,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Humanoid-v0",
     },
     terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["humanoid.usd"],
+    environmentUsdEntries: ["library/floors/flat_floor.usda"],
   },
   {
     id: "anymal_c",
@@ -226,6 +232,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "legacy/materials/thigh.jpg",
       "legacy/materials/top_shell.jpg",
       "legacy/materials/wide_angle_camera.jpg",
+      "terrain/rough_generator_exact_5x5.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -249,7 +256,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
     terrainOptions: ["none", "flat", "rough", "full_scene"],
-    environmentUsdEntries: ["anymal_c.usd", "legacy/anymal.usd"],
+    environmentUsdEntries: ["terrain/rough_generator_exact_5x5.usda"],
     usdVariants: [
       {
         id: "anymal_c",
@@ -290,6 +297,46 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "configuration/ur10_physics.usd",
       "configuration/ur10_robot_schema.usd",
       "configuration/ur10_sensor.usd",
+      "environment/Props/Blocks/DexCube/Materials/dex_cube_mod.png",
+      "environment/Props/Blocks/DexCube/Props/instanceable_meshes.usd",
+      "environment/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+      "environment/Props/Blocks/Materials/Materials.usd",
+      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_D1.png",
+      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_N1.png",
+      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_ORM1.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_BaseColor.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Normal.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Roughness.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_green1_BaseColor.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_green1_Normal.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_green1_Roughness.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_red1_BaseColor.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_red1_Normal.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_red1_Roughness.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_BaseColor.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Normal.png",
+      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Roughness.png",
+      "environment/Props/Blocks/MultiColorCube/Props/instanceable_meshes.usd",
+      "environment/Props/Blocks/MultiColorCube/multi_color_cube_instanceable.usd",
+      "environment/Props/Blocks/basic_block.usd",
+      "environment/Props/Blocks/block.usd",
+      "environment/Props/Blocks/block_instanceable.usd",
+      "environment/Props/Blocks/blue_block.usd",
+      "environment/Props/Blocks/green_block.usd",
+      "environment/Props/Blocks/nvidia_cube.usd",
+      "environment/Props/Blocks/red_block.usd",
+      "environment/Props/Blocks/yellow_block.usd",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_BaseColor.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Metallic.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Normal.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Roughness.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_BaseColor.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Metallic.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Normal.png",
+      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Roughness.png",
+      "environment/Props/Mounts/SeattleLabTable/table.usd",
+      "environment/Props/Mounts/SeattleLabTable/table_instanceable.usd",
+      "environment/ur10_table_cubes_scene.usda",
       "grippers/long_gripper.usd",
       "grippers/short_gripper.usd",
       "ur10.usd",
@@ -316,7 +363,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Reach-UR10-v0",
     },
     terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["ur10.usd", "Legacy/ur10_long_suction.usd", "Legacy/ur10_short_suction.usd"],
+    environmentUsdEntries: ["environment/ur10_table_cubes_scene.usda"],
     usdVariants: [
       {
         id: "standard",
@@ -416,7 +463,7 @@ export function getLibrarySampleById(sampleId: string): LibrarySample | null {
 }
 
 export function buildLibrarySampleEntryKey(sample: LibrarySample): string {
-  return `${LIBRARY_ROOT}/${sample.id}/${sample.entry}`;
+  return resolveLibraryWorkspaceKey(sample, sample.entry);
 }
 
 export function listLibrarySampleUsdEntries(sample: LibrarySample): string[] {
@@ -431,7 +478,7 @@ export function listLibrarySampleUsdEntries(sample: LibrarySample): string[] {
 }
 
 export function listLibrarySampleUsdWorkspaceKeys(sample: LibrarySample): string[] {
-  return listLibrarySampleUsdEntries(sample).map((entry) => `${LIBRARY_ROOT}/${sample.id}/${entry}`);
+  return listLibrarySampleUsdEntries(sample).map((entry) => resolveLibraryWorkspaceKey(sample, entry));
 }
 
 export function listLibrarySampleEnvironmentWorkspaceKeys(sample: LibrarySample): string[] {
@@ -441,7 +488,7 @@ export function listLibrarySampleEnvironmentWorkspaceKeys(sample: LibrarySample)
         .map((entry) => normalizeLibraryFile(String(entry ?? "").trim()))
         .filter((entry) => entry.length > 0)
     : [];
-  return Array.from(new Set(entries.map((entry) => `${LIBRARY_ROOT}/${sample.id}/${entry}`)));
+  return Array.from(new Set(entries.map((entry) => resolveLibraryWorkspaceKey(sample, entry))));
 }
 
 export function resolveDefaultSampleEnvironmentWorkspaceKey(
@@ -538,6 +585,14 @@ const resolveLibraryBaseUrl = () => {
 };
 
 const normalizeLibraryFile = (path: string) => path.replace(/^\/+/, "");
+const hasLibraryWorkspacePrefix = (path: string) =>
+  normalizeLibraryFile(path).toLowerCase().startsWith(`${LIBRARY_ROOT.toLowerCase()}/`);
+const resolveLibraryWorkspaceKey = (sample: LibrarySample, path: string) => {
+  const normalized = normalizeLibraryFile(path);
+  if (!normalized) return "";
+  if (hasLibraryWorkspacePrefix(normalized)) return normalized;
+  return `${LIBRARY_ROOT}/${sample.id}/${normalized}`;
+};
 
 const createFileWithRelativePath = (blob: Blob, filename: string, relativePath: string) => {
   const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
@@ -553,22 +608,25 @@ export async function fetchLibrarySampleFiles(sample: LibrarySample, filePaths?:
   const baseUrl = resolveLibraryBaseUrl();
   const sourcePaths =
     Array.isArray(filePaths) && filePaths.length > 0 ? filePaths : sample.files;
-  const uniqueFiles = new Set<string>(sourcePaths.map((file) => normalizeLibraryFile(file)));
-  const normalizedEntry = normalizeLibraryFile(sample.entry);
-  if (!uniqueFiles.has(normalizedEntry)) uniqueFiles.add(normalizedEntry);
-  const files = Array.from(uniqueFiles);
+  const workspaceKeys = new Set<string>(
+    sourcePaths
+      .map((filePath) => resolveLibraryWorkspaceKey(sample, String(filePath ?? "").trim()))
+      .filter((filePath) => filePath.length > 0)
+  );
+  const entryWorkspaceKey = buildLibrarySampleEntryKey(sample);
+  if (entryWorkspaceKey) workspaceKeys.add(entryWorkspaceKey);
+  const files = Array.from(workspaceKeys);
 
   const responses = await Promise.all(
-    files.map(async (filePath) => {
-      const url = `${baseUrl}${LIBRARY_ROOT}/${sample.id}/${filePath}`;
+    files.map(async (workspaceKey) => {
+      const url = `${baseUrl}${workspaceKey}`;
       const res = await fetch(url);
       if (!res.ok) {
         throw new Error(`Failed to load library file: ${url} (${res.status} ${res.statusText})`);
       }
       const blob = await res.blob();
-      const filename = filePath.split("/").pop() ?? filePath;
-      const relativePath = `${LIBRARY_ROOT}/${sample.id}/${filePath}`;
-      return createFileWithRelativePath(blob, filename, relativePath);
+      const filename = workspaceKey.split("/").pop() ?? workspaceKey;
+      return createFileWithRelativePath(blob, filename, workspaceKey);
     })
   );
 
@@ -583,13 +641,24 @@ export async function ensureLibrarySampleImported(
   const assetKeys = Object.keys(assetsProvider()).map((key) => normalizeLibraryFile(key));
   const existingKey = findLibrarySampleKey(assetKeys, sample);
   const knownAssetKeySet = new Set(assetKeys);
-  const expectedFiles = new Set<string>(sample.files.map((file) => normalizeLibraryFile(file)));
-  expectedFiles.add(normalizeLibraryFile(sample.entry));
-  const missingFiles = Array.from(expectedFiles).filter(
-    (filePath) => !knownAssetKeySet.has(`${LIBRARY_ROOT}/${sample.id}/${filePath}`)
+  const expectedFiles = new Set<string>(
+    sample.files
+      .map((file) => resolveLibraryWorkspaceKey(sample, file))
+      .filter((file) => file.length > 0)
   );
-  if (existingKey && missingFiles.length === 0) return existingKey;
-  const files = await fetchLibrarySampleFiles(sample, missingFiles.length > 0 ? missingFiles : undefined);
+  expectedFiles.add(buildLibrarySampleEntryKey(sample));
+  const missingFiles = Array.from(expectedFiles).filter(
+    (workspaceKey) => workspaceKey.length > 0 && !knownAssetKeySet.has(workspaceKey)
+  );
+  const samplePrefix = normalizeLibraryFile(`${LIBRARY_ROOT}/${sample.id}/`);
+  const sharedWorkspaceFiles = Array.from(expectedFiles).filter((workspaceKey) => {
+    if (!workspaceKey.startsWith(`${LIBRARY_ROOT}/`)) return false;
+    return !workspaceKey.startsWith(samplePrefix);
+  });
+  const filesToImport = Array.from(new Set([...missingFiles, ...sharedWorkspaceFiles]));
+  if (existingKey && filesToImport.length === 0) return existingKey;
+
+  const files = await fetchLibrarySampleFiles(sample, filesToImport.length > 0 ? filesToImport : undefined);
   importFiles(files);
   return findLibrarySampleKey(Object.keys(assetsProvider()), sample);
 }

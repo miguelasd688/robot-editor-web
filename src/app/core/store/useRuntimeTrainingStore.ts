@@ -30,6 +30,7 @@ import {
   resolveTrainingCacheTenantId,
 } from "../services/trainingTelemetryCache";
 import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManager";
+import { editorEngine } from "../editor/engineSingleton";
 
 type RuntimeTrainingState = {
   jobs: TrainingJobSummary[];
@@ -574,8 +575,6 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const localId = `local_job_${now}_${trainingJobCounter++}`;
       const epochs = Math.max(1, Math.round(input.epochs));
       const experimentName = (input.experimentName ?? modelName).trim() || modelName;
-      const envId = (input.envId ?? dataset).trim() || dataset;
-      const trainer = input.trainer ?? "rsl_rl";
       const maxSteps = Math.max(1, Math.round(input.maxSteps ?? epochs));
       const configObject = input.config ?? {};
       const configValues = toObjectOrEmpty(configObject);
@@ -597,14 +596,26 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       optimisticJobIds.add(localId);
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
-      const { request: customTaskRequest } = isaacLabEnvironmentManager.buildCustomTaskRequest({
+      const customTaskBuild = isaacLabEnvironmentManager.buildCustomTaskRequest({
         submit: {
           ...input,
           experimentName,
           maxSteps,
         },
         config: configValues,
+        doc: editorEngine.getDoc(),
       });
+      const customTaskRequest = customTaskBuild.request;
+      const taskWarnings = customTaskBuild.diagnostics.filter((item) => item.severity === "warning");
+      if (taskWarnings.length > 0) {
+        logWarn("Training request built with environment warnings", {
+          scope: "runtime-training",
+          data: {
+            localId,
+            warnings: taskWarnings.map((warning) => `${warning.code}: ${warning.message}`),
+          },
+        });
+      }
       const submissionPromise = submitTrainingTaskRemote(customTaskRequest).then((taskResponse) => {
         if (!("job" in taskResponse)) {
           throw new Error("Custom training request returned preview payload during launch");

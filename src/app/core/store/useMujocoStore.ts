@@ -21,6 +21,7 @@ import { applyPose, mapPoseByRobot } from "../physics/mujoco/PoseBufferService";
 import { NameRegistry, sanitizeMjcfName } from "../physics/mujoco/mjcfNames";
 import { buildActuatorRegistry, type ActuatorDescriptor } from "../physics/mujoco/ActuatorRegistry";
 import { mujocoEnvironmentManager } from "../physics/mujoco/MujocoEnvironmentManager";
+import { environmentCompilationManager } from "../environment/EnvironmentCompilationManager";
 
 type MujocoState = {
   noiseRate: number;
@@ -790,12 +791,16 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
         editorEngine.setDoc(sanitized, "mujoco:joint-rename");
       }
       const doc = editorEngine.getDoc();
+      const compilation = environmentCompilationManager.compileProjectDoc({
+        doc,
+        target: "runtime",
+      });
       const warnings: string[] = [];
 
       set({ isLoading: true, lastError: null, isReady: false });
       try {
         const buildResult = await mujocoEnvironmentManager.buildRuntimeSource({
-          doc,
+          compilation,
           viewer,
           roots,
           assets,

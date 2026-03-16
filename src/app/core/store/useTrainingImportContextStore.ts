@@ -39,29 +39,29 @@ function normalizeTerrainMode(value: TrainingTerrainMode | string | null | undef
 
 function normalizeDiagnostics(input: EnvironmentDiagnostic[] | null | undefined): EnvironmentDiagnostic[] {
   if (!Array.isArray(input)) return [];
-  return input
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const code = String(item.code ?? "").trim();
-      const message = String(item.message ?? "").trim();
-      const severity = item.severity === "error" ? "error" : "warning";
-      const source =
-        item.source === "import" || item.source === "document" || item.source === "simulation" || item.source === "training"
-          ? item.source
-          : "document";
-      if (!code || !message) return null;
-      return {
-        code,
-        message,
-        severity,
-        source,
-        context:
-          item.context && typeof item.context === "object" && !Array.isArray(item.context)
-            ? (item.context as Record<string, unknown>)
-            : undefined,
-      } satisfies EnvironmentDiagnostic;
-    })
-    .filter((item): item is EnvironmentDiagnostic => Boolean(item));
+  const diagnostics: EnvironmentDiagnostic[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const code = String(item.code ?? "").trim();
+    const message = String(item.message ?? "").trim();
+    const severity = item.severity === "error" ? "error" : "warning";
+    const source =
+      item.source === "import" || item.source === "document" || item.source === "simulation" || item.source === "training"
+        ? item.source
+        : "document";
+    if (!code || !message) continue;
+    const diagnostic: EnvironmentDiagnostic = {
+      code,
+      message,
+      severity,
+      source,
+    };
+    if (item.context && typeof item.context === "object" && !Array.isArray(item.context)) {
+      diagnostic.context = item.context as Record<string, unknown>;
+    }
+    diagnostics.push(diagnostic);
+  }
+  return diagnostics;
 }
 
 function cloneEnvironmentSnapshot(snapshot: EnvironmentDoc | null | undefined): EnvironmentDoc | null {

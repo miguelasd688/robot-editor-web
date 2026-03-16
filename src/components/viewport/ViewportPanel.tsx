@@ -13,6 +13,7 @@ import { useBrowserPreviewStore } from "../../app/core/store/useBrowserPreviewSt
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 import { logInfo, logWarn } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
+import { isDefaultFloorWorkspaceKey } from "../../app/core/assets/floorAppearance";
 import { isUrdfLikePath } from "../../app/core/urdf/urdfFileTypes";
 import { DarkSelect } from "../../app/ui/DarkSelect";
 import { tickSimulation } from "./services/simulationService";
@@ -123,16 +124,50 @@ function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] 
     .map((item) => String(item ?? "").trim())
     .filter((item) => item.length > 0);
   if (hints.length === 0) return undefined;
-  const sample = findLibrarySampleByWorkspaceKey(usdKey);
-  if (!sample || sample.kind !== "usd") return hints;
-  const samplePrefix = normalizeWorkspaceFilePath(`${LIBRARY_ROOT}/${sample.id}/`);
   const normalizedUsdKey = normalizeWorkspaceFilePath(usdKey);
+  const usdDir = (() => {
+    const idx = normalizedUsdKey.lastIndexOf("/");
+    return idx >= 0 ? normalizedUsdKey.slice(0, idx) : "";
+  })();
+  const usdIsLibraryKey = normalizedUsdKey.startsWith(`${LIBRARY_ROOT}/`);
+
+  const sample = findLibrarySampleByWorkspaceKey(usdKey);
+  if (!sample || sample.kind !== "usd") {
+    const scoped = hints.filter((item) => {
+      const normalizedHint = normalizeWorkspaceFilePath(item);
+      if (!normalizedHint) return false;
+      if (normalizedHint === normalizedUsdKey) return true;
+
+      // For shared library keys (for example library/floors/*.usda), only allow
+      // absolute library hints in the same directory. This prevents unrelated
+      // sample-relative hints from being rebased into library/floors/* and
+      // causing missing-asset validation failures.
+      if (usdIsLibraryKey) {
+        if (!normalizedHint.startsWith(`${LIBRARY_ROOT}/`)) return false;
+        return Boolean(usdDir && normalizedHint.startsWith(`${usdDir}/`));
+      }
+
+      if (usdDir && normalizedHint.startsWith(`${usdDir}/`)) return true;
+      if (normalizedHint.startsWith(`${LIBRARY_ROOT}/`)) return false;
+      const rebasedHint = normalizeWorkspaceFilePath(usdDir ? `${usdDir}/${normalizedHint}` : normalizedHint);
+      return rebasedHint === normalizedUsdKey || (usdDir.length > 0 && rebasedHint.startsWith(`${usdDir}/`));
+    });
+    return scoped.length > 0 ? scoped : undefined;
+  }
+
+  const samplePrefix = normalizeWorkspaceFilePath(`${LIBRARY_ROOT}/${sample.id}/`);
   if (!normalizedUsdKey.startsWith(samplePrefix)) return hints;
   const relativeEntry = normalizedUsdKey.slice(samplePrefix.length);
   const entryDir = relativeEntry.includes("/") ? relativeEntry.slice(0, relativeEntry.lastIndexOf("/") + 1) : "";
   if (!entryDir) return hints;
   const scoped = hints.filter((item) => {
     const normalizedHint = normalizeWorkspaceFilePath(item);
+    if (!normalizedHint) return false;
+    if (normalizedHint.startsWith(`${LIBRARY_ROOT}/`)) {
+      if (normalizedHint === normalizedUsdKey) return true;
+      if (usdDir && normalizedHint.startsWith(`${usdDir}/`)) return true;
+      return false;
+    }
     return normalizedHint.startsWith(entryDir) || normalizedHint.startsWith("terrain/") || normalizedHint.startsWith("environment/");
   });
   return scoped.length > 0 ? scoped : hints;
@@ -358,15 +393,28 @@ function buildTerrainDialogOptions(selectedUsdKey: string, terrainUsdKeys: strin
   }
 
   if (policy.allowFlat) {
-    options.push({
-      value: TERRAIN_OPTION_FLAT,
-      mode: "plane",
-      usdKey: null,
-      sceneAssetId: "floor",
-      replaceFullScene: false,
-      label: "Flat floor (library)",
-      hint: "Uses your Floor asset in viewport and built-in plane terrain mode for training.",
-    });
+    const flatFloorUsdKey = terrainUsdOptions.find((key) => isDefaultFloorWorkspaceKey(key)) ?? null;
+    if (flatFloorUsdKey) {
+      options.push({
+        value: TERRAIN_OPTION_FLAT,
+        mode: "usd",
+        usdKey: flatFloorUsdKey,
+        sceneAssetId: null,
+        replaceFullScene: false,
+        label: "Flat floor (library)",
+        hint: "Imports the managed Default Floor USD bundle and keeps it as terrain source-of-truth.",
+      });
+    } else {
+      options.push({
+        value: TERRAIN_OPTION_FLAT,
+        mode: "plane",
+        usdKey: null,
+        sceneAssetId: "floor",
+        replaceFullScene: false,
+        label: "Flat floor (library)",
+        hint: "Uses your Floor asset in viewport and built-in plane terrain mode for training.",
+      });
+    }
   }
 
   if (policy.allowRough) {
