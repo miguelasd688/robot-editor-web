@@ -8,6 +8,7 @@ import type { EditorCommand } from "./commands/types";
 import { setNodeNameCommand, setNodePhysicsCommand, setNodeTransformCommand, setNodeUrdfCommand, setNodeVisualCommand, setSelectionCommand } from "./commands/sceneCommands";
 import type { InstancePhysics, PhysicsFields } from "../assets/types";
 import type { UrdfInstance } from "../urdf/urdfModel";
+import { environmentDocumentManager } from "../environment/EnvironmentDocumentManager";
 
 export type EditorEngine = {
   getDoc: () => ProjectDoc;
@@ -26,12 +27,12 @@ export type EditorEngine = {
 };
 
 export function createEditorEngine(initialDoc: ProjectDoc = createEmptyProject()): EditorEngine {
-  let doc = initialDoc;
+  let doc = environmentDocumentManager.normalizeProjectDoc(initialDoc);
   const bus = new EventBus<EditorEvent>();
   const history = new CommandHistory();
 
   const emitDoc = (next: ProjectDoc, reason: string) => {
-    doc = next;
+    doc = environmentDocumentManager.normalizeProjectDoc(next);
     bus.emit({ type: "doc:changed", doc, reason });
   };
 

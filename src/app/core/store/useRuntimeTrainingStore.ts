@@ -16,7 +16,6 @@ import {
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
   listTrainingJobsRemote,
-  submitTrainingJobRemote,
   trainingApiEnabled,
 } from "../services/trainingApiClient";
 import { logError, logInfo, logWarn } from "../services/logger";
@@ -30,6 +29,7 @@ import {
   markHydratedTrainingEvents,
   resolveTrainingCacheTenantId,
 } from "../services/trainingTelemetryCache";
+import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManager";
 
 type RuntimeTrainingState = {
   jobs: TrainingJobSummary[];
@@ -473,69 +473,9 @@ function scheduleTrainingProgress(jobId: string) {
   runningIntervals.set(jobId, timer);
 }
 
-function isTaskFactoryConfig(config: unknown) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
-  const record = config as Record<string, unknown>;
-  if (typeof record.recipeId === "string" && record.recipeId.trim().length > 0) return true;
-  if (
-    record.executionMode === "manager" ||
-    record.executionMode === "recipe" ||
-    record.executionMode === "generic"
-  ) {
-    return true;
-  }
-  if (typeof record.taskSpecId === "string" && record.taskSpecId.trim().length > 0) return true;
-  if (record.taskSpec && typeof record.taskSpec === "object" && !Array.isArray(record.taskSpec)) return true;
-  return false;
-}
-
-function toTextOrEmpty(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function toPositiveIntOrUndefined(value: unknown) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return undefined;
-  return Math.max(1, Math.round(parsed));
-}
-
-function toNonNegativeIntOrUndefined(value: unknown) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return undefined;
-  return Math.max(0, Math.round(parsed));
-}
-
 function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
-}
-
-function toObjectOrUndefined(value: unknown): Record<string, unknown> | undefined {
-  const objectValue = toObjectOrEmpty(value);
-  return Object.keys(objectValue).length > 0 ? objectValue : undefined;
-}
-
-function toStringArrayOrUndefined(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const next = value
-    .map((item) => String(item ?? "").trim())
-    .filter((item) => item.length > 0);
-  return next.length > 0 ? next : undefined;
-}
-
-function toAssetPipelineOrUndefined(
-  value: unknown
-): { mode: "usd_passthrough" | "mjcf_conversion"; reason?: string } | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const modeToken = toTextOrEmpty(record.mode).toLowerCase();
-  if (modeToken !== "usd_passthrough" && modeToken !== "mjcf_conversion") return undefined;
-  const mode = modeToken as "usd_passthrough" | "mjcf_conversion";
-  const reason = toTextOrEmpty(record.reason);
-  return {
-    mode,
-    ...(reason ? { reason } : {}),
-  };
 }
 
 function isOptimisticLocalJobId(jobId: string) {
@@ -657,70 +597,20 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       optimisticJobIds.add(localId);
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
-      const previewValues = toObjectOrEmpty(configValues.preview);
-      const environmentValues = toObjectOrEmpty(configValues.environment);
-      const taskTemplate = toTextOrEmpty(environmentValues.taskTemplate);
-      const resolvedTaskTemplate = toTextOrEmpty(configValues.taskTemplate) || taskTemplate;
-      const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
-      const baseConstraintModeToken = toTextOrEmpty(configValues.baseConstraintMode);
-      const submissionPromise = isTaskFactoryConfig(configObject)
-        ? robotAssetId
-          ? submitTrainingTaskRemote({
-            recipeId: toTextOrEmpty(configValues.recipeId) || undefined,
-            executionMode: "manager",
-            taskSpecId: toTextOrEmpty(configValues.taskSpecId) || undefined,
-            taskSpec: toObjectOrUndefined(configValues.taskSpec),
-            agentId: toTextOrEmpty(configValues.agentId) || undefined,
-            catalogVersion: toTextOrEmpty(configValues.catalogVersion) || undefined,
-            taskTemplate: resolvedTaskTemplate || undefined,
-            task: toTextOrEmpty(configValues.task) || resolvedTaskTemplate || undefined,
-            robotAssetId,
-            sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || undefined,
-            tenantId: input.tenantId,
-            experimentName,
-            maxSteps,
-            numEnvs: toPositiveIntOrUndefined(configValues.numEnvs),
-            checkpoint: toNonNegativeIntOrUndefined(configValues.checkpoint),
-            stepsPerEpoch: toPositiveIntOrUndefined(configValues.stepsPerEpoch),
-            videoLengthSec:
-              toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
-              toPositiveIntOrUndefined(configValues.videoLengthSec),
-            videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
-            videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
-            videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
-            seed: input.seed,
-            policy: toObjectOrUndefined(configValues.policy),
-            policyRules: toObjectOrUndefined(configValues.policyRules),
-            baseConstraintMode:
-              baseConstraintModeToken === "fix_base"
-                ? "fix_base"
-                : baseConstraintModeToken === "source_weld"
-                  ? "source_weld"
-                  : undefined,
-            userModelMetadata: toObjectOrUndefined(configValues.userModelMetadata),
-            environment: toObjectOrUndefined(configValues.environment),
-            assetPipeline: toAssetPipelineOrUndefined(configValues.assetPipeline),
-            extraArgs: toStringArrayOrUndefined(configValues.extraArgs),
-            overrides: toObjectOrUndefined(configValues.overrides),
-          }).then((taskResponse) => {
-            if (!("job" in taskResponse)) {
-              throw new Error("Task autocomplete returned preview payload during launch");
-            }
-            return taskResponse.job;
-          })
-          : Promise.reject(new Error("robotAssetId is required to launch /v1/training/tasks"))
-        : submitTrainingJobRemote({
-            modelName,
-            dataset,
-            epochs,
-            tenantId: input.tenantId,
-            experimentName,
-            envId,
-            trainer,
-            maxSteps,
-            seed: input.seed,
-            config: configObject,
-          });
+      const { request: customTaskRequest } = isaacLabEnvironmentManager.buildCustomTaskRequest({
+        submit: {
+          ...input,
+          experimentName,
+          maxSteps,
+        },
+        config: configValues,
+      });
+      const submissionPromise = submitTrainingTaskRemote(customTaskRequest).then((taskResponse) => {
+        if (!("job" in taskResponse)) {
+          throw new Error("Custom training request returned preview payload during launch");
+        }
+        return taskResponse.job;
+      });
 
       void submissionPromise
         .then((remoteJob) => {

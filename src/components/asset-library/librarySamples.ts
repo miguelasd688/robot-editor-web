@@ -54,6 +54,8 @@ export type LibrarySample = {
   usdVariants?: LibrarySampleUsdVariant[];
   /** Optional model-specific terrain options shown in the USD import dialog. */
   terrainOptions?: LibrarySampleTerrainOption[];
+  /** Optional environment bundle entries (relative to sample root) that can be loaded as full scene. */
+  environmentUsdEntries?: string[];
   trainingDefaults?: LibrarySampleTrainingDefaults;
 };
 
@@ -124,7 +126,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "ant_manager",
       task: "Isaac-Ant-v0",
     },
-    terrainOptions: ["none", "flat"],
+    terrainOptions: ["none", "flat", "full_scene"],
+    environmentUsdEntries: ["ant.usd", "ant_colored.usd"],
     usdVariants: [
       {
         id: "standard",
@@ -172,7 +175,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "humanoid_manager",
       task: "Isaac-Humanoid-v0",
     },
-    terrainOptions: ["none", "flat"],
+    terrainOptions: ["none", "flat", "full_scene"],
+    environmentUsdEntries: ["humanoid.usd"],
   },
   {
     id: "anymal_c",
@@ -244,7 +248,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "anymal_c_manager",
       task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
-    terrainOptions: ["none", "flat", "rough"],
+    terrainOptions: ["none", "flat", "rough", "full_scene"],
+    environmentUsdEntries: ["anymal_c.usd", "legacy/anymal.usd"],
     usdVariants: [
       {
         id: "anymal_c",
@@ -310,7 +315,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "ur10_reach_manager",
       task: "Isaac-Reach-UR10-v0",
     },
-    terrainOptions: ["none", "flat"],
+    terrainOptions: ["none", "flat", "full_scene"],
+    environmentUsdEntries: ["ur10.usd", "Legacy/ur10_long_suction.usd", "Legacy/ur10_short_suction.usd"],
     usdVariants: [
       {
         id: "standard",
@@ -388,7 +394,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       taskTemplate: "generic_manager",
       task: "Agent-Generic-Manager-v0",
     },
-    terrainOptions: ["none"],
+    terrainOptions: ["none", "full_scene"],
+    environmentUsdEntries: ["terrain/table_scene.usda"],
     usdVariants: [
       {
         id: "unimanual",
@@ -425,6 +432,35 @@ export function listLibrarySampleUsdEntries(sample: LibrarySample): string[] {
 
 export function listLibrarySampleUsdWorkspaceKeys(sample: LibrarySample): string[] {
   return listLibrarySampleUsdEntries(sample).map((entry) => `${LIBRARY_ROOT}/${sample.id}/${entry}`);
+}
+
+export function listLibrarySampleEnvironmentWorkspaceKeys(sample: LibrarySample): string[] {
+  if (sample.kind !== "usd") return [];
+  const entries = Array.isArray(sample.environmentUsdEntries)
+    ? sample.environmentUsdEntries
+        .map((entry) => normalizeLibraryFile(String(entry ?? "").trim()))
+        .filter((entry) => entry.length > 0)
+    : [];
+  return Array.from(new Set(entries.map((entry) => `${LIBRARY_ROOT}/${sample.id}/${entry}`)));
+}
+
+export function resolveDefaultSampleEnvironmentWorkspaceKey(
+  sample: LibrarySample,
+  selectedUsdWorkspaceKey: string | null | undefined
+): string | null {
+  const environmentEntries = listLibrarySampleEnvironmentWorkspaceKeys(sample);
+  if (environmentEntries.length === 0) return null;
+  const preferred = normalizeLibraryFile(String(selectedUsdWorkspaceKey ?? "").trim());
+  if (preferred.length > 0 && environmentEntries.includes(preferred)) {
+    return preferred;
+  }
+  return environmentEntries[0] ?? null;
+}
+
+export function hasLibrarySampleEnvironment(sample: LibrarySample): boolean {
+  if (sample.kind !== "usd") return false;
+  if (Array.isArray(sample.terrainOptions) && sample.terrainOptions.includes("full_scene")) return true;
+  return listLibrarySampleEnvironmentWorkspaceKeys(sample).length > 0;
 }
 
 export function findLibrarySampleKey(keys: string[], sample: LibrarySample): string | null {

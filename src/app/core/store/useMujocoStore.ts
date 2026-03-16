@@ -11,7 +11,7 @@ import {
   type PointerSpringDebugState,
   type PointerWorldPoint,
 } from "../physics/mujoco/MujocoRuntime";
-import { buildModelSource, mergeMjcfSources, restoreInitialTransforms } from "../physics/mujoco/mujocoModelSource";
+import { restoreInitialTransforms } from "../physics/mujoco/mujocoModelSource";
 import { logError, logInfo, logWarn } from "../services/logger";
 import { editorEngine } from "../editor/engineSingleton";
 import { objectToTransform } from "../editor/adapters/three/transformAdapter";
@@ -20,8 +20,7 @@ import type { ProjectDoc, SceneNode, Transform } from "../editor/document/types"
 import { applyPose, mapPoseByRobot } from "../physics/mujoco/PoseBufferService";
 import { NameRegistry, sanitizeMjcfName } from "../physics/mujoco/mjcfNames";
 import { buildActuatorRegistry, type ActuatorDescriptor } from "../physics/mujoco/ActuatorRegistry";
-import { resolveUrdfImportOptionsFromSources } from "../urdf/urdfImportOptions";
-import { exportRobotToUrdf } from "../urdf/urdfExport";
+import { mujocoEnvironmentManager } from "../physics/mujoco/MujocoEnvironmentManager";
 
 type MujocoState = {
   noiseRate: number;
@@ -784,291 +783,114 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
       syncSceneTransformsFromViewer(viewer);
       const snapshot = viewer.getSceneSnapshot();
       const { noiseRate, noiseScale } = get();
-      const { assets, urdfKey, urdfOptions } = useAssetStore.getState();
+      const { assets, urdfOptions } = useAssetStore.getState();
       const beforeDoc = editorEngine.getDoc();
       const sanitized = ensureUniqueJointNames(beforeDoc);
       if (sanitized !== beforeDoc) {
         editorEngine.setDoc(sanitized, "mujoco:joint-rename");
       }
       const doc = editorEngine.getDoc();
-      const robotNodes = Object.values(doc.scene.nodes).filter((node) => node.kind === "robot");
       const warnings: string[] = [];
 
       set({ isLoading: true, lastError: null, isReady: false });
       try {
-        if (robotNodes.length) {
-          const nameMapsByRobot: Record<string, import("../physics/mujoco/mjcfNames").MjcfNameMap> = {};
-          const sources = [];
-          const nameMaps = [];
-          for (const node of robotNodes) {
-            const root = viewer.getObjectById(node.id);
-            if (!root) continue;
-            const sourceUrdf = node.components?.urdfSource ?? (root.userData?.urdfSource as string | undefined);
-            let urdfSource = sourceUrdf;
-            const urdfKeyForRobot =
-              node.components?.urdfKey ?? (root.userData?.urdfKey as string | undefined) ?? null;
-            const modelSource =
-              node.components?.robotModelSource ??
-              (root.userData?.robotModelSource as Record<string, unknown> | undefined);
-            const sourceIsCleanUsd = modelSource?.kind === "usd" && modelSource?.isDirty !== true;
-            const usdIntrospection = root.userData?.usdIntrospection as
-              | {
-                  joints?: Array<{ frame0Local?: unknown; frame1Local?: unknown }>;
-                }
-              | undefined;
-            const hasUsdFrameIntrospection =
-              sourceIsCleanUsd &&
-              Array.isArray(usdIntrospection?.joints) &&
-              usdIntrospection.joints.some((joint) => Boolean(joint?.frame0Local || joint?.frame1Local));
-            const canUseDirectMjcf = sourceIsCleanUsd && !hasUsdFrameIntrospection;
-            const cachedDirectMjcfSource =
-              sourceIsCleanUsd && typeof root.userData?.mjcfSource === "string" && root.userData.mjcfSource.trim()
-                ? (root.userData.mjcfSource as string)
-                : null;
-            const cachedDirectMjcfKey =
-              sourceIsCleanUsd && typeof root.userData?.mjcfAssetId === "string" && root.userData.mjcfAssetId.trim()
-                ? (root.userData.mjcfAssetId as string)
-                : null;
-            const directMjcfSource = canUseDirectMjcf ? cachedDirectMjcfSource : null;
-            const directMjcfKey = canUseDirectMjcf ? cachedDirectMjcfKey : null;
-            const hasDirectMjcf = Boolean(directMjcfSource || directMjcfKey);
-            const shouldRegenerateUrdf =
-              Boolean(sourceUrdf) ||
-              Boolean(urdfKeyForRobot) ||
-              // Dirty USD must regenerate from scene edits; clean USD can use cached MJCF directly.
-              // If cached MJCF is missing (legacy loads), regenerate as fallback.
-              (modelSource?.kind === "usd" && (sourceIsCleanUsd !== true || !hasDirectMjcf || hasUsdFrameIntrospection));
-            if (shouldRegenerateUrdf) {
-              try {
-                const exported = exportRobotToUrdf(doc, node.id);
-                urdfSource = exported.urdf;
-                warnings.push(
-                  ...exported.warnings.map(
-                    (warning) => `[robot:${node.name || node.id}] ${warning}`
-                  )
-                );
-              } catch (error) {
-                logWarn("MuJoCo: failed to regenerate robot URDF from scene; using source URDF.", {
-                  scope: "mujoco",
-                  data: {
-                    robotId: node.id,
-                    error: String((error as Error)?.message ?? error),
-                  },
-                });
-              }
-            }
-            const importOptions = resolveUrdfImportOptionsFromSources({
-              urdfImportOptions: node.components?.urdfImportOptions ?? root.userData?.urdfImportOptions,
-              robotModelSource: node.components?.robotModelSource ?? root.userData?.robotModelSource,
-            });
-            const perRobotUrdfOptions = {
-              floatingBase: importOptions?.floatingBase ?? urdfOptions.floatingBase,
-              firstLinkIsWorldReferenceFrame:
-                importOptions?.firstLinkIsWorldReferenceFrame ?? urdfOptions.firstLinkIsWorldReferenceFrame,
-              selfCollision: importOptions?.selfCollision ?? urdfOptions.selfCollision,
-              collisionMode: importOptions?.collisionMode ?? urdfOptions.collisionMode,
-            };
-            logInfo("MuJoCo: building model source", { scope: "mujoco", data: { robotId: node.id } });
-            const { source, warnings: localWarnings } = await buildModelSource({
-              assets,
-              urdfKey: urdfKeyForRobot,
-              urdfSource,
-              mjcfKey: directMjcfKey,
-              mjcfSource: directMjcfSource,
-              namePrefix: node.id,
-              urdfOptions: perRobotUrdfOptions,
-              roots: [root],
-            });
-            warnings.push(...localWarnings);
-            if (source.kind === "mjcf") {
-              sources.push(source);
-              nameMaps.push(source.nameMap);
-              if (source.nameMap) {
-                nameMapsByRobot[node.id] = source.nameMap;
-              }
-            }
-          }
+        const buildResult = await mujocoEnvironmentManager.buildRuntimeSource({
+          doc,
+          viewer,
+          roots,
+          assets,
+          urdfDefaults: urdfOptions,
+        });
+        warnings.push(...buildResult.warnings);
+        const nameMapsByRobot = buildResult.nameMapsByRobot;
 
-          logInfo("MuJoCo: merging robot sources", { scope: "mujoco", data: { count: sources.length } });
-          const merged = mergeMjcfSources({ sources, nameMaps });
-          logInfo("MuJoCo: loading runtime", { scope: "mujoco", data: { mode: "single" } });
-          const runtimeInstance = getRuntimeFor("default");
-          await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, merged.source);
-          {
-            const { pointerSpringStiffnessNPerM, pointerMaxForceN } = get();
-            runtimeInstance.setPointerForceConfig({
-              stiffnessNPerMeter: pointerSpringStiffnessNPerM,
-              maxForceN: pointerMaxForceN,
-            });
-          }
-          set({ nameMapsByRobot });
-
-          const {
-            actuatorConfigsByRobot,
-            actuatorsArmed,
-          } = get();
-          const registryResult = buildActuatorRegistry(doc, nameMapsByRobot);
-          const nextInitialByRobot = registryResult.initialTargetsByRobot;
-          const nextTargetsByRobot = cloneByRobot(nextInitialByRobot);
-          const nextVelocityByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
-          const nextTorqueByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
-          const nextConfigsByRobot = mergeByRobot(
-            registryResult.configsByRobot,
-            actuatorConfigsByRobot
-          );
-          const mergedTargets = mapTargetsToMjcf(nextTargetsByRobot, nameMapsByRobot);
-          const mergedVelocity = mapTargetsToMjcf(nextVelocityByRobot, nameMapsByRobot);
-          const mergedTorque = mapTargetsToMjcf(nextTorqueByRobot, nameMapsByRobot);
-          const mergedInitial = mapTargetsToMjcf(nextInitialByRobot, nameMapsByRobot);
-          const mergedConfigs = mapTargetsToMjcf(nextConfigsByRobot, nameMapsByRobot);
-          runtimeInstance.setActuatorConfigs(mergedConfigs);
-          runtimeInstance.setActuatorTargets(mergedTargets);
-          runtimeInstance.setActuatorVelocityTargets(mergedVelocity);
-          runtimeInstance.setActuatorTorqueTargets(mergedTorque);
-          if (Object.keys(mergedTargets).length) {
-            const angularKeys = buildAngularKeySet(registryResult.registryByRobot);
-            runtimeInstance.setJointPositions(convertTargetsToRadians(mergedTargets, angularKeys));
-          }
-          runtimeInstance.setActuatorsArmed(actuatorsArmed);
-          set({
-            actuatorInitialTargetsByRobot: nextInitialByRobot,
-            actuatorTargetsByRobot: nextTargetsByRobot,
-            actuatorTargets: mergedTargets,
-            actuatorVelocityTargetsByRobot: nextVelocityByRobot,
-            actuatorVelocityTargets: mergedVelocity,
-            actuatorTorqueTargetsByRobot: nextTorqueByRobot,
-            actuatorTorqueTargets: mergedTorque,
-            actuatorInitialTargets: mergedInitial,
-            actuatorConfigsByRobot: nextConfigsByRobot,
-            actuatorConfigs: mergedConfigs,
-            actuatorRegistryByRobot: registryResult.registryByRobot,
-          });
-
-          const runtimeActuators = runtimeInstance.getActuatorNames();
-          const expected = Object.values(registryResult.registryByRobot)
-            .flat()
-            .map((entry) => entry.actuatorName);
-          const missing = expected.filter((name) => !runtimeActuators.includes(name));
-          const extra = runtimeActuators.filter((name) => !expected.includes(name));
-          logInfo("MuJoCo: actuator registry", {
-            scope: "mujoco",
-            data: {
-              robots: Object.entries(registryResult.registryByRobot).map(([robotId, entries]) => ({
-                robotId,
-                count: entries.length,
-                actuators: entries.map((entry) => ({
-                  joint: entry.jointName,
-                  mjcf: entry.mjcfJoint,
-                  actuator: entry.actuatorName,
-                  stiffness: entry.stiffness,
-                  damping: entry.damping,
-                  range: entry.range,
-                })),
-              })),
-            },
-          });
-          logInfo("MuJoCo: actuators loaded", {
-            scope: "mujoco",
-            data: {
-              runtimeCount: runtimeActuators.length,
-              expectedCount: expected.length,
-              missing: missing.slice(0, 16),
-              extra: extra.slice(0, 16),
-            },
-          });
-
-          disposeRuntimes(new Set(["default"]));
-        } else {
-          logInfo("MuJoCo: building model source", { scope: "mujoco" });
-          const { source, warnings: localWarnings } = await buildModelSource({ assets, urdfKey, urdfOptions, roots });
-          warnings.push(...localWarnings);
-          logInfo("MuJoCo: loading runtime", { scope: "mujoco" });
-          const runtimeInstance = getRuntimeFor("default");
-          await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, source);
-          {
-            const { pointerSpringStiffnessNPerM, pointerMaxForceN } = get();
-            runtimeInstance.setPointerForceConfig({
-              stiffnessNPerMeter: pointerSpringStiffnessNPerM,
-              maxForceN: pointerMaxForceN,
-            });
-          }
-          const nameMapsByRobot: Record<string, import("../physics/mujoco/mjcfNames").MjcfNameMap> = {};
-          set({ nameMapsByRobot });
-
-          const {
-            actuatorConfigsByRobot,
-            actuatorsArmed,
-          } = get();
-          const registryResult = buildActuatorRegistry(doc, nameMapsByRobot);
-          const nextInitialByRobot = registryResult.initialTargetsByRobot;
-          const nextTargetsByRobot = cloneByRobot(nextInitialByRobot);
-          const nextVelocityByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
-          const nextTorqueByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
-          const nextConfigsByRobot = mergeByRobot(
-            registryResult.configsByRobot,
-            actuatorConfigsByRobot
-          );
-          const mergedTargets = mapTargetsToMjcf(nextTargetsByRobot, nameMapsByRobot);
-          const mergedVelocity = mapTargetsToMjcf(nextVelocityByRobot, nameMapsByRobot);
-          const mergedTorque = mapTargetsToMjcf(nextTorqueByRobot, nameMapsByRobot);
-          const mergedInitial = mapTargetsToMjcf(nextInitialByRobot, nameMapsByRobot);
-          const mergedConfigs = mapTargetsToMjcf(nextConfigsByRobot, nameMapsByRobot);
-          runtimeInstance.setActuatorConfigs(mergedConfigs);
-          runtimeInstance.setActuatorTargets(mergedTargets);
-          runtimeInstance.setActuatorVelocityTargets(mergedVelocity);
-          runtimeInstance.setActuatorTorqueTargets(mergedTorque);
-          if (Object.keys(mergedTargets).length) {
-            const angularKeys = buildAngularKeySet(registryResult.registryByRobot);
-            runtimeInstance.setJointPositions(convertTargetsToRadians(mergedTargets, angularKeys));
-          }
-          runtimeInstance.setActuatorsArmed(actuatorsArmed);
-          set({
-            actuatorInitialTargetsByRobot: nextInitialByRobot,
-            actuatorTargetsByRobot: nextTargetsByRobot,
-            actuatorTargets: mergedTargets,
-            actuatorVelocityTargetsByRobot: nextVelocityByRobot,
-            actuatorVelocityTargets: mergedVelocity,
-            actuatorTorqueTargetsByRobot: nextTorqueByRobot,
-            actuatorTorqueTargets: mergedTorque,
-            actuatorInitialTargets: mergedInitial,
-            actuatorConfigsByRobot: nextConfigsByRobot,
-            actuatorConfigs: mergedConfigs,
-            actuatorRegistryByRobot: registryResult.registryByRobot,
-          });
-
-          const runtimeActuators = runtimeInstance.getActuatorNames();
-          const expected = Object.values(registryResult.registryByRobot)
-            .flat()
-            .map((entry) => entry.actuatorName);
-          const missing = expected.filter((name) => !runtimeActuators.includes(name));
-          const extra = runtimeActuators.filter((name) => !expected.includes(name));
-          logInfo("MuJoCo: actuator registry", {
-            scope: "mujoco",
-            data: {
-              robots: Object.entries(registryResult.registryByRobot).map(([robotId, entries]) => ({
-                robotId,
-                count: entries.length,
-                actuators: entries.map((entry) => ({
-                  joint: entry.jointName,
-                  mjcf: entry.mjcfJoint,
-                  actuator: entry.actuatorName,
-                  stiffness: entry.stiffness,
-                  damping: entry.damping,
-                  range: entry.range,
-                })),
-              })),
-            },
-          });
-          logInfo("MuJoCo: actuators loaded", {
-            scope: "mujoco",
-            data: {
-              runtimeCount: runtimeActuators.length,
-              expectedCount: expected.length,
-              missing: missing.slice(0, 16),
-              extra: extra.slice(0, 16),
-            },
+        logInfo("MuJoCo: loading runtime", { scope: "mujoco", data: { mode: "single" } });
+        const runtimeInstance = getRuntimeFor("default");
+        await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, buildResult.source);
+        {
+          const { pointerSpringStiffnessNPerM, pointerMaxForceN } = get();
+          runtimeInstance.setPointerForceConfig({
+            stiffnessNPerMeter: pointerSpringStiffnessNPerM,
+            maxForceN: pointerMaxForceN,
           });
         }
+        set({ nameMapsByRobot });
+
+        const {
+          actuatorConfigsByRobot,
+          actuatorsArmed,
+        } = get();
+        const registryResult = buildActuatorRegistry(doc, nameMapsByRobot);
+        const nextInitialByRobot = registryResult.initialTargetsByRobot;
+        const nextTargetsByRobot = cloneByRobot(nextInitialByRobot);
+        const nextVelocityByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
+        const nextTorqueByRobot = buildZeroTargetsByRobot(registryResult.registryByRobot);
+        const nextConfigsByRobot = mergeByRobot(
+          registryResult.configsByRobot,
+          actuatorConfigsByRobot
+        );
+        const mergedTargets = mapTargetsToMjcf(nextTargetsByRobot, nameMapsByRobot);
+        const mergedVelocity = mapTargetsToMjcf(nextVelocityByRobot, nameMapsByRobot);
+        const mergedTorque = mapTargetsToMjcf(nextTorqueByRobot, nameMapsByRobot);
+        const mergedInitial = mapTargetsToMjcf(nextInitialByRobot, nameMapsByRobot);
+        const mergedConfigs = mapTargetsToMjcf(nextConfigsByRobot, nameMapsByRobot);
+        runtimeInstance.setActuatorConfigs(mergedConfigs);
+        runtimeInstance.setActuatorTargets(mergedTargets);
+        runtimeInstance.setActuatorVelocityTargets(mergedVelocity);
+        runtimeInstance.setActuatorTorqueTargets(mergedTorque);
+        if (Object.keys(mergedTargets).length) {
+          const angularKeys = buildAngularKeySet(registryResult.registryByRobot);
+          runtimeInstance.setJointPositions(convertTargetsToRadians(mergedTargets, angularKeys));
+        }
+        runtimeInstance.setActuatorsArmed(actuatorsArmed);
+        set({
+          actuatorInitialTargetsByRobot: nextInitialByRobot,
+          actuatorTargetsByRobot: nextTargetsByRobot,
+          actuatorTargets: mergedTargets,
+          actuatorVelocityTargetsByRobot: nextVelocityByRobot,
+          actuatorVelocityTargets: mergedVelocity,
+          actuatorTorqueTargetsByRobot: nextTorqueByRobot,
+          actuatorTorqueTargets: mergedTorque,
+          actuatorInitialTargets: mergedInitial,
+          actuatorConfigsByRobot: nextConfigsByRobot,
+          actuatorConfigs: mergedConfigs,
+          actuatorRegistryByRobot: registryResult.registryByRobot,
+        });
+
+        const runtimeActuators = runtimeInstance.getActuatorNames();
+        const expected = Object.values(registryResult.registryByRobot)
+          .flat()
+          .map((entry) => entry.actuatorName);
+        const missing = expected.filter((name) => !runtimeActuators.includes(name));
+        const extra = runtimeActuators.filter((name) => !expected.includes(name));
+        logInfo("MuJoCo: actuator registry", {
+          scope: "mujoco",
+          data: {
+            robots: Object.entries(registryResult.registryByRobot).map(([robotId, entries]) => ({
+              robotId,
+              count: entries.length,
+              actuators: entries.map((entry) => ({
+                joint: entry.jointName,
+                mjcf: entry.mjcfJoint,
+                actuator: entry.actuatorName,
+                stiffness: entry.stiffness,
+                damping: entry.damping,
+                range: entry.range,
+              })),
+            })),
+          },
+        });
+        logInfo("MuJoCo: actuators loaded", {
+          scope: "mujoco",
+          data: {
+            runtimeCount: runtimeActuators.length,
+            expectedCount: expected.length,
+            missing: missing.slice(0, 16),
+            extra: extra.slice(0, 16),
+          },
+        });
+
+        disposeRuntimes(new Set(["default"]));
 
         set({ isReady: true, isDirty: false });
         if (warnings.length) {

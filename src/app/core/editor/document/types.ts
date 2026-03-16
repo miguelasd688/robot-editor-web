@@ -117,10 +117,92 @@ export type ProjectSources = {
   usd?: string;
 };
 
-export type ProjectDoc = {
+export type EnvironmentAssetKind = "urdf" | "xacro" | "mjcf" | "usd" | "mesh" | "generated";
+
+export type EnvironmentEntityKind =
+  | "robot"
+  | "terrain"
+  | "prop"
+  | "sensor"
+  | "camera"
+  | "light"
+  | "scene_asset"
+  | "unknown";
+
+export type EnvironmentDiagnosticSeverity = "warning" | "error";
+export type EnvironmentDiagnosticSource = "import" | "document" | "simulation" | "training";
+
+export type EnvironmentDiagnostic = {
+  code: string;
+  severity: EnvironmentDiagnosticSeverity;
+  source: EnvironmentDiagnosticSource;
+  message: string;
+  context?: Record<string, unknown>;
+};
+
+export type EnvironmentAsset = {
+  id: string;
+  kind: EnvironmentAssetKind;
+  workspaceKey?: string | null;
+  converterAssetId?: string | null;
+  trainingAssetId?: string | null;
+  inlineSource?: string | null;
+  importOptions?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type EnvironmentEntity = {
+  id: string;
+  nodeId?: string | null;
+  name: string;
+  kind: EnvironmentEntityKind;
+  parentId: string | null;
+  children: string[];
+  sourceAssetId?: string | null;
+  transform?: Transform;
+  physics?: InstancePhysics;
+  physicsFields?: PhysicsFields;
+  robotModelSource?: RobotModelSource;
+  urdfImportOptions?: UrdfImportOptions;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type EnvironmentSimulationConfig = {
+  gravity: [number, number, number];
+  timestep: number;
+  substeps: number;
+  solver: "pgs" | "cg" | "newton" | "auto";
+  contactModel: "pyramidal" | "elliptic" | "auto";
+};
+
+export type EnvironmentTrainingHints = {
+  templateId?: string;
+  taskTemplate?: string;
+  task?: string;
+  recipeId?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type EnvironmentDoc = {
   version: 1;
+  assets: Record<string, EnvironmentAsset>;
+  entities: Record<string, EnvironmentEntity>;
+  roots: string[];
+  simulation: EnvironmentSimulationConfig;
+  trainingHints?: EnvironmentTrainingHints;
+  diagnostics: EnvironmentDiagnostic[];
+  updatedAt: string;
+};
+
+export type ProjectDoc = {
+  version: 1 | 2;
   scene: SceneDoc;
+  /** Legacy source pointers maintained for old exports/imports. */
   sources: ProjectSources;
+  /** Canonical environment source of truth for editor/simulation/training managers. */
+  environment: EnvironmentDoc;
   metadata?: {
     name?: string;
     createdAt?: string;

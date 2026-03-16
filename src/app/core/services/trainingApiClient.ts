@@ -188,6 +188,16 @@ export type TaskAutocompleteRequest = {
   dryRun?: boolean;
 };
 
+export type CustomTrainingTaskRequest = {
+  tenantId?: string;
+  experimentName?: string;
+  seed?: number;
+  dryRun?: boolean;
+  environment: Record<string, unknown>;
+  agent: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+};
+
 export type TaskAutocompletePreview = {
   dryRun: true;
   recipeId?: string;
@@ -236,6 +246,13 @@ export type TaskAutocompleteLaunchResponse = {
     derivedConfig: DerivedTrainingConfig;
     expressionHints?: TrainingExpressionHints;
   };
+};
+
+export type CustomTrainingTaskLaunchResponse = {
+  mode: "custom";
+  job: TrainingJobSummary;
+  warnings?: string[];
+  diagnostics?: Array<{ code: string; severity: "warning" | "error"; message: string; context?: Record<string, unknown> }>;
 };
 
 export type TrainingTaskCatalogEntry = {
@@ -774,72 +791,166 @@ export async function resolveAgentRemote(input: AgentResolveRequest): Promise<Ag
   return await parseJson<AgentResolveResponse>(response);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export async function submitTrainingTaskRemote(
-  input: TaskAutocompleteRequest
-): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse> {
-  const resolvedRobotAssetId = String(input.robotAssetId ?? input.rootAssetId ?? "").trim();
+  input: TaskAutocompleteRequest | CustomTrainingTaskRequest
+): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse> {
+  if (
+    isPlainRecord((input as CustomTrainingTaskRequest).environment) &&
+    isPlainRecord((input as CustomTrainingTaskRequest).agent) &&
+    isPlainRecord((input as CustomTrainingTaskRequest).runtime)
+  ) {
+    const custom = input as CustomTrainingTaskRequest;
+    const payload: Record<string, unknown> = {
+      environment: custom.environment,
+      agent: custom.agent,
+      runtime: custom.runtime,
+    };
+    const tenantId = String(custom.tenantId ?? "").trim();
+    if (tenantId) payload.tenantId = tenantId;
+    const experimentName = String(custom.experimentName ?? "").trim();
+    if (experimentName) payload.experimentName = experimentName;
+    if (typeof custom.seed === "number" && Number.isFinite(custom.seed)) payload.seed = Math.trunc(custom.seed);
+    if (custom.dryRun === true) payload.dryRun = true;
+
+    const response = await fetch(buildUrl("/v1/training/tasks"), {
+      method: "POST",
+      headers: buildHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+    return await parseJson<CustomTrainingTaskLaunchResponse | TaskAutocompletePreview>(response);
+  }
+
+  const legacy = input as TaskAutocompleteRequest;
+  const resolvedRobotAssetId = String(legacy.robotAssetId ?? legacy.rootAssetId ?? "").trim();
+  const taskTemplate = String(legacy.taskTemplate ?? "").trim();
+  const task = String(legacy.task ?? "").trim() || taskTemplate || "custom_manager";
+  const agentId = String(legacy.agentId ?? "").trim();
+  const sceneAssetId = String(legacy.sceneAssetId ?? "").trim();
+  const tenantId = String(legacy.tenantId ?? "").trim();
+  const experimentName = String(legacy.experimentName ?? "").trim();
+  const maxSteps =
+    typeof legacy.maxSteps === "number" && Number.isFinite(legacy.maxSteps)
+      ? Math.max(1, Math.round(legacy.maxSteps))
+      : 256;
   const payload: Record<string, unknown> = {
-    robotAssetId: resolvedRobotAssetId,
+    environment: {
+      id: taskTemplate || task,
+      taskTemplate: taskTemplate || undefined,
+      task,
+      robotAssetId: resolvedRobotAssetId || undefined,
+      sceneAssetId: sceneAssetId || undefined,
+      metadata: {
+        ...(legacy.userModelMetadata && typeof legacy.userModelMetadata === "object" ? legacy.userModelMetadata : {}),
+        ...(legacy.environment && typeof legacy.environment === "object" ? legacy.environment : {}),
+      },
+    },
+    agent: {
+      agentId: agentId || undefined,
+      policy: legacy.policy && typeof legacy.policy === "object" ? legacy.policy : {},
+      policyRules: legacy.policyRules && typeof legacy.policyRules === "object" ? legacy.policyRules : {},
+    },
+    runtime: {
+      backend: "isaac_lab",
+      maxSteps,
+      numEnvs:
+        typeof legacy.numEnvs === "number" && Number.isFinite(legacy.numEnvs)
+          ? Math.max(1, Math.round(legacy.numEnvs))
+          : undefined,
+      checkpoint:
+        typeof legacy.checkpoint === "number" && Number.isFinite(legacy.checkpoint)
+          ? Math.max(0, Math.round(legacy.checkpoint))
+          : undefined,
+      stepsPerEpoch:
+        typeof legacy.stepsPerEpoch === "number" && Number.isFinite(legacy.stepsPerEpoch)
+          ? Math.max(1, Math.round(legacy.stepsPerEpoch))
+          : undefined,
+      videoLengthSec:
+        typeof legacy.videoLengthSec === "number" && Number.isFinite(legacy.videoLengthSec)
+          ? Math.max(1, Math.round(legacy.videoLengthSec))
+          : undefined,
+      videoLengthMs:
+        typeof legacy.videoLengthMs === "number" && Number.isFinite(legacy.videoLengthMs)
+          ? Math.max(1, Math.round(legacy.videoLengthMs))
+          : undefined,
+      videoLength:
+        typeof legacy.videoLength === "number" && Number.isFinite(legacy.videoLength)
+          ? Math.max(1, Math.round(legacy.videoLength))
+          : undefined,
+      videoInterval:
+        typeof legacy.videoInterval === "number" && Number.isFinite(legacy.videoInterval)
+          ? Math.max(1, Math.round(legacy.videoInterval))
+          : undefined,
+      baseConstraintMode:
+        legacy.baseConstraintMode === "fix_base" || legacy.baseConstraintMode === "source_weld"
+          ? legacy.baseConstraintMode
+          : undefined,
+      assetPipeline: legacy.assetPipeline && typeof legacy.assetPipeline === "object" ? legacy.assetPipeline : undefined,
+      overrides: legacy.overrides && typeof legacy.overrides === "object" ? legacy.overrides : undefined,
+      extraArgs: Array.isArray(legacy.extraArgs) ? legacy.extraArgs.map((item) => String(item)) : undefined,
+    },
   };
-
-  const recipeId = String(input.recipeId ?? "").trim();
-  if (recipeId) payload.recipeId = recipeId;
-  if (input.executionMode === "manager") {
-    payload.executionMode = input.executionMode;
-  }
-  const taskSpecId = String(input.taskSpecId ?? "").trim();
-  if (taskSpecId) payload.taskSpecId = taskSpecId;
-  if (input.taskSpec && typeof input.taskSpec === "object") payload.taskSpec = input.taskSpec;
-  const agentId = String(input.agentId ?? "").trim();
-  if (agentId) payload.agentId = agentId;
-  const catalogVersion = String(input.catalogVersion ?? "").trim();
-  if (catalogVersion) payload.catalogVersion = catalogVersion;
-
-  const taskTemplate = String(input.taskTemplate ?? "").trim();
-  if (taskTemplate) payload.taskTemplate = taskTemplate;
-  const task = String(input.task ?? "").trim();
-  if (task) payload.task = task;
-  const sceneAssetId = String(input.sceneAssetId ?? "").trim();
-  if (sceneAssetId) payload.sceneAssetId = sceneAssetId;
-  const tenantId = String(input.tenantId ?? "").trim();
   if (tenantId) payload.tenantId = tenantId;
-  const experimentName = String(input.experimentName ?? "").trim();
   if (experimentName) payload.experimentName = experimentName;
-
-  for (const [key, value] of Object.entries({
-    maxSteps: input.maxSteps,
-    numEnvs: input.numEnvs,
-    checkpoint: input.checkpoint,
-    stepsPerEpoch: input.stepsPerEpoch,
-    videoLengthSec: input.videoLengthSec,
-    videoLengthMs: input.videoLengthMs,
-    videoLength: input.videoLength,
-    videoInterval: input.videoInterval,
-    seed: input.seed,
-  })) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      payload[key] = value;
-    }
-  }
-
-  if (input.policy && typeof input.policy === "object") payload.policy = input.policy;
-  if (input.policyRules && typeof input.policyRules === "object") payload.policyRules = input.policyRules;
-  if (input.baseConstraintMode === "fix_base" || input.baseConstraintMode === "source_weld") {
-    payload.baseConstraintMode = input.baseConstraintMode;
-  }
-  if (input.userModelMetadata && typeof input.userModelMetadata === "object") {
-    payload.userModelMetadata = input.userModelMetadata;
-  }
-  if (input.environment && typeof input.environment === "object") payload.environment = input.environment;
-  if (input.assetPipeline && typeof input.assetPipeline === "object") payload.assetPipeline = input.assetPipeline;
-  if (input.overrides && typeof input.overrides === "object") payload.overrides = input.overrides;
-  if (Array.isArray(input.extraArgs)) payload.extraArgs = input.extraArgs.map((item) => String(item));
-  if (input.dryRun === true) payload.dryRun = true;
+  if (typeof legacy.seed === "number" && Number.isFinite(legacy.seed)) payload.seed = Math.trunc(legacy.seed);
+  if (legacy.dryRun === true) payload.dryRun = true;
 
   const response = await fetch(buildUrl("/v1/training/tasks"), {
     method: "POST",
     headers: buildHeaders({ "content-type": "application/json" }),
     body: JSON.stringify(payload),
   });
-  return await parseJson<TaskAutocompletePreview | TaskAutocompleteLaunchResponse>(response);
+  const parsed = await parseJson<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse>(response);
+  if (parsed && typeof parsed === "object" && "mode" in parsed && parsed.mode === "custom") {
+    if ((parsed as { dryRun?: boolean }).dryRun === true) {
+      const customPreview = parsed as Record<string, unknown>;
+      return {
+        dryRun: true,
+        taskTemplate: String(customPreview.taskTemplate ?? taskTemplate ?? "custom_manager"),
+        assetId: resolvedRobotAssetId || "custom-asset",
+        introspection: {
+          jointCount: 0,
+          joints: [],
+          rootBodies: [],
+          stageUpAxis: "unknown",
+        },
+        derivedConfig: {},
+        taskConfig: {},
+        environmentPreview:
+          customPreview.environmentPreview && typeof customPreview.environmentPreview === "object"
+            ? (customPreview.environmentPreview as Record<string, unknown>)
+            : {},
+        message: String(customPreview.message ?? "Custom payload validated."),
+      } satisfies TaskAutocompletePreview;
+    }
+    if ("job" in parsed) {
+      const customLaunch = parsed as CustomTrainingTaskLaunchResponse & Record<string, unknown>;
+      return {
+        job: customLaunch.job,
+        task: String(customLaunch.task ?? task ?? taskTemplate ?? "custom_manager"),
+        policy:
+          legacy.policy && typeof legacy.policy === "object"
+            ? (legacy.policy as Record<string, unknown>)
+            : {},
+        taskTemplate: String(customLaunch.taskTemplate ?? taskTemplate ?? "custom_manager"),
+        warnings: Array.isArray(customLaunch.warnings)
+          ? customLaunch.warnings.map((item) => String(item))
+          : [],
+        autoConfig: {
+          assetId: resolvedRobotAssetId || "custom-asset",
+          introspection: {
+            jointCount: 0,
+            joints: [],
+            rootBodies: [],
+            stageUpAxis: "unknown",
+          },
+          derivedConfig: {},
+        },
+      } satisfies TaskAutocompleteLaunchResponse;
+    }
+  }
+  return parsed;
 }

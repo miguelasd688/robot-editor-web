@@ -20,8 +20,11 @@ import {
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
+  hasLibrarySampleEnvironment,
   LIBRARY_SAMPLES,
+  listLibrarySampleEnvironmentWorkspaceKeys,
   listLibrarySampleUsdWorkspaceKeys,
+  resolveDefaultSampleEnvironmentWorkspaceKey,
 } from "./librarySamples";
 import { getBrowserItemPreviewImage } from "./browserPreviewCatalog";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
@@ -42,6 +45,7 @@ type BrowserItem = {
   description: string;
   icon: string;
   badge?: string;
+  envBadge?: boolean;
   assetId?: SceneAssetId;
   sampleId?: string;
   importLabel?: string;
@@ -93,6 +97,7 @@ const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
   description: sample.description,
   icon: sample.icon ?? (sample.kind === "usd" ? "🔷" : "🧪"),
   badge: sample.badge ?? sample.kind.toUpperCase(),
+  envBadge: hasLibrarySampleEnvironment(sample),
   sampleId: sample.id,
   importLabel: sample.importLabel ?? "Load sample",
   preview: {
@@ -492,13 +497,15 @@ export default function AssetLibraryPanel() {
         ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]))
         : [];
       const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(path)];
+      const terrainUsdKeys = sample ? listLibrarySampleEnvironmentWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key])) : [];
       requestUsdImport({
         usdKey: path,
         source: "browser",
         optionOverrides: sample?.defaultImportOptions?.usd,
         bundleHintPaths: sample?.files,
         variantUsdKeys,
-        terrainUsdKeys: [],
+        terrainUsdKeys,
+        selectedTerrainUsdKey: sample ? resolveDefaultSampleEnvironmentWorkspaceKey(sample, path) : terrainUsdKeys[0] ?? null,
       });
       logInfo("Browser import request: Workspace USD", { scope: "assets", data: { usdKey: path } });
       return;
@@ -535,13 +542,15 @@ export default function AssetLibraryPanel() {
 
       store.setUSD(sampleKey);
       const variantUsdKeys = listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]));
+      const terrainUsdKeys = listLibrarySampleEnvironmentWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]));
       requestUsdImport({
         usdKey: sampleKey,
         source: "browser",
         optionOverrides: sample.defaultImportOptions?.usd,
         bundleHintPaths: sample.files,
         variantUsdKeys,
-        terrainUsdKeys: [],
+        terrainUsdKeys,
+        selectedTerrainUsdKey: resolveDefaultSampleEnvironmentWorkspaceKey(sample, sampleKey),
       });
       logInfo(`Browser import request: Library sample ${sample.id} (USD)`, {
         scope: "assets",
@@ -939,6 +948,21 @@ export default function AssetLibraryPanel() {
                           }}
                         >
                           {item.badge}
+                        </span>
+                      )}
+                      {item.envBadge && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            letterSpacing: 0.4,
+                            padding: "1px 6px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(116,214,136,0.56)",
+                            color: "rgba(205,245,213,0.98)",
+                            background: "rgba(46,120,60,0.22)",
+                          }}
+                        >
+                          Env
                         </span>
                       )}
                     </div>
