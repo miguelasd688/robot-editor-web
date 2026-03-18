@@ -414,8 +414,11 @@ const ABSOLUTE_URL_RE = /^(?:https?:\/\/|blob:|data:)/i;
 const OPACITY_TEXTURE_HINT_RE = /(opacity|alpha|transparen|cutout|mask|coverage)/i;
 const TRANSPARENT_MATERIAL_HINT_RE =
   /(glass|transparen|window|windscreen|visor|lens|screen|clear|acrylic|polycarbonate|water|liquid)/i;
+const NORMAL_TEXTURE_HINT_RE = /(normal|normalmap|normal_map|normals|nrm)/i;
 const EMISSIVE_TEXTURE_HINT_RE = /(emissive|emission|self[_-]?illum|glow)/i;
 const OCCLUSION_TEXTURE_HINT_RE = /(occlusion|ambient[_-]?occlusion|ao|orm|rma|arm)/i;
+const METALLIC_TEXTURE_HINT_RE = /(metal|metalness|metallic|orm|rma|arm|mrao)/i;
+const ROUGHNESS_TEXTURE_HINT_RE = /(rough|roughness|orm|rma|arm|mrao)/i;
 const METALLIC_INTENT_HINT_RE = /(metal|metallic|chrome|steel|iron|aluminum|aluminium|brass|copper|gold|silver)/i;
 const usdTextureLoader = new THREE.TextureLoader();
 const usdTextureCache = new Map<string, THREE.Texture>();
@@ -1592,14 +1595,28 @@ const looksLikeOpacityTexture = (url: string | null | undefined) =>
 const looksLikeTransparentMaterialName = (name: string | null | undefined) =>
   typeof name === "string" && TRANSPARENT_MATERIAL_HINT_RE.test(name.toLowerCase());
 
+const looksLikeNormalTexture = (url: string | null | undefined) =>
+  typeof url === "string" && NORMAL_TEXTURE_HINT_RE.test(url.toLowerCase());
+
 const looksLikeEmissiveTexture = (url: string | null | undefined) =>
   typeof url === "string" && EMISSIVE_TEXTURE_HINT_RE.test(url.toLowerCase());
 
 const looksLikeOcclusionTexture = (url: string | null | undefined) =>
   typeof url === "string" && OCCLUSION_TEXTURE_HINT_RE.test(url.toLowerCase());
 
+const looksLikeMetallicTexture = (url: string | null | undefined) =>
+  typeof url === "string" && METALLIC_TEXTURE_HINT_RE.test(url.toLowerCase());
+
+const looksLikeRoughnessTexture = (url: string | null | undefined) =>
+  typeof url === "string" && ROUGHNESS_TEXTURE_HINT_RE.test(url.toLowerCase());
+
 const looksLikeMetallicIntent = (value: string | null | undefined) =>
   typeof value === "string" && METALLIC_INTENT_HINT_RE.test(value.toLowerCase());
+
+const sameTextureReference = (left: string | null | undefined, right: string | null | undefined) =>
+  typeof left === "string" &&
+  typeof right === "string" &&
+  left.trim().toLowerCase() === right.trim().toLowerCase();
 
 const getOrLoadUsdTexture = (url: string, colorSpace: UsdTextureColorSpace) => {
   const cacheKey = `${colorSpace}:${url}`;
@@ -1644,7 +1661,33 @@ const createUsdVisualMaterial = (
   if (opacity < 0.15 && !hasOpacityTextureIntent && !hasTransparentMaterialName) {
     opacity = 1;
   }
-  const hasMetallicTexture = Boolean(options?.textures?.metallicUrl || options?.textures?.metallicRoughnessUrl);
+  const textures = options?.textures;
+  const baseColorUrl = textures?.baseColorUrl ?? null;
+  const hasNormalTextureIntent = looksLikeNormalTexture(textures?.normalUrl ?? null);
+  const hasMetallicTextureIntent =
+    looksLikeMetallicTexture(textures?.metallicUrl ?? null) ||
+    looksLikeMetallicTexture(textures?.metallicRoughnessUrl ?? null);
+  const hasRoughnessTextureIntent =
+    looksLikeRoughnessTexture(textures?.roughnessUrl ?? null) ||
+    looksLikeRoughnessTexture(textures?.metallicRoughnessUrl ?? null);
+  const hasUsableNormalTexture =
+    Boolean(textures?.normalUrl) &&
+    hasNormalTextureIntent &&
+    !sameTextureReference(textures?.normalUrl, baseColorUrl);
+  const hasUsableMetallicTexture =
+    Boolean(textures?.metallicUrl) &&
+    hasMetallicTextureIntent &&
+    !sameTextureReference(textures?.metallicUrl, baseColorUrl);
+  const hasUsableRoughnessTexture =
+    Boolean(textures?.roughnessUrl) &&
+    hasRoughnessTextureIntent &&
+    !sameTextureReference(textures?.roughnessUrl, baseColorUrl);
+  const hasUsablePackedMetallicRoughnessTexture =
+    Boolean(textures?.metallicRoughnessUrl) &&
+    (hasMetallicTextureIntent || hasRoughnessTextureIntent) &&
+    !sameTextureReference(textures?.metallicRoughnessUrl, baseColorUrl);
+  const hasMetallicTexture =
+    hasUsableMetallicTexture || (hasUsablePackedMetallicRoughnessTexture && hasMetallicTextureIntent);
   const hasMetallicIntent =
     hasMetallicTexture ||
     looksLikeMetallicIntent(options?.materialName ?? null) ||
@@ -1657,28 +1700,29 @@ const createUsdVisualMaterial = (
     opacity,
     metalness: metallic,
     roughness,
-    envMapIntensity: 0.1,
+    envMapIntensity: 0.08,
     side: THREE.DoubleSide,
   });
 
-  const textures = options?.textures;
   if (textures?.baseColorUrl) {
     material.map = getOrLoadUsdTexture(textures.baseColorUrl, "srgb");
   }
-  if (textures?.normalUrl) {
+  if (hasUsableNormalTexture && textures?.normalUrl) {
     material.normalMap = getOrLoadUsdTexture(textures.normalUrl, "linear");
   }
-  if (textures?.metallicRoughnessUrl) {
+  if (hasUsablePackedMetallicRoughnessTexture && textures?.metallicRoughnessUrl) {
     const orm = getOrLoadUsdTexture(textures.metallicRoughnessUrl, "linear");
-    material.roughnessMap = orm;
-    if (hasMetallicIntent) {
+    if (hasRoughnessTextureIntent) {
+      material.roughnessMap = orm;
+    }
+    if (hasMetallicIntent && hasMetallicTextureIntent) {
       material.metalnessMap = orm;
     }
   } else {
-    if (hasMetallicIntent && textures?.metallicUrl) {
+    if (hasMetallicIntent && hasUsableMetallicTexture && textures?.metallicUrl) {
       material.metalnessMap = getOrLoadUsdTexture(textures.metallicUrl, "linear");
     }
-    if (textures?.roughnessUrl) {
+    if (hasUsableRoughnessTexture && textures?.roughnessUrl) {
       material.roughnessMap = getOrLoadUsdTexture(textures.roughnessUrl, "linear");
     }
   }
