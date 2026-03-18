@@ -1,7 +1,10 @@
 import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
 import { addSceneAsset } from "../../app/core/editor/actions/sceneAssetActions";
+import { setNodeTransformCommand } from "../../app/core/editor/commands/sceneCommands";
+import { editorEngine } from "../../app/core/editor/engineSingleton";
 import { BROWSER_DIRECTORIES, type BrowserDirectoryId } from "../../app/core/browser/directories";
-import { logInfo } from "../../app/core/services/logger";
+import { importManager } from "../../app/core/environment/ImportManager";
+import { logInfo, logWarn } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import { useAssetStore } from "../../app/core/store/useAssetStore";
 import { useBrowserStore } from "../../app/core/store/useBrowserStore";
@@ -17,6 +20,7 @@ import {
   encodeBrowserImportPayload,
 } from "./browserDragDrop";
 import {
+  MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
@@ -26,6 +30,13 @@ import {
   listLibrarySampleUsdWorkspaceKeys,
   resolveDefaultSampleEnvironmentWorkspaceKey,
 } from "./librarySamples";
+import {
+  ensureLibraryAssetPackItemImported,
+  getLibraryAssetPackItemById,
+  getLibraryAssetPackPresetById,
+  listLinkLibraryAssetPackItems,
+  listLinkLibraryAssetPackPresets,
+} from "./libraryAssetPacks";
 import { getBrowserItemPreviewImage } from "./browserPreviewCatalog";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
 
@@ -48,6 +59,8 @@ type BrowserItem = {
   envBadge?: boolean;
   assetId?: SceneAssetId;
   sampleId?: string;
+  assetPackItemId?: string;
+  assetPackPresetId?: string;
   importLabel?: string;
   preview: BrowserCardPreview;
 };
@@ -90,6 +103,21 @@ const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").re
 
 const xacroCaption = (path: string) => (path.toLowerCase().endsWith(".xacro") ? "XACRO" : "URDF");
 
+const resolvePublicBaseUrl = () => {
+  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
+  return base.endsWith("/") ? base : `${base}/`;
+};
+
+const createWorkspaceFile = (blob: Blob, workspaceKey: string) => {
+  const filename = workspaceKey.split("/").pop() ?? workspaceKey;
+  const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
+  Object.defineProperty(file, "webkitRelativePath", {
+    value: normalizeWorkspaceFilePath(workspaceKey),
+    configurable: true,
+  });
+  return file;
+};
+
 const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
   id: `robot-sample-${sample.id}`,
   label: sample.label,
@@ -103,6 +131,40 @@ const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
   preview: {
     ...sample.preview,
     imageUrl: sample.preview.imageUrl ?? getBrowserItemPreviewImage(`robot-sample-${sample.id}`),
+  },
+}));
+
+const UR10_LINK_PACK_ITEMS: BrowserItem[] = listLinkLibraryAssetPackItems("ur10").map((item) => ({
+  id: `link-pack-${item.id}`,
+  label: item.label,
+  pathName: item.label.replace(/\s+/g, ""),
+  description: item.description,
+  icon: "🧩",
+  badge: "USD",
+  assetPackItemId: item.id,
+  importLabel: "Import asset",
+  preview: {
+    top: "rgba(116, 138, 157, 0.56)",
+    bottom: "rgba(46, 57, 73, 0.9)",
+    caption: "UR10 LINK",
+    imageUrl: getBrowserItemPreviewImage(`link-pack-${item.id}`),
+  },
+}));
+
+const UR10_LINK_PACK_PRESET_ITEMS: BrowserItem[] = listLinkLibraryAssetPackPresets("ur10").map((preset) => ({
+  id: `link-pack-preset-${preset.id}`,
+  label: preset.label,
+  pathName: preset.label.replace(/\s+/g, ""),
+  description: preset.description,
+  icon: "📦",
+  badge: "PRESET",
+  assetPackPresetId: preset.id,
+  importLabel: "Import preset",
+  preview: {
+    top: "rgba(132, 152, 104, 0.56)",
+    bottom: "rgba(51, 66, 40, 0.9)",
+    caption: "SCENE",
+    imageUrl: getBrowserItemPreviewImage(`link-pack-preset-${preset.id}`),
   },
 }));
 
@@ -220,6 +282,8 @@ const LIBRARY_SECTIONS: BrowserSection[] = [
           imageUrl: getBrowserItemPreviewImage("link-cylinder"),
         },
       },
+      ...UR10_LINK_PACK_ITEMS,
+      ...UR10_LINK_PACK_PRESET_ITEMS,
     ],
   },
   {
@@ -374,6 +438,9 @@ export default function AssetLibraryPanel() {
   const isOpen = useDockStore((s) => s.isOpen);
   const workspacePreviews = useBrowserPreviewStore((s) => s.workspacePreviews);
   const touchWorkspacePreview = useBrowserPreviewStore((s) => s.touch);
+  const libraryItemPreviews = useBrowserPreviewStore((s) => s.libraryItemPreviews);
+  const touchLibraryItemPreview = useBrowserPreviewStore((s) => s.touchLibraryItem);
+  const enqueueLibraryItemCapture = useBrowserPreviewStore((s) => s.enqueueLibraryItemCapture);
 
   const spawnIndex = useRef(0);
   const normalizedQuery = query.trim().toLowerCase();
@@ -458,19 +525,145 @@ export default function AssetLibraryPanel() {
     return BROWSER_DIRECTORIES.find((directory) => directory.id === selectedRootDirectoryId.value) ?? null;
   }, [navigationVersion, selectedRootDirectoryId]);
 
-  const importSceneAsset = (assetId: SceneAssetId, label: string) => {
-    const isMesh = isMeshAssetId(assetId);
-    const idx = isMesh ? spawnIndex.current++ : spawnIndex.current;
-    const position = isMesh
-      ? {
-          x: idx * 1.5,
-          y: 1.5,
-          z: assetId === "mesh:sphere" ? -0.2 : 0,
+  const ensureWorkspaceLibraryFilesImported = useCallback(
+    async (workspaceKeys: string[]) => {
+      const normalizedRequested = workspaceKeys
+        .map((key) => normalizeWorkspaceFilePath(key))
+        .filter((key) => key.length > 0);
+      if (normalizedRequested.length === 0) return true;
+      const known = new Set(
+        Object.keys(useAssetStore.getState().assets)
+          .map((key) => normalizeWorkspaceFilePath(key))
+          .filter((key) => key.length > 0)
+      );
+      const missing = normalizedRequested.filter((key) => !known.has(key));
+      if (missing.length === 0) return true;
+
+      const baseUrl = resolvePublicBaseUrl();
+      const files: File[] = [];
+      for (const workspaceKey of missing) {
+        const url = `${baseUrl}${workspaceKey}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+          logWarn("Browser managed library asset download failed", {
+            scope: "assets",
+            data: {
+              workspaceKey,
+              status: response.status,
+              statusText: response.statusText,
+            },
+          });
+          return false;
         }
-      : undefined;
-    addSceneAsset(assetId, { position });
-    logInfo(`Browser import: ${label}`, { scope: "assets", data: { assetId } });
-  };
+        const blob = await response.blob();
+        files.push(createWorkspaceFile(blob, workspaceKey));
+      }
+      importFiles(files);
+      return true;
+    },
+    [importFiles]
+  );
+
+  const applyImportedRootTransform = useCallback((rootId: string, transform: {
+    position?: { x: number; y: number; z: number };
+    rotationDeg?: { x: number; y: number; z: number };
+    scale?: { x: number; y: number; z: number };
+  }) => {
+    const doc = editorEngine.getDoc();
+    const node = doc.scene.nodes[rootId];
+    if (!node) return;
+    const current = node.components?.transform ?? {
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+    editorEngine.execute(
+      setNodeTransformCommand(rootId, {
+        position: transform.position ? { ...transform.position } : current.position,
+        rotation: transform.rotationDeg ? { ...transform.rotationDeg } : current.rotation,
+        scale: transform.scale ? { ...transform.scale } : current.scale,
+      })
+    );
+  }, []);
+
+  const importManagedTerrainAssetIfAvailable = useCallback(
+    async (assetId: SceneAssetId, label: string) => {
+      const managedWorkspaceKeys =
+        assetId === "floor"
+          ? [MANAGED_FLAT_FLOOR_WORKSPACE_KEY]
+          : assetId === "floor:rough"
+            ? []
+            : [];
+      if (managedWorkspaceKeys.length === 0) return false;
+
+      for (const managedWorkspaceKey of managedWorkspaceKeys) {
+        const ready = await ensureWorkspaceLibraryFilesImported([managedWorkspaceKey]);
+        if (!ready) continue;
+
+        const assetStore = useAssetStore.getState();
+        const result = await importManager.import_usd({
+          usdKey: managedWorkspaceKey,
+          assets: assetStore.assets,
+          importOptions: assetStore.usdOptions,
+          bundleHintPaths: [managedWorkspaceKey],
+          sceneRole: "scene_asset",
+          rootName: label,
+        });
+        if (!result.ok) {
+          logWarn("Browser managed terrain import failed; trying next managed terrain candidate.", {
+            scope: "assets",
+            data: {
+              assetId,
+              managedWorkspaceKey,
+              diagnostics: result.diagnostics,
+            },
+          });
+          continue;
+        }
+        logInfo(`Browser import: ${label} (managed terrain)`, {
+          scope: "assets",
+          data: {
+            assetId,
+            managedWorkspaceKey,
+            rootId: result.rootId,
+          },
+        });
+        return true;
+      }
+
+      logWarn("Browser managed terrain import unavailable; using generated fallback.", {
+        scope: "assets",
+        data: {
+          assetId,
+          managedWorkspaceKeys,
+        },
+      });
+      return false;
+    },
+    [ensureWorkspaceLibraryFilesImported]
+  );
+
+  const importSceneAsset = useCallback(
+    async (assetId: SceneAssetId, label: string) => {
+      if (assetId === "floor" || assetId === "floor:rough") {
+        const managedImported = await importManagedTerrainAssetIfAvailable(assetId, label);
+        if (managedImported) return true;
+      }
+      const isMesh = isMeshAssetId(assetId);
+      const idx = isMesh ? spawnIndex.current++ : spawnIndex.current;
+      const position = isMesh
+        ? {
+            x: idx * 1.5,
+            y: 1.5,
+            z: assetId === "mesh:sphere" ? -0.2 : 0,
+          }
+        : undefined;
+      addSceneAsset(assetId, { position });
+      logInfo(`Browser import: ${label}`, { scope: "assets", data: { assetId } });
+      return true;
+    },
+    [importManagedTerrainAssetIfAvailable]
+  );
 
   const openFileInEditor = (path: string) => {
     setActiveFile(path);
@@ -516,14 +709,14 @@ export default function AssetLibraryPanel() {
   const importLibrarySample = useCallback(
     async (sampleId: string) => {
       const sample = getLibrarySampleById(sampleId);
-      if (!sample) return;
+      if (!sample) return false;
 
       const sampleKey = await ensureLibrarySampleImported(
         sample,
         () => useAssetStore.getState().assets,
         importFiles
       );
-      if (!sampleKey) return;
+      if (!sampleKey) return false;
 
       const store = useAssetStore.getState();
       if (sample.kind === "urdf") {
@@ -537,7 +730,7 @@ export default function AssetLibraryPanel() {
           scope: "assets",
           data: { sampleId: sample.id, urdfKey: sampleKey },
         });
-        return;
+        return false;
       }
 
       store.setUSD(sampleKey);
@@ -556,20 +749,115 @@ export default function AssetLibraryPanel() {
         scope: "assets",
         data: { sampleId: sample.id, usdKey: sampleKey },
       });
+      return false;
     },
     [importFiles, requestUrdfImport, requestUsdImport]
   );
 
-  const importAssetItem = (item: BrowserItem | null) => {
-    if (!item) return;
-    if (item.assetId) {
-      importSceneAsset(item.assetId, item.label);
-      return;
-    }
-    if (item.sampleId) {
-      void importLibrarySample(item.sampleId);
-    }
-  };
+  const importLibraryAssetPackItem = useCallback(
+    async (
+      itemId: string,
+      options?: {
+        transform?: {
+          position?: { x: number; y: number; z: number };
+          rotationDeg?: { x: number; y: number; z: number };
+          scale?: { x: number; y: number; z: number };
+        };
+      }
+    ) => {
+      const item = getLibraryAssetPackItemById(itemId);
+      if (!item) return false;
+
+      const workspaceKey = await ensureLibraryAssetPackItemImported(
+        item,
+        () => useAssetStore.getState().assets,
+        importFiles
+      );
+      if (!workspaceKey) {
+        logWarn("Library asset-pack import failed to hydrate workspace files", {
+          scope: "assets",
+          data: { itemId: item.id },
+        });
+        return false;
+      }
+      const assetStore = useAssetStore.getState();
+      const result = await importManager.import_usd({
+        usdKey: workspaceKey,
+        assets: assetStore.assets,
+        importOptions: assetStore.usdOptions,
+        bundleHintPaths: item.files,
+        sceneRole: item.sceneRole === "terrain" ? "scene_asset" : item.sceneRole,
+        rootName: item.rootName ?? item.label,
+      });
+      if (!result.ok) {
+        logWarn("Library asset-pack USD import failed", {
+          scope: "assets",
+          data: {
+            itemId: item.id,
+            workspaceKey,
+            diagnostics: result.diagnostics,
+          },
+        });
+        return false;
+      }
+      if (result.rootId && options?.transform) {
+        applyImportedRootTransform(result.rootId, options.transform);
+      }
+      logInfo("Library asset-pack imported", {
+        scope: "assets",
+        data: {
+          itemId: item.id,
+          workspaceKey,
+          rootId: result.rootId,
+        },
+      });
+      return true;
+    },
+    [applyImportedRootTransform, importFiles]
+  );
+
+  const importLibraryAssetPackPreset = useCallback(
+    async (presetId: string) => {
+      const preset = getLibraryAssetPackPresetById(presetId);
+      if (!preset) return false;
+      let importedAtLeastOne = false;
+      for (const placement of preset.placements) {
+        const imported = await importLibraryAssetPackItem(placement.itemId, {
+          transform: placement.transform,
+        });
+        importedAtLeastOne = importedAtLeastOne || imported;
+      }
+      logInfo("Library asset-pack preset imported", {
+        scope: "assets",
+        data: {
+          presetId: preset.id,
+          placementCount: preset.placements.length,
+        },
+      });
+      return importedAtLeastOne;
+    },
+    [importLibraryAssetPackItem]
+  );
+
+  const importAssetItem = useCallback(
+    async (item: BrowserItem | null) => {
+      if (!item) return;
+      let importedNow = false;
+      if (item.assetId) {
+        importedNow = await importSceneAsset(item.assetId, item.label);
+      } else if (item.sampleId) {
+        importedNow = await importLibrarySample(item.sampleId);
+      } else if (item.assetPackItemId) {
+        importedNow = await importLibraryAssetPackItem(item.assetPackItemId);
+      } else if (item.assetPackPresetId) {
+        importedNow = await importLibraryAssetPackPreset(item.assetPackPresetId);
+      }
+      if (importedNow) {
+        enqueueLibraryItemCapture(item.id);
+      }
+    },
+    [enqueueLibraryItemCapture, importLibraryAssetPackItem, importLibraryAssetPackPreset, importLibrarySample, importSceneAsset]
+  );
 
   const openDirectoryFromRoot = (directoryId: BrowserDirectoryId) => {
     setActiveDirectory(directoryId);
@@ -600,7 +888,7 @@ export default function AssetLibraryPanel() {
       executeWorkspaceEntry(selectedWorkspaceEntry);
       return;
     }
-    importAssetItem(selectedItem);
+    void importAssetItem(selectedItem);
   };
 
   const dragPayloadFromBrowserItem = (item: BrowserItem): BrowserImportPayload | null => {
@@ -852,16 +1140,22 @@ export default function AssetLibraryPanel() {
             {visibleItems.map((item) => {
               const selected = item.id === selectedItem?.id;
               const dragPayload = dragPayloadFromBrowserItem(item);
-              const hasImage = Boolean(item.preview.imageUrl);
+              const previewStatus = libraryItemPreviews[item.id];
+              const previewImageUrl = previewStatus?.status === "ready" ? previewStatus.dataUrl : item.preview.imageUrl;
+              const hasImage = Boolean(previewImageUrl);
+              const isCapturing = previewStatus?.status === "loading";
               return (
                 <div
                   key={item.id}
-                  onClick={() =>
+                  onClick={() => {
                     setSelectedId({
                       value: item.id,
                       navigationVersion,
-                    })
-                  }
+                    });
+                    if (previewStatus?.status === "ready") {
+                      touchLibraryItemPreview(item.id);
+                    }
+                  }}
                   onDoubleClick={() => {
                     void importAssetItem(item);
                   }}
@@ -889,7 +1183,7 @@ export default function AssetLibraryPanel() {
                   >
                     {hasImage ? (
                       <img
-                        src={item.preview.imageUrl}
+                        src={previewImageUrl}
                         alt={item.label}
                         style={{
                           position: "absolute",
@@ -963,6 +1257,21 @@ export default function AssetLibraryPanel() {
                           }}
                         >
                           Env
+                        </span>
+                      )}
+                      {isCapturing && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            letterSpacing: 0.4,
+                            padding: "1px 6px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(160,200,240,0.45)",
+                            color: "rgba(210,230,250,0.95)",
+                            background: "rgba(74,124,176,0.15)",
+                          }}
+                        >
+                          CAPTURING
                         </span>
                       )}
                     </div>

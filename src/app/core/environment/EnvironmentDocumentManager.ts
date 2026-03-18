@@ -283,6 +283,26 @@ function normalizeDiagnostics(value: unknown): EnvironmentDiagnostic[] {
   return diagnostics;
 }
 
+function normalizeImportWarnings(value: unknown): EnvironmentDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  const diagnostics: EnvironmentDiagnostic[] = [];
+  for (const item of value) {
+    const raw = asRecord(item);
+    const code = String(raw.code ?? "").trim();
+    const message = String(raw.message ?? "").trim();
+    if (!code || !message) continue;
+    const context = asOptionalRecord(raw.context);
+    diagnostics.push({
+      code,
+      message,
+      severity: "warning",
+      source: "import",
+      ...(context ? { context } : {}),
+    });
+  }
+  return diagnostics;
+}
+
 function buildDocumentDiagnostics(input: {
   doc: ProjectDoc;
   assets: Record<string, EnvironmentAsset>;
@@ -371,6 +391,36 @@ function buildDocumentDiagnostics(input: {
           },
         });
       }
+    }
+
+    const importWarnings = normalizeImportWarnings(asRecord(asset.metadata).importWarnings);
+    for (const diagnostic of importWarnings) {
+      pushOnce({
+        ...diagnostic,
+        context: {
+          ...(diagnostic.context ?? {}),
+          assetId: asset.id,
+          role: asset.role ?? null,
+        },
+      });
+    }
+  }
+
+  for (const entity of Object.values(input.entities)) {
+    if (entity.kind !== "robot") continue;
+    const robotSource = entity.robotModelSource;
+    if (!robotSource || robotSource.kind !== "usd") continue;
+    const importWarnings = normalizeImportWarnings((robotSource as Record<string, unknown>).importWarnings);
+    for (const diagnostic of importWarnings) {
+      pushOnce({
+        ...diagnostic,
+        context: {
+          ...(diagnostic.context ?? {}),
+          entityId: entity.id,
+          nodeId: entity.nodeId ?? null,
+          robotName: entity.name,
+        },
+      });
     }
   }
 

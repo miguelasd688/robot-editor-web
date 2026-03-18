@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="Rough terrain preview">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9aa9bd" />
+      <stop offset="100%" stop-color="#5e6f83" />
+    </linearGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6a5b45" />
+      <stop offset="45%" stop-color="#5a4d3c" />
+      <stop offset="100%" stop-color="#443a2f" />
+    </linearGradient>
+    <pattern id="grain" width="48" height="48" patternUnits="userSpaceOnUse">
+      <rect width="48" height="48" fill="transparent" />
+      <circle cx="8" cy="12" r="1.2" fill="#9f8f72" fill-opacity="0.45" />
+      <circle cx="22" cy="6" r="0.9" fill="#b5a281" fill-opacity="0.36" />
+      <circle cx="39" cy="15" r="1.1" fill="#8f7f63" fill-opacity="0.36" />
+      <circle cx="13" cy="33" r="1" fill="#ac9a7b" fill-opacity="0.35" />
+      <circle cx="31" cy="27" r="0.95" fill="#8b7a5f" fill-opacity="0.34" />
+      <circle cx="44" cy="36" r="1.25" fill="#a89778" fill-opacity="0.32" />
+    </pattern>
+  </defs>
+  <rect width="640" height="360" fill="url(#sky)" />
+  <path d="M0 174h640v186H0z" fill="url(#ground)" />
+  <rect x="0" y="174" width="640" height="186" fill="url(#grain)" opacity="0.95" />
+  <path d="M0 170l68-6 74 9 83-10 72 8 71-8 79 9 92-7 101 11v184H0z" fill="#3f372d" opacity="0.52" />
+  <g fill="#8f7f63" opacity="0.9">
+    <path d="M74 230l38-45 44 11 24 48-31 16-61-8z" />
+    <path d="M203 250l47-52 58 10 26 53-37 22-73-11z" />
+    <path d="M365 236l43-49 49 10 27 50-34 19-66-10z" />
+    <path d="M503 260l47-56 56 13 31 59-40 21-76-12z" />
+  </g>
+  <g fill="#6a5b45" opacity="0.5">
+    <path d="M67 268l44-9 65 11-56 24z" />
+    <path d="M203 292l91-10 53 16-86 24z" />
+    <path d="M373 278l74-9 53 15-80 23z" />
+  </g>
+</svg>

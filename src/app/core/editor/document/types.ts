@@ -43,6 +43,12 @@ export type UrdfModelSource = {
   importOptions: UrdfImportOptions;
 };
 
+export type ImportWarningPayload = {
+  code: string;
+  message: string;
+  context?: Record<string, unknown>;
+};
+
 export type UsdModelSource = {
   kind: "usd";
   /**
@@ -61,6 +67,8 @@ export type UsdModelSource = {
   importOptions: UsdImportOptions;
   /** true if any property was edited after import; triggers MJCF→USD re-conversion on training launch */
   isDirty: boolean;
+  /** Structured import compatibility warnings captured during USD import. */
+  importWarnings?: ImportWarningPayload[];
 };
 
 export type RobotModelSource = UrdfModelSource | UsdModelSource;

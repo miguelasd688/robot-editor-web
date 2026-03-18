@@ -13,8 +13,11 @@ import { useLoaderStore } from "../store/useLoaderStore";
 import { disposeObject3D } from "../viewer/objectRegistry";
 import {
   applyDefaultFloorAppearanceToMesh,
+  applyRoughFloorAppearanceToMesh,
   createDefaultFloorMaterial,
+  createRoughFloorMaterial,
   isDefaultFloorWorkspaceKey,
+  isManagedRoughFloorWorkspaceKey,
 } from "../assets/floorAppearance";
 
 export type USDLoaderParams = {
@@ -160,6 +163,17 @@ type UsdConverterMeshSceneMesh = {
   materialName?: unknown;
   materialSource?: unknown;
   baseColorTexture?: unknown;
+  normalTexture?: unknown;
+  metallicTexture?: unknown;
+  roughnessTexture?: unknown;
+  metallicRoughnessTexture?: unknown;
+  occlusionTexture?: unknown;
+  emissiveTexture?: unknown;
+  opacityTexture?: unknown;
+  metallicFactor?: unknown;
+  roughnessFactor?: unknown;
+  emissiveFactor?: unknown;
+  opacityFactor?: unknown;
 };
 
 type UsdConverterMeshScenePrimitive = {
@@ -179,6 +193,17 @@ type UsdConverterMeshScenePrimitive = {
   materialName?: unknown;
   materialSource?: unknown;
   baseColorTexture?: unknown;
+  normalTexture?: unknown;
+  metallicTexture?: unknown;
+  roughnessTexture?: unknown;
+  metallicRoughnessTexture?: unknown;
+  occlusionTexture?: unknown;
+  emissiveTexture?: unknown;
+  opacityTexture?: unknown;
+  metallicFactor?: unknown;
+  roughnessFactor?: unknown;
+  emissiveFactor?: unknown;
+  opacityFactor?: unknown;
 };
 
 type UsdConverterMeshSceneBody = {
@@ -189,6 +214,9 @@ type UsdConverterMeshSceneBody = {
   position?: unknown;
   quaternion?: unknown;
   scale?: unknown;
+  rigidBodyEnabled?: unknown;
+  kinematicEnabled?: unknown;
+  mass?: unknown;
 };
 
 type UsdConverterMeshSceneResponse = {
@@ -252,6 +280,7 @@ type NormalizedUsdMeshSceneMesh = {
   name: string;
   primPath: string;
   parentBody: string | null;
+  parentBodyPath: string | null;
   position: [number, number, number];
   quaternion: THREE.Quaternion;
   scale: [number, number, number];
@@ -263,6 +292,17 @@ type NormalizedUsdMeshSceneMesh = {
   materialName: string | null;
   materialSource: string | null;
   baseColorTexture: string | null;
+  normalTexture: string | null;
+  metallicTexture: string | null;
+  roughnessTexture: string | null;
+  metallicRoughnessTexture: string | null;
+  occlusionTexture: string | null;
+  emissiveTexture: string | null;
+  opacityTexture: string | null;
+  metallicFactor: number | null;
+  roughnessFactor: number | null;
+  emissiveFactor: [number, number, number] | null;
+  opacityFactor: number | null;
 };
 
 type NormalizedUsdMeshScenePrimitiveKind = "sphere" | "capsule" | "cylinder" | "cone" | "cube";
@@ -271,6 +311,7 @@ type NormalizedUsdMeshScenePrimitive = {
   name: string;
   primPath: string;
   parentBody: string | null;
+  parentBodyPath: string | null;
   kind: NormalizedUsdMeshScenePrimitiveKind;
   position: [number, number, number];
   quaternion: THREE.Quaternion;
@@ -283,15 +324,30 @@ type NormalizedUsdMeshScenePrimitive = {
   materialName: string | null;
   materialSource: string | null;
   baseColorTexture: string | null;
+  normalTexture: string | null;
+  metallicTexture: string | null;
+  roughnessTexture: string | null;
+  metallicRoughnessTexture: string | null;
+  occlusionTexture: string | null;
+  emissiveTexture: string | null;
+  opacityTexture: string | null;
+  metallicFactor: number | null;
+  roughnessFactor: number | null;
+  emissiveFactor: [number, number, number] | null;
+  opacityFactor: number | null;
 };
 
 type NormalizedUsdMeshSceneBody = {
   name: string;
   primPath: string;
   parentBody: string | null;
+  parentBodyPath: string | null;
   position: [number, number, number];
   quaternion: THREE.Quaternion;
   scale: [number, number, number];
+  rigidBodyEnabled: boolean | null;
+  kinematicEnabled: boolean | null;
+  mass: number | null;
 };
 
 type NormalizedUsdMeshScene = {
@@ -308,6 +364,12 @@ type NormalizedUsdMeshScene = {
   bodies: NormalizedUsdMeshSceneBody[];
 };
 
+type UsdImportWarning = {
+  code: string;
+  message: string;
+  context?: Record<string, unknown>;
+};
+
 const DEFAULT_USD_CONVERTER_BASE_URL = "http://localhost:8095";
 const rawConverterBaseUrl = String(import.meta.env.VITE_USD_CONVERTER_BASE_URL ?? DEFAULT_USD_CONVERTER_BASE_URL).trim();
 const usdConverterBaseUrl = rawConverterBaseUrl.replace(/\/+$/, "");
@@ -321,6 +383,16 @@ const JOINT_NAME_RE = /(joint|dof|haa|hfe|kfe|hinge|slider|prismatic|revolute|ac
 const LINK_NAME_RE = /(link|base|hip|thigh|shank|foot|body|chassis|arm|wheel|sensor|payload|camera|imu|lidar)/i;
 const PATH_SKIP_SEGMENTS = new Set([
   "properties",
+  "props",
+  "config",
+  "state",
+  "children",
+  "component",
+  "components",
+  "metadata",
+  "settings",
+  "constructor",
+  "prototype",
   "primChildren",
   "apiSchemas",
   "customData",
@@ -339,8 +411,40 @@ const DEFAULT_VISUAL_RGBA: [number, number, number, number] = [0.72, 0.79, 0.9, 
 const ISAAC_LAB_DEFAULT_SURFACE_FRICTION = 1.0;
 const ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION = 0.0;
 const ABSOLUTE_URL_RE = /^(?:https?:\/\/|blob:|data:)/i;
+const OPACITY_TEXTURE_HINT_RE = /(opacity|alpha|transparen|cutout|mask|coverage)/i;
+const TRANSPARENT_MATERIAL_HINT_RE =
+  /(glass|transparen|window|windscreen|visor|lens|screen|clear|acrylic|polycarbonate|water|liquid)/i;
+const EMISSIVE_TEXTURE_HINT_RE = /(emissive|emission|self[_-]?illum|glow)/i;
+const OCCLUSION_TEXTURE_HINT_RE = /(occlusion|ambient[_-]?occlusion|ao|orm|rma|arm)/i;
+const METALLIC_INTENT_HINT_RE = /(metal|metallic|chrome|steel|iron|aluminum|aluminium|brass|copper|gold|silver)/i;
 const usdTextureLoader = new THREE.TextureLoader();
 const usdTextureCache = new Map<string, THREE.Texture>();
+
+const resolveUsdMeshSceneProfile = (
+  usdKey: string,
+  importOptions?: UsdImportOptions
+): "balanced" | "high_fidelity" => {
+  const explicit = importOptions?.meshSceneProfile;
+  if (explicit === "balanced" || explicit === "high_fidelity") return explicit;
+  const normalized = String(usdKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
+  if (normalized.includes("/open_arm/") || normalized.includes("openarm_")) {
+    return "high_fidelity";
+  }
+  return "balanced";
+};
+
+const resolveUsdCollisionProfile = (
+  usdKey: string,
+  importOptions?: UsdImportOptions
+): "authored" | "outer_hull" => {
+  const explicit = importOptions?.collisionProfile;
+  if (explicit === "authored" || explicit === "outer_hull") return explicit;
+  const normalized = String(usdKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
+  if (normalized.includes("/anymal") || normalized.endsWith("anymal.usd") || normalized.endsWith("anymal_c.usd")) {
+    return "outer_hull";
+  }
+  return "authored";
+};
 
 type UsdPrimNode = {
   path: string;
@@ -371,17 +475,25 @@ const isInsideCollisionBranch = (node: THREE.Object3D): boolean => {
   return false;
 };
 
-const applyDefaultFloorAppearanceToSceneAsset = (root: THREE.Object3D): number => {
-  const sharedFloorMaterial = createDefaultFloorMaterial();
+const applyManagedFloorAppearanceToSceneAsset = (
+  root: THREE.Object3D,
+  input: {
+    materialName: string;
+    materialSource: string;
+    createMaterial: () => THREE.MeshPhysicalMaterial;
+    applyToMesh: (mesh: THREE.Mesh, material: THREE.MeshPhysicalMaterial) => void;
+  }
+): number => {
+  const sharedFloorMaterial = input.createMaterial();
   let styledMeshes = 0;
 
   root.traverse((node) => {
     if (!(node instanceof THREE.Mesh)) return;
     if (isInsideCollisionBranch(node)) return;
-    applyDefaultFloorAppearanceToMesh(node, sharedFloorMaterial);
+    input.applyToMesh(node, sharedFloorMaterial);
     node.userData.usdMaterialInfo = {
-      materialName: "Default Floor",
-      materialSource: "editor.default_floor",
+      materialName: input.materialName,
+      materialSource: input.materialSource,
       baseColorTexture: null,
       textureUrl: null,
       editable: false,
@@ -391,6 +503,22 @@ const applyDefaultFloorAppearanceToSceneAsset = (root: THREE.Object3D): number =
 
   return styledMeshes;
 };
+
+const applyDefaultFloorAppearanceToSceneAsset = (root: THREE.Object3D): number =>
+  applyManagedFloorAppearanceToSceneAsset(root, {
+    materialName: "Default Floor",
+    materialSource: "editor.default_floor",
+    createMaterial: createDefaultFloorMaterial,
+    applyToMesh: applyDefaultFloorAppearanceToMesh,
+  });
+
+const applyRoughFloorAppearanceToSceneAsset = (root: THREE.Object3D): number =>
+  applyManagedFloorAppearanceToSceneAsset(root, {
+    materialName: "Rough Floor",
+    materialSource: "editor.rough_floor",
+    createMaterial: createRoughFloorMaterial,
+    applyToMesh: applyRoughFloorAppearanceToMesh,
+  });
 
 const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) => {
   const rootWithRobotFlag = root as THREE.Object3D & { isRobot?: boolean };
@@ -408,24 +536,102 @@ const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) 
   root.userData.usdSceneAsset = true;
 };
 
-const applySceneAssetPhysicsDefaults = (root: THREE.Object3D) => {
+const applySceneAssetPhysicsDefaults = (
+  root: THREE.Object3D,
+  options?: {
+    forceRootCollider?: boolean;
+    sourceRole?: "scene_asset" | "terrain";
+    meshScene?: NormalizedUsdMeshScene | null;
+  }
+) => {
+  const isTerrainAsset = options?.sourceRole === "terrain";
+  const bodyByToken = new Map<string, NormalizedUsdMeshSceneBody>();
+  for (const body of options?.meshScene?.bodies ?? []) {
+    const token = normalizeBodyToken(body.name);
+    if (!token || bodyByToken.has(token)) continue;
+    bodyByToken.set(token, body);
+  }
+
+  const computeDynamicMassFallback = (node: THREE.Object3D) => {
+    const bounds = new THREE.Box3().setFromObject(node);
+    const size = new THREE.Vector3();
+    bounds.getSize(size);
+    const volume = Math.max(0.0005, Math.abs(size.x * size.y * size.z));
+    return Math.min(20, Math.max(0.05, volume * 250));
+  };
+
+  let linkCount = 0;
+  let meshUnderLinkCount = 0;
+  let meshOutsideLinkCount = 0;
+  const hasLinkAncestor = (node: THREE.Object3D) => {
+    let current: THREE.Object3D | null = node.parent;
+    while (current) {
+      const isLink =
+        current.userData?.editorKind === "link" ||
+        Boolean((current as THREE.Object3D & { isURDFLink?: boolean }).isURDFLink);
+      if (isLink) return true;
+      if (current === root) break;
+      current = current.parent;
+    }
+    return false;
+  };
   root.traverse((node) => {
     const isLink = node.userData?.editorKind === "link" || Boolean((node as THREE.Object3D & { isURDFLink?: boolean }).isURDFLink);
-    if (!isLink) return;
-    const currentPhysics =
-      node.userData?.physics && typeof node.userData.physics === "object" && !Array.isArray(node.userData.physics)
-        ? (node.userData.physics as Record<string, unknown>)
-        : {};
-    node.userData.physics = {
-      ...currentPhysics,
-      mass: 0,
-      fixed: true,
-      useDensity: false,
-      collisionsEnabled: true,
-      friction: ISAAC_LAB_DEFAULT_SURFACE_FRICTION,
-      restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
-    };
+    if (isLink) {
+      linkCount += 1;
+      const bodyToken = normalizeBodyToken(String(node.userData?.usdBodyToken ?? node.name));
+      const bodyMeta = bodyToken ? bodyByToken.get(bodyToken) ?? null : null;
+      const isDynamicBody =
+        !isTerrainAsset &&
+        Boolean(bodyMeta) &&
+        bodyMeta?.rigidBodyEnabled !== false &&
+        bodyMeta?.kinematicEnabled !== true;
+      const resolvedMass = isDynamicBody
+        ? (bodyMeta?.mass && bodyMeta.mass > 1e-6 ? bodyMeta.mass : computeDynamicMassFallback(node))
+        : 0;
+      const currentPhysics =
+        node.userData?.physics && typeof node.userData.physics === "object" && !Array.isArray(node.userData.physics)
+          ? (node.userData.physics as Record<string, unknown>)
+          : {};
+      node.userData.physics = {
+        ...currentPhysics,
+        mass: resolvedMass,
+        fixed: !isDynamicBody,
+        useDensity: false,
+        collisionsEnabled: true,
+        friction: ISAAC_LAB_DEFAULT_SURFACE_FRICTION,
+        restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
+      };
+    }
+
+    const mesh = node as THREE.Mesh;
+    if (mesh.isMesh) {
+      if (hasLinkAncestor(node)) meshUnderLinkCount += 1;
+      else meshOutsideLinkCount += 1;
+    }
   });
+
+  const shouldTagRoot =
+    isTerrainAsset && (linkCount === 0 ||
+    options?.forceRootCollider === true ||
+    (meshOutsideLinkCount > 0 && meshUnderLinkCount === 0));
+
+  // Some USD terrains attach meshes outside link wrappers (e.g. bodyCount=0 mesh payloads).
+  // Tagging the root ensures MuJoCo sees the terrain mesh as a collision candidate.
+  if (!shouldTagRoot) return;
+  const rootPhysics =
+    root.userData?.physics && typeof root.userData.physics === "object" && !Array.isArray(root.userData.physics)
+      ? (root.userData.physics as Record<string, unknown>)
+      : {};
+  root.userData.physics = {
+    ...rootPhysics,
+    mass: 0,
+    fixed: true,
+    useDensity: false,
+    collisionsEnabled: true,
+    friction: ISAAC_LAB_DEFAULT_SURFACE_FRICTION,
+    restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
+  };
 };
 
 const toTuple3 = (value: string | null | undefined, fallback: [number, number, number]): [number, number, number] => {
@@ -884,9 +1090,11 @@ const addMjcfGeomMeshes = (
       color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
       transparent: rgba[3] < 1,
       opacity: Math.max(0.05, Math.min(1, rgba[3])),
-      metalness: 0.05,
-      roughness: 0.78,
+      metalness: 0.02,
+      roughness: 0.9,
+      envMapIntensity: 0.26,
     });
+    (visualMaterial.userData ??= {}).viewportSurfaceProfile = "usd_pbr";
 
     const collisionMaterial = new THREE.MeshBasicMaterial({
       color: 0x8c5a2b,
@@ -950,6 +1158,15 @@ const buildRobotFromMjcf = (
   const usedMeshNames = new Set<string>();
   const instantiateRenderGroups = options?.instantiateRenderGroups !== false;
   const introspectionJoints = options?.introspection?.joints ?? [];
+  const bodyPathByToken = new Map<string, string>();
+  for (const joint of introspectionJoints) {
+    const parentToken = normalizeBodyToken(joint.parentBody);
+    const parentPath = normalizePathAliasToken(joint.parentBodyPath);
+    if (parentToken && parentPath && !bodyPathByToken.has(parentToken)) bodyPathByToken.set(parentToken, parentPath);
+    const childToken = normalizeBodyToken(joint.childBody);
+    const childPath = normalizePathAliasToken(joint.childBodyPath);
+    if (childToken && childPath && !bodyPathByToken.has(childToken)) bodyPathByToken.set(childToken, childPath);
+  }
   const usedIntrospectionJointIndexes = new Set<number>();
   let linkCount = 0;
   let jointCount = 0;
@@ -1052,6 +1269,12 @@ const buildRobotFromMjcf = (
     linkFlags.isURDFLink = true;
     linkFlags.urdfName = linkName;
     link.userData.editorKind = "link";
+    const bodyToken = normalizeBodyToken(body.name) ?? normalizeBodyToken(linkName);
+    if (bodyToken) {
+      link.userData.usdBodyToken = bodyToken;
+      const bodyPath = bodyPathByToken.get(bodyToken);
+      if (bodyPath) link.userData.usdBodyPath = bodyPath;
+    }
 
     const visual = instantiateRenderGroups ? new THREE.Group() : null;
     if (visual) {
@@ -1308,6 +1531,7 @@ const buildUsdMeshGeometry = (mesh: NormalizedUsdMeshSceneMesh) => {
   }
   if (mesh.uvs && mesh.uvs.length * 3 === mesh.points.length * 2) {
     geometry.setAttribute("uv", new THREE.BufferAttribute(mesh.uvs, 2));
+    geometry.setAttribute("uv2", new THREE.BufferAttribute(mesh.uvs.slice(), 2));
   }
   geometry.computeBoundingSphere();
   return geometry;
@@ -1323,40 +1547,176 @@ const resolveUsdTextureUrl = (
   return resolveResource?.(normalized) ?? null;
 };
 
-const getOrLoadUsdTexture = (url: string) => {
-  const cached = usdTextureCache.get(url);
+const resolveUsdMaterialTextures = (
+  input: {
+    baseColorTexture: string | null;
+    normalTexture: string | null;
+    metallicTexture: string | null;
+    roughnessTexture: string | null;
+    metallicRoughnessTexture: string | null;
+    occlusionTexture: string | null;
+    emissiveTexture: string | null;
+    opacityTexture: string | null;
+  },
+  resolveResource?: (resourcePath: string) => string | null
+): ResolvedUsdMaterialTextures => ({
+  baseColorUrl: resolveUsdTextureUrl(input.baseColorTexture, resolveResource),
+  normalUrl: resolveUsdTextureUrl(input.normalTexture, resolveResource),
+  metallicUrl: resolveUsdTextureUrl(input.metallicTexture, resolveResource),
+  roughnessUrl: resolveUsdTextureUrl(input.roughnessTexture, resolveResource),
+  metallicRoughnessUrl: resolveUsdTextureUrl(input.metallicRoughnessTexture, resolveResource),
+  occlusionUrl: resolveUsdTextureUrl(input.occlusionTexture, resolveResource),
+  emissiveUrl: resolveUsdTextureUrl(input.emissiveTexture, resolveResource),
+  opacityUrl: resolveUsdTextureUrl(input.opacityTexture, resolveResource),
+});
+
+type UsdTextureColorSpace = "srgb" | "linear";
+
+type ResolvedUsdMaterialTextures = {
+  baseColorUrl: string | null;
+  normalUrl: string | null;
+  metallicUrl: string | null;
+  roughnessUrl: string | null;
+  metallicRoughnessUrl: string | null;
+  occlusionUrl: string | null;
+  emissiveUrl: string | null;
+  opacityUrl: string | null;
+};
+
+const maxColorComponent = (value: [number, number, number] | null | undefined) =>
+  value ? Math.max(value[0] ?? 0, value[1] ?? 0, value[2] ?? 0) : 0;
+
+const looksLikeOpacityTexture = (url: string | null | undefined) =>
+  typeof url === "string" && OPACITY_TEXTURE_HINT_RE.test(url.toLowerCase());
+
+const looksLikeTransparentMaterialName = (name: string | null | undefined) =>
+  typeof name === "string" && TRANSPARENT_MATERIAL_HINT_RE.test(name.toLowerCase());
+
+const looksLikeEmissiveTexture = (url: string | null | undefined) =>
+  typeof url === "string" && EMISSIVE_TEXTURE_HINT_RE.test(url.toLowerCase());
+
+const looksLikeOcclusionTexture = (url: string | null | undefined) =>
+  typeof url === "string" && OCCLUSION_TEXTURE_HINT_RE.test(url.toLowerCase());
+
+const looksLikeMetallicIntent = (value: string | null | undefined) =>
+  typeof value === "string" && METALLIC_INTENT_HINT_RE.test(value.toLowerCase());
+
+const getOrLoadUsdTexture = (url: string, colorSpace: UsdTextureColorSpace) => {
+  const cacheKey = `${colorSpace}:${url}`;
+  const cached = usdTextureCache.get(cacheKey);
   if (cached) return cached;
   const texture = usdTextureLoader.load(url);
-  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.colorSpace = colorSpace === "srgb" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.needsUpdate = true;
-  usdTextureCache.set(url, texture);
+  usdTextureCache.set(cacheKey, texture);
   return texture;
 };
 
 const createUsdVisualMaterial = (
   rgba: [number, number, number, number] | null,
-  options?: { textureUrl?: string | null; materialName?: string | null }
+  options?: {
+    textures?: ResolvedUsdMaterialTextures;
+    materialName?: string | null;
+    metallicFactor?: number | null;
+    roughnessFactor?: number | null;
+    emissiveFactor?: [number, number, number] | null;
+    opacityFactor?: number | null;
+  }
 ) => {
   const colorRgba = rgba ?? DEFAULT_VISUAL_RGBA;
+  const hasResolvedOpacityTexture = Boolean(options?.textures?.opacityUrl);
+  const hasOpacityTextureIntent = looksLikeOpacityTexture(options?.textures?.opacityUrl ?? null);
+  const hasTransparentMaterialName = looksLikeTransparentMaterialName(options?.materialName ?? null);
+  const rawOpacityFactor = options?.opacityFactor;
+  const normalizedOpacityFactor =
+    typeof rawOpacityFactor === "number" && Number.isFinite(rawOpacityFactor)
+      ? Math.max(0, Math.min(1, rawOpacityFactor))
+      : null;
+  const baseAlpha = Math.max(0, Math.min(1, colorRgba[3]));
+  const opacityChannelEnabled =
+    (hasResolvedOpacityTexture && hasOpacityTextureIntent) || hasTransparentMaterialName;
+  let opacity = Math.max(0.02, Math.min(1, opacityChannelEnabled ? normalizedOpacityFactor ?? baseAlpha : 1));
+  if (!opacityChannelEnabled) {
+    opacity = 1;
+  }
+  if (opacity < 0.15 && !hasOpacityTextureIntent && !hasTransparentMaterialName) {
+    opacity = 1;
+  }
+  const hasMetallicTexture = Boolean(options?.textures?.metallicUrl || options?.textures?.metallicRoughnessUrl);
+  const hasMetallicIntent =
+    hasMetallicTexture ||
+    looksLikeMetallicIntent(options?.materialName ?? null) ||
+    (typeof options?.metallicFactor === "number" && options.metallicFactor >= 0.4);
+  const metallic = hasMetallicIntent ? Math.max(0, Math.min(0.08, options?.metallicFactor ?? 0.02)) : 0;
+  const roughness = Math.max(0.72, Math.min(1, options?.roughnessFactor ?? 0.94));
   const material = new THREE.MeshStandardMaterial({
     color: new THREE.Color(colorRgba[0], colorRgba[1], colorRgba[2]),
-    transparent: colorRgba[3] < 1,
-    opacity: Math.max(0.05, Math.min(1, colorRgba[3])),
-    metalness: 0.05,
-    roughness: 0.78,
+    transparent: opacityChannelEnabled && opacity < 0.999,
+    opacity,
+    metalness: metallic,
+    roughness,
+    envMapIntensity: 0.1,
     side: THREE.DoubleSide,
   });
 
-  const textureUrl = options?.textureUrl ?? null;
-  if (textureUrl) {
-    material.map = getOrLoadUsdTexture(textureUrl);
-    material.needsUpdate = true;
+  const textures = options?.textures;
+  if (textures?.baseColorUrl) {
+    material.map = getOrLoadUsdTexture(textures.baseColorUrl, "srgb");
   }
+  if (textures?.normalUrl) {
+    material.normalMap = getOrLoadUsdTexture(textures.normalUrl, "linear");
+  }
+  if (textures?.metallicRoughnessUrl) {
+    const orm = getOrLoadUsdTexture(textures.metallicRoughnessUrl, "linear");
+    material.roughnessMap = orm;
+    if (hasMetallicIntent) {
+      material.metalnessMap = orm;
+    }
+  } else {
+    if (hasMetallicIntent && textures?.metallicUrl) {
+      material.metalnessMap = getOrLoadUsdTexture(textures.metallicUrl, "linear");
+    }
+    if (textures?.roughnessUrl) {
+      material.roughnessMap = getOrLoadUsdTexture(textures.roughnessUrl, "linear");
+    }
+  }
+  if (textures?.occlusionUrl) {
+    if (looksLikeOcclusionTexture(textures.occlusionUrl)) {
+      material.aoMap = getOrLoadUsdTexture(textures.occlusionUrl, "linear");
+      material.aoMapIntensity = 0.42;
+    }
+  }
+  const hasEmissiveFactor = maxColorComponent(options?.emissiveFactor) > 0.01;
+  const hasEmissiveMapIntent = looksLikeEmissiveTexture(textures?.emissiveUrl ?? null);
+  if (textures?.emissiveUrl && hasEmissiveMapIntent) {
+    material.emissiveMap = getOrLoadUsdTexture(textures.emissiveUrl, "srgb");
+  }
+  if (hasEmissiveFactor || hasEmissiveMapIntent) {
+    if (options?.emissiveFactor) {
+      material.emissive = new THREE.Color(
+        options.emissiveFactor[0],
+        options.emissiveFactor[1],
+        options.emissiveFactor[2]
+      );
+      material.emissiveIntensity = 1.0;
+    } else {
+      material.emissive = new THREE.Color(1, 1, 1);
+      material.emissiveIntensity = 0.28;
+    }
+  }
+  if (textures?.opacityUrl && opacityChannelEnabled && hasOpacityTextureIntent) {
+    material.alphaMap = getOrLoadUsdTexture(textures.opacityUrl, "linear");
+    material.transparent = true;
+    material.alphaTest = 0.08;
+    material.depthWrite = false;
+  }
+  (material.userData ??= {}).viewportSurfaceProfile = "usd_pbr";
   if (options?.materialName) {
     material.name = options.materialName;
   }
+  material.needsUpdate = true;
   return material;
 };
 
@@ -1371,23 +1731,35 @@ const createUsdCollisionMaterial = () =>
 
 const createUsdVisualMesh = (
   mesh: NormalizedUsdMeshSceneMesh,
-  options?: { textureUrl?: string | null }
+  options?: { materialTextures?: ResolvedUsdMaterialTextures }
 ) => {
   const geometry = buildUsdMeshGeometry(mesh);
   const material = createUsdVisualMaterial(mesh.rgba, {
-    textureUrl: options?.textureUrl ?? null,
+    textures: options?.materialTextures,
     materialName: mesh.materialName,
+    metallicFactor: mesh.metallicFactor,
+    roughnessFactor: mesh.roughnessFactor,
+    emissiveFactor: mesh.emissiveFactor,
+    opacityFactor: mesh.opacityFactor,
   });
   const visualMesh = new THREE.Mesh(geometry, material);
   visualMesh.name = mesh.name;
   visualMesh.userData.editorKind = "mesh";
   visualMesh.userData.usdPrimPath = mesh.primPath;
+  visualMesh.userData.disableViewportEdgeOverlay = true;
   visualMesh.userData.usdMaterialInfo = {
     materialName: mesh.materialName,
     materialSource: mesh.materialSource,
     baseColorTexture: mesh.baseColorTexture,
-    textureUrl: options?.textureUrl ?? null,
-    editable: !options?.textureUrl,
+    normalTexture: mesh.normalTexture,
+    metallicTexture: mesh.metallicTexture,
+    roughnessTexture: mesh.roughnessTexture,
+    metallicRoughnessTexture: mesh.metallicRoughnessTexture,
+    occlusionTexture: mesh.occlusionTexture,
+    emissiveTexture: mesh.emissiveTexture,
+    opacityTexture: mesh.opacityTexture,
+    textureUrls: options?.materialTextures ?? null,
+    editable: !Object.values(options?.materialTextures ?? {}).some((value) => Boolean(value)),
   };
   visualMesh.position.set(mesh.position[0], mesh.position[1], mesh.position[2]);
   visualMesh.quaternion.copy(mesh.quaternion);
@@ -1443,27 +1815,43 @@ const axisTokenToVector = (axis: "X" | "Y" | "Z") => {
 
 const createUsdVisualPrimitive = (
   primitive: NormalizedUsdMeshScenePrimitive,
-  options?: { textureUrl?: string | null }
+  options?: { materialTextures?: ResolvedUsdMaterialTextures }
 ) => {
   const geometry = buildUsdPrimitiveGeometry(primitive);
   if (!geometry) return null;
+  const uvAttr = geometry.getAttribute("uv");
+  if (uvAttr && !geometry.getAttribute("uv2")) {
+    geometry.setAttribute("uv2", uvAttr.clone());
+  }
 
   const visualMesh = new THREE.Mesh(
     geometry,
     createUsdVisualMaterial(primitive.rgba, {
-      textureUrl: options?.textureUrl ?? null,
+      textures: options?.materialTextures,
       materialName: primitive.materialName,
+      metallicFactor: primitive.metallicFactor,
+      roughnessFactor: primitive.roughnessFactor,
+      emissiveFactor: primitive.emissiveFactor,
+      opacityFactor: primitive.opacityFactor,
     })
   );
   visualMesh.name = primitive.name;
   visualMesh.userData.editorKind = "mesh";
   visualMesh.userData.usdPrimPath = primitive.primPath;
+  visualMesh.userData.disableViewportEdgeOverlay = true;
   visualMesh.userData.usdMaterialInfo = {
     materialName: primitive.materialName,
     materialSource: primitive.materialSource,
     baseColorTexture: primitive.baseColorTexture,
-    textureUrl: options?.textureUrl ?? null,
-    editable: !options?.textureUrl,
+    normalTexture: primitive.normalTexture,
+    metallicTexture: primitive.metallicTexture,
+    roughnessTexture: primitive.roughnessTexture,
+    metallicRoughnessTexture: primitive.metallicRoughnessTexture,
+    occlusionTexture: primitive.occlusionTexture,
+    emissiveTexture: primitive.emissiveTexture,
+    opacityTexture: primitive.opacityTexture,
+    textureUrls: options?.materialTextures ?? null,
+    editable: !Object.values(options?.materialTextures ?? {}).some((value) => Boolean(value)),
   };
   visualMesh.position.set(primitive.position[0], primitive.position[1], primitive.position[2]);
 
@@ -1484,6 +1872,10 @@ type UsdLinkRenderGroupEntry = {
   visual: THREE.Group;
   collision: THREE.Group;
   preparedForUsd: boolean;
+  aliases: string[];
+  bodyToken: string | null;
+  bodyPath: string | null;
+  sourcePrimPaths: Set<string>;
 };
 
 const configureVisualGroup = (group: THREE.Group, linkName: string) => {
@@ -1560,11 +1952,45 @@ const ensureStandardLinkRenderGroups = (
   return { visual, collision };
 };
 
-const collectUsdLinkGroups = (root: THREE.Object3D, selfCollisionEnabled: boolean) => {
-  const links = new Map<string, UsdLinkRenderGroupEntry>();
-  const bind = (token: string | null, entry: UsdLinkRenderGroupEntry) => {
-    if (!token) return;
-    if (!links.has(token)) links.set(token, entry);
+type UsdLinkLookup = {
+  byAlias: Map<string, UsdLinkRenderGroupEntry[]>;
+  entries: UsdLinkRenderGroupEntry[];
+  aliasCollisionCount: number;
+};
+
+const normalizeAliasToken = (value: string | null | undefined): string | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  return raw.toLowerCase();
+};
+
+const normalizePathAliasToken = (value: string | null | undefined): string | null => {
+  const raw = String(value ?? "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  if (!raw) return null;
+  return raw.toLowerCase();
+};
+
+const collectUsdLinkGroups = (root: THREE.Object3D, selfCollisionEnabled: boolean): UsdLinkLookup => {
+  const byAlias = new Map<string, UsdLinkRenderGroupEntry[]>();
+  const entries: UsdLinkRenderGroupEntry[] = [];
+  let aliasCollisionCount = 0;
+
+  const bindAlias = (alias: string | null, entry: UsdLinkRenderGroupEntry) => {
+    const normalized = normalizeAliasToken(alias);
+    if (!normalized) return;
+    const existing = byAlias.get(normalized);
+    if (!existing) {
+      byAlias.set(normalized, [entry]);
+      return;
+    }
+    if (!existing.includes(entry)) {
+      existing.push(entry);
+      aliasCollisionCount += 1;
+    }
   };
 
   root.traverse((node) => {
@@ -1572,23 +1998,55 @@ const collectUsdLinkGroups = (root: THREE.Object3D, selfCollisionEnabled: boolea
     if (node.userData.editorKind !== "link") return;
 
     const ensured = ensureStandardLinkRenderGroups(node, selfCollisionEnabled);
+    const bodyToken = normalizeBodyToken(String(node.userData?.usdBodyToken ?? node.name));
+    const bodyPath = normalizePathAliasToken(String(node.userData?.usdBodyPath ?? node.userData?.usdPrimPath ?? ""));
+    const sourcePrimPaths = Array.isArray(node.userData?.usdSourcePrimPaths)
+      ? (node.userData.usdSourcePrimPaths as unknown[])
+          .map((path) => normalizePathAliasToken(String(path ?? "")))
+          .filter((path): path is string => Boolean(path))
+      : [];
     const entry: UsdLinkRenderGroupEntry = {
       link: node,
       visual: ensured.visual,
       collision: ensured.collision,
       preparedForUsd: false,
+      aliases: [],
+      bodyToken,
+      bodyPath,
+      sourcePrimPaths: new Set<string>(sourcePrimPaths),
     };
 
-    bind(node.name, entry);
-    bind(normalizeBodyToken(node.name), entry);
+    const register = (alias: string | null) => {
+      const normalized = normalizeAliasToken(alias);
+      if (!normalized) return;
+      if (!entry.aliases.includes(normalized)) entry.aliases.push(normalized);
+      bindAlias(normalized, entry);
+    };
+
+    register(node.name);
+    register(normalizeBodyToken(node.name));
+    register(bodyToken);
+    register(bodyPath);
+    register(`__link__${node.uuid}`);
 
     const urdfName = String((node as THREE.Group & { urdfName?: string }).urdfName ?? "").trim();
     if (urdfName) {
-      bind(urdfName, entry);
-      bind(normalizeBodyToken(urdfName), entry);
+      register(urdfName);
+      register(normalizeBodyToken(urdfName));
     }
+    if (bodyPath) {
+      const tail = bodyPath.split("/").pop() ?? "";
+      register(tail);
+      register(normalizeBodyToken(tail));
+    }
+    entries.push(entry);
   });
-  return links;
+
+  return {
+    byAlias,
+    entries,
+    aliasCollisionCount,
+  };
 };
 
 const IDENTITY_QUAT = new THREE.Quaternion(0, 0, 0, 1);
@@ -1610,7 +2068,24 @@ const hasLikelyCollapsedJointLayout = (root: THREE.Object3D) => {
 
 const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: NormalizedUsdMeshScene | null) => {
   if (!meshScene || meshScene.bodies.length === 0) return 0;
-  const links = collectUsdLinkGroups(root, false);
+  const collected = collectUsdLinkGroups(root, false);
+  const links = new Map<string, UsdLinkRenderGroupEntry>();
+  const bindLink = (tokenValue: string | null | undefined, entry: UsdLinkRenderGroupEntry) => {
+    const token = normalizeBodyToken(tokenValue);
+    if (!token || links.has(token)) return;
+    links.set(token, entry);
+  };
+  for (const entry of collected.entries) {
+    bindLink(entry.link.name, entry);
+    const urdfName = String((entry.link as THREE.Group & { urdfName?: string }).urdfName ?? "").trim();
+    if (urdfName) bindLink(urdfName, entry);
+    if (entry.bodyToken) bindLink(entry.bodyToken, entry);
+  }
+  const resolveLinkEntry = (bodyToken: string | null): UsdLinkRenderGroupEntry | null => {
+    const normalized = normalizeBodyToken(bodyToken);
+    if (!normalized) return null;
+    return links.get(normalized) ?? null;
+  };
   const bodyByName = new Map(meshScene.bodies.map((body) => [normalizeBodyToken(body.name) ?? body.name, body]));
   const introspectionJoints = Array.isArray(root.userData?.usdIntrospection?.joints)
     ? (root.userData.usdIntrospection.joints as Array<{ frame0Local?: unknown; frame1Local?: unknown }>)
@@ -1675,7 +2150,7 @@ const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: Norm
   for (const body of meshScene.bodies) {
     const bodyToken = normalizeBodyToken(body.name);
     if (!bodyToken) continue;
-    const linkEntry = links.get(bodyToken);
+    const linkEntry = resolveLinkEntry(bodyToken);
     if (!linkEntry) continue;
     const link = linkEntry.link;
     if (!(link.parent instanceof THREE.Group) || link.parent.userData.editorKind !== "joint") continue;
@@ -1710,7 +2185,7 @@ const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: Norm
   for (const body of meshScene.bodies) {
     const bodyToken = normalizeBodyToken(body.name);
     if (!bodyToken) continue;
-    const linkEntry = links.get(bodyToken);
+    const linkEntry = resolveLinkEntry(bodyToken);
     if (!linkEntry) continue;
     const link = linkEntry.link;
 
@@ -1751,35 +2226,73 @@ const attachUsdMeshSceneToRoot = (
   }
 ) => {
   if (!meshScene || (meshScene.meshes.length === 0 && meshScene.primitives.length === 0)) {
-    return { attachedMeshes: 0, attachedPrimitives: 0, attachedToLinks: 0, attachedToRoot: 0 };
+    return {
+      attachedMeshes: 0,
+      attachedPrimitives: 0,
+      attachedToLinks: 0,
+      attachedToRoot: 0,
+      materialsBound: 0,
+      texturedMaterials: 0,
+      referencedTextures: 0,
+      unresolvedTextureBindings: 0,
+      aliasCollisionCount: 0,
+      parentPoseWorldFallbacks: 0,
+    };
   }
 
   const selfCollisionEnabled = options?.selfCollisionEnabled === true;
   const attachCollisionProxies = options?.attachCollisionProxies !== false;
   const replaceExisting = options?.replaceExisting === true;
   const links = collectUsdLinkGroups(root, selfCollisionEnabled);
-  const uniqueLinks = new Set(Array.from(links.values()).map((entry) => entry.link));
-  const singleLinkToken = uniqueLinks.size === 1 ? normalizeBodyToken(Array.from(uniqueLinks)[0]?.name) : null;
+  const uniqueEntries = Array.from(new Set(links.entries));
+  const singleLinkEntry = uniqueEntries.length === 1 ? uniqueEntries[0] : null;
+  const prefersRobotTokenMatching = Boolean(
+    (root as THREE.Object3D & { isRobot?: boolean }).isRobot || root.userData?.editorRobotRoot === true
+  );
+  const robotTokenLookup = new Map<string, UsdLinkRenderGroupEntry>();
+  const bindRobotToken = (tokenValue: string | null | undefined, entry: UsdLinkRenderGroupEntry) => {
+    const token = normalizeBodyToken(tokenValue);
+    if (!token || robotTokenLookup.has(token)) return;
+    robotTokenLookup.set(token, entry);
+  };
+  if (prefersRobotTokenMatching) {
+    for (const entry of uniqueEntries) {
+      bindRobotToken(entry.link.name, entry);
+      const urdfName = String((entry.link as THREE.Group & { urdfName?: string }).urdfName ?? "").trim();
+      if (urdfName) bindRobotToken(urdfName, entry);
+      if (entry.bodyToken) bindRobotToken(entry.bodyToken, entry);
+    }
+  }
+  const bodyPoseByToken = new Map(
+    meshScene.bodies
+      .map((body) => {
+        const token = normalizeBodyToken(body.name);
+        return token ? ([token, body] as const) : null;
+      })
+      .filter((entry): entry is readonly [string, NormalizedUsdMeshSceneBody] => Boolean(entry))
+  );
   const usedNodeNames = new Set<string>();
   root.traverse((node) => {
     const name = String(node.name ?? "").trim();
     if (name) usedNodeNames.add(name);
   });
 
-  let rootOrphans: { container: THREE.Group; visual: THREE.Group; collision: THREE.Group } | null = null;
+  const rootOrphansByKey = new Map<string, { container: THREE.Group; visual: THREE.Group; collision: THREE.Group }>();
   let attachedMeshes = 0;
   let attachedPrimitives = 0;
   let attachedToLinks = 0;
   let attachedToRoot = 0;
   let materialsBound = 0;
   let texturedMaterials = 0;
+  let referencedTextures = 0;
+  let unresolvedTextureBindings = 0;
+  let parentPoseWorldFallbacks = 0;
   const targetsWithMeshVisual = new Set<string>();
   const seenUsdItems = new Set<string>();
   const targetPrimaryMeshCount = new Map<string, number>();
 
   if (replaceExisting) {
-    const preparedEntries = new Set(Array.from(links.values()));
-    for (const entry of preparedEntries) {
+    for (const entry of uniqueEntries) {
       clearGroupChildren(entry.visual);
       configureVisualGroup(entry.visual, entry.link.name);
       if (attachCollisionProxies) {
@@ -1792,17 +2305,45 @@ const attachUsdMeshSceneToRoot = (
 
   const isAuxiliaryVisualCandidate = (value: { name: string; primPath: string }) => {
     const token = `${value.name} ${value.primPath}`.toLowerCase();
-    const hasAuxToken = /(^|[\/_.:-])aux(\d+)?($|[\/_.:-])/.test(token);
     const hasCollisionToken =
       /(^|[\/_.:-])(collision|collider|proxy|physics|physx|contact|approx)($|[\/_.:-])/.test(token);
-    return hasAuxToken || hasCollisionToken;
+    return hasCollisionToken;
   };
 
-  const ensureRootOrphans = () => {
-    if (rootOrphans) return rootOrphans;
+  const toOrphanContainerName = (key: string) =>
+    key
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase()) || "Scene Asset";
+
+  const deriveOrphanContainerKey = (sourcePrimPath: string): string => {
+    if (prefersRobotTokenMatching) return "__USDOrphans__";
+    const normalized = normalizePathAliasToken(sourcePrimPath);
+    if (!normalized) return "scene_asset_orphans";
+    const parts = normalized.split("/").filter(Boolean);
+    if (parts.length >= 2) {
+      return normalizeAliasToken(parts[1]) ?? parts[1].toLowerCase();
+    }
+    if (parts.length === 1) {
+      return normalizeAliasToken(parts[0]) ?? parts[0].toLowerCase();
+    }
+    return "scene_asset_orphans";
+  };
+
+  const ensureRootOrphans = (sourcePrimPath: string) => {
+    const orphanKey = deriveOrphanContainerKey(sourcePrimPath);
+    const existing = rootOrphansByKey.get(orphanKey);
+    if (existing) return existing;
     const container = new THREE.Group();
-    container.name = "__USDOrphans__";
+    container.name = orphanKey === "__USDOrphans__" ? "__USDOrphans__" : toOrphanContainerName(orphanKey);
     container.userData.usdOrphans = true;
+    container.userData.usdOrphanGroupKey = orphanKey;
+    if (!prefersRobotTokenMatching) {
+      container.userData.sceneAssetContainer = true;
+      container.userData.sceneAssetContainerKey = orphanKey;
+      container.userData.sceneAssetContainerSource = "usd_orphan_lineage";
+    }
 
     const visual = new THREE.Group();
     configureVisualGroup(visual, "__usd_orphans__");
@@ -1815,28 +2356,104 @@ const attachUsdMeshSceneToRoot = (
     container.add(collision);
 
     root.add(container);
-    rootOrphans = { container, visual, collision };
-    return rootOrphans;
+    const next = { container, visual, collision };
+    rootOrphansByKey.set(orphanKey, next);
+    return next;
   };
 
-  const inferTokenFromPrimPath = (primPath: string) => {
+  const pickEntryFromCandidates = (
+    candidates: UsdLinkRenderGroupEntry[],
+    pathHints: Array<string | null | undefined>
+  ): UsdLinkRenderGroupEntry | null => {
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0];
+    const normalizedHints = pathHints
+      .map((hint) => normalizePathAliasToken(hint))
+      .filter((hint): hint is string => Boolean(hint));
+    for (const hint of normalizedHints) {
+      const byBodyPath = candidates.find((candidate) =>
+        Boolean(candidate.bodyPath && (hint.endsWith(candidate.bodyPath) || candidate.bodyPath.endsWith(hint)))
+      );
+      if (byBodyPath) return byBodyPath;
+    }
+    for (const hint of normalizedHints) {
+      const segments = hint.split("/").filter(Boolean);
+      for (let i = segments.length - 1; i >= 0; i -= 1) {
+        const alias = normalizeAliasToken(segments[i]);
+        if (!alias) continue;
+        const byAlias = candidates.find((candidate) => candidate.aliases.includes(alias));
+        if (byAlias) return byAlias;
+      }
+    }
+    return candidates[0];
+  };
+
+  const inferEntryFromPrimPath = (primPath: string): UsdLinkRenderGroupEntry | null => {
     const tokenized = String(primPath ?? "")
       .split("/")
       .map((item) => normalizeBodyToken(item))
       .filter((item): item is string => Boolean(item));
     for (let i = tokenized.length - 1; i >= 0; i -= 1) {
       const token = tokenized[i];
-      if (links.has(token)) return token;
+      const candidates = links.byAlias.get(token) ?? [];
+      const picked = pickEntryFromCandidates(candidates, [primPath]);
+      if (picked) return picked;
     }
-    return singleLinkToken;
+    return singleLinkEntry;
   };
 
-  const resolveTargetToken = (parentBody: string | null, primPath: string) => {
-    const parentToken = normalizeBodyToken(parentBody);
-    if (parentToken && links.has(parentToken)) return parentToken;
-    const inferred = inferTokenFromPrimPath(primPath);
-    if (inferred && links.has(inferred)) return inferred;
-    return null;
+  const findEntryByBodyPathPrefix = (
+    candidatePath: string | null | undefined
+  ): UsdLinkRenderGroupEntry | null => {
+    const normalizedPath = normalizePathAliasToken(candidatePath);
+    if (!normalizedPath) return null;
+    let best: UsdLinkRenderGroupEntry | null = null;
+    let bestLength = -1;
+    for (const entry of uniqueEntries) {
+      const bodyPath = normalizePathAliasToken(entry.bodyPath);
+      if (!bodyPath) continue;
+      if (!normalizedPath.startsWith(bodyPath)) continue;
+      if (bodyPath.length <= bestLength) continue;
+      best = entry;
+      bestLength = bodyPath.length;
+    }
+    return best;
+  };
+
+  const resolveTargetEntry = (input: {
+    parentBody: string | null;
+    parentBodyPath: string | null;
+    primPath: string;
+  }): UsdLinkRenderGroupEntry | null => {
+    if (prefersRobotTokenMatching) {
+      const parentToken = normalizeBodyToken(input.parentBody);
+      if (parentToken) {
+        const byParentToken = robotTokenLookup.get(parentToken);
+        if (byParentToken) return byParentToken;
+      }
+      const tokenized = String(input.primPath ?? "")
+        .split("/")
+        .map((item) => normalizeBodyToken(item))
+        .filter((item): item is string => Boolean(item));
+      for (let i = tokenized.length - 1; i >= 0; i -= 1) {
+        const token = tokenized[i];
+        const byPrimToken = robotTokenLookup.get(token);
+        if (byPrimToken) return byPrimToken;
+      }
+      return singleLinkEntry;
+    }
+
+    const parentToken = normalizeBodyToken(input.parentBody);
+    if (parentToken) {
+      const candidates = links.byAlias.get(parentToken) ?? [];
+      const picked = pickEntryFromCandidates(candidates, [input.parentBodyPath, input.primPath]);
+      if (picked) return picked;
+    }
+    const byParentBodyPath = findEntryByBodyPathPrefix(input.parentBodyPath);
+    if (byParentBodyPath) return byParentBodyPath;
+    const byPrimPath = findEntryByBodyPathPrefix(input.primPath);
+    if (byPrimPath) return byPrimPath;
+    return inferEntryFromPrimPath(input.primPath);
   };
 
   const rebaseWorldPoseToTargetLocal = (
@@ -1845,15 +2462,16 @@ const attachUsdMeshSceneToRoot = (
       quaternion: THREE.Quaternion;
       scale: [number, number, number];
       parentBody: string | null;
+      parentBodyPath?: string | null;
     },
-    targetToken: string | null
+    targetEntry: UsdLinkRenderGroupEntry | null
   ): {
     position: [number, number, number];
     quaternion: THREE.Quaternion;
     scale: [number, number, number];
   } => {
     const payloadParentToken = normalizeBodyToken(pose.parentBody);
-    if (!targetToken || payloadParentToken) {
+    if (!targetEntry || (prefersRobotTokenMatching && payloadParentToken)) {
       return {
         position: [pose.position[0], pose.position[1], pose.position[2]],
         quaternion: pose.quaternion.clone(),
@@ -1861,14 +2479,31 @@ const attachUsdMeshSceneToRoot = (
       };
     }
 
-    const targetEntry = links.get(targetToken);
-    if (!targetEntry) {
+    const shouldTreatAsWorldPose = (() => {
+      if (!payloadParentToken) return true;
+      const parentBodyPose = bodyPoseByToken.get(payloadParentToken);
+      if (!parentBodyPose) return false;
+      const localMagnitude = Math.hypot(pose.position[0], pose.position[1], pose.position[2]);
+      if (localMagnitude < 0.2) return false;
+      const payloadPosition = new THREE.Vector3(pose.position[0], pose.position[1], pose.position[2]);
+      const parentPosition = new THREE.Vector3(
+        parentBodyPose.position[0],
+        parentBodyPose.position[1],
+        parentBodyPose.position[2]
+      );
+      const distanceToBodyWorld = payloadPosition.distanceTo(parentPosition);
+      const angleToBodyWorld = pose.quaternion.angleTo(parentBodyPose.quaternion);
+      return distanceToBodyWorld < 0.18 && angleToBodyWorld < 0.5;
+    })();
+
+    if (!shouldTreatAsWorldPose) {
       return {
         position: [pose.position[0], pose.position[1], pose.position[2]],
         quaternion: pose.quaternion.clone(),
         scale: [pose.scale[0], pose.scale[1], pose.scale[2]],
       };
     }
+    if (payloadParentToken) parentPoseWorldFallbacks += 1;
 
     const parentObject = targetEntry.visual;
     parentObject.updateWorldMatrix(true, false);
@@ -1896,8 +2531,12 @@ const attachUsdMeshSceneToRoot = (
   };
 
   for (const mesh of meshScene.meshes) {
-    const targetToken = resolveTargetToken(mesh.parentBody, mesh.primPath);
-    const targetKey = targetToken ?? "__root__";
+    const targetEntry = resolveTargetEntry({
+      parentBody: mesh.parentBody,
+      parentBodyPath: mesh.parentBodyPath,
+      primPath: mesh.primPath,
+    });
+    const targetKey = targetEntry ? `link:${targetEntry.link.uuid}` : "__root__";
     if (isAuxiliaryVisualCandidate({ name: mesh.name, primPath: mesh.primPath })) continue;
     targetPrimaryMeshCount.set(targetKey, (targetPrimaryMeshCount.get(targetKey) ?? 0) + 1);
   }
@@ -1913,7 +2552,12 @@ const attachUsdMeshSceneToRoot = (
     entry.preparedForUsd = true;
   };
 
-  const attachPair = (visual: THREE.Mesh, collision: THREE.Mesh | null, targetToken: string | null) => {
+  const attachPair = (
+    visual: THREE.Mesh,
+    collision: THREE.Mesh | null,
+    targetEntry: UsdLinkRenderGroupEntry | null,
+    sourcePrimPath: string
+  ) => {
     const visualName = claimName(visual.name || "usd_mesh", usedNodeNames, "usd_mesh");
     visual.name = visualName;
     if (collision) {
@@ -1921,16 +2565,20 @@ const attachUsdMeshSceneToRoot = (
       collision.userData.selfCollisionEnabled = selfCollisionEnabled;
     }
 
-    if (targetToken && links.has(targetToken)) {
-      const entry = links.get(targetToken) as UsdLinkRenderGroupEntry;
-      ensurePreparedEntry(entry);
-      entry.visual.add(visual);
-      if (collision && attachCollisionProxies) entry.collision.add(collision);
+    if (targetEntry) {
+      ensurePreparedEntry(targetEntry);
+      targetEntry.visual.add(visual);
+      if (collision && attachCollisionProxies) targetEntry.collision.add(collision);
+      const normalizedPrimPath = normalizePathAliasToken(sourcePrimPath);
+      if (normalizedPrimPath) {
+        targetEntry.sourcePrimPaths.add(normalizedPrimPath);
+        targetEntry.link.userData.usdSourcePrimPaths = Array.from(targetEntry.sourcePrimPaths);
+      }
       attachedToLinks += 1;
       return;
     }
 
-    const orphans = ensureRootOrphans();
+    const orphans = ensureRootOrphans(sourcePrimPath);
     orphans.visual.add(visual);
     if (collision && attachCollisionProxies) orphans.collision.add(collision);
     attachedToRoot += 1;
@@ -1950,8 +2598,12 @@ const attachUsdMeshSceneToRoot = (
     ])}|${numericSignature(obj.scale)}`;
 
   for (const mesh of meshScene.meshes) {
-    const targetToken = resolveTargetToken(mesh.parentBody, mesh.primPath);
-    const targetKey = targetToken ?? "__root__";
+    const targetEntry = resolveTargetEntry({
+      parentBody: mesh.parentBody,
+      parentBodyPath: mesh.parentBodyPath,
+      primPath: mesh.primPath,
+    });
+    const targetKey = targetEntry ? `link:${targetEntry.link.uuid}` : "__root__";
     const auxiliary = isAuxiliaryVisualCandidate({ name: mesh.name, primPath: mesh.primPath });
     if (auxiliary && (targetPrimaryMeshCount.get(targetKey) ?? 0) > 0) continue;
 
@@ -1960,17 +2612,53 @@ const attachUsdMeshSceneToRoot = (
     if (seenUsdItems.has(dedupeKey)) continue;
     seenUsdItems.add(dedupeKey);
 
-    const textureUrl = resolveUsdTextureUrl(mesh.baseColorTexture, options?.resolveResource);
-    if (mesh.materialName || mesh.materialSource || textureUrl) materialsBound += 1;
-    if (textureUrl) texturedMaterials += 1;
+    const materialTextures = resolveUsdMaterialTextures(
+      {
+        baseColorTexture: mesh.baseColorTexture,
+        normalTexture: mesh.normalTexture,
+        metallicTexture: mesh.metallicTexture,
+        roughnessTexture: mesh.roughnessTexture,
+        metallicRoughnessTexture: mesh.metallicRoughnessTexture,
+        occlusionTexture: mesh.occlusionTexture,
+        emissiveTexture: mesh.emissiveTexture,
+        opacityTexture: mesh.opacityTexture,
+      },
+      options?.resolveResource
+    );
+    const textureReferences = [
+      mesh.baseColorTexture,
+      mesh.normalTexture,
+      mesh.metallicTexture,
+      mesh.roughnessTexture,
+      mesh.metallicRoughnessTexture,
+      mesh.occlusionTexture,
+      mesh.emissiveTexture,
+      mesh.opacityTexture,
+    ].filter((value): value is string => Boolean(value));
+    const resolvedTextureCount = Object.values(materialTextures).filter((value) => Boolean(value)).length;
+    const hasMaterialBinding = Boolean(
+      mesh.materialName ||
+        mesh.materialSource ||
+        textureReferences.length > 0 ||
+        resolvedTextureCount > 0 ||
+        mesh.metallicFactor !== null ||
+        mesh.roughnessFactor !== null ||
+        mesh.emissiveFactor !== null ||
+        mesh.opacityFactor !== null
+    );
+    if (hasMaterialBinding) materialsBound += 1;
+    referencedTextures += textureReferences.length;
+    if (resolvedTextureCount > 0) texturedMaterials += 1;
+    unresolvedTextureBindings += Math.max(0, textureReferences.length - resolvedTextureCount);
     const localPose = rebaseWorldPoseToTargetLocal(
       {
         position: mesh.position,
         quaternion: mesh.quaternion,
         scale: mesh.scale,
         parentBody: mesh.parentBody,
+        parentBodyPath: mesh.parentBodyPath,
       },
-      targetToken
+      targetEntry
     );
     const visual = createUsdVisualMesh(
       {
@@ -1979,16 +2667,20 @@ const attachUsdMeshSceneToRoot = (
         quaternion: localPose.quaternion,
         scale: localPose.scale,
       },
-      { textureUrl }
+      { materialTextures }
     );
     const collision = attachCollisionProxies ? createUsdCollisionMeshFromVisual(visual) : null;
-    attachPair(visual, collision, targetToken);
+    attachPair(visual, collision, targetEntry, mesh.primPath);
     targetsWithMeshVisual.add(targetKey);
     attachedMeshes += 1;
   }
   for (const primitive of meshScene.primitives) {
-    const targetToken = resolveTargetToken(primitive.parentBody, primitive.primPath);
-    const targetKey = targetToken ?? "__root__";
+    const targetEntry = resolveTargetEntry({
+      parentBody: primitive.parentBody,
+      parentBodyPath: primitive.parentBodyPath,
+      primPath: primitive.primPath,
+    });
+    const targetKey = targetEntry ? `link:${targetEntry.link.uuid}` : "__root__";
     if ((targetPrimaryMeshCount.get(targetKey) ?? 0) > 0 && targetsWithMeshVisual.has(targetKey)) continue;
     if (isAuxiliaryVisualCandidate({ name: primitive.name, primPath: primitive.primPath })) continue;
 
@@ -2000,17 +2692,53 @@ const attachUsdMeshSceneToRoot = (
     if (seenUsdItems.has(dedupeKey)) continue;
     seenUsdItems.add(dedupeKey);
 
-    const textureUrl = resolveUsdTextureUrl(primitive.baseColorTexture, options?.resolveResource);
-    if (primitive.materialName || primitive.materialSource || textureUrl) materialsBound += 1;
-    if (textureUrl) texturedMaterials += 1;
+    const materialTextures = resolveUsdMaterialTextures(
+      {
+        baseColorTexture: primitive.baseColorTexture,
+        normalTexture: primitive.normalTexture,
+        metallicTexture: primitive.metallicTexture,
+        roughnessTexture: primitive.roughnessTexture,
+        metallicRoughnessTexture: primitive.metallicRoughnessTexture,
+        occlusionTexture: primitive.occlusionTexture,
+        emissiveTexture: primitive.emissiveTexture,
+        opacityTexture: primitive.opacityTexture,
+      },
+      options?.resolveResource
+    );
+    const textureReferences = [
+      primitive.baseColorTexture,
+      primitive.normalTexture,
+      primitive.metallicTexture,
+      primitive.roughnessTexture,
+      primitive.metallicRoughnessTexture,
+      primitive.occlusionTexture,
+      primitive.emissiveTexture,
+      primitive.opacityTexture,
+    ].filter((value): value is string => Boolean(value));
+    const resolvedTextureCount = Object.values(materialTextures).filter((value) => Boolean(value)).length;
+    const hasMaterialBinding = Boolean(
+      primitive.materialName ||
+        primitive.materialSource ||
+        textureReferences.length > 0 ||
+        resolvedTextureCount > 0 ||
+        primitive.metallicFactor !== null ||
+        primitive.roughnessFactor !== null ||
+        primitive.emissiveFactor !== null ||
+        primitive.opacityFactor !== null
+    );
+    if (hasMaterialBinding) materialsBound += 1;
+    referencedTextures += textureReferences.length;
+    if (resolvedTextureCount > 0) texturedMaterials += 1;
+    unresolvedTextureBindings += Math.max(0, textureReferences.length - resolvedTextureCount);
     const localPose = rebaseWorldPoseToTargetLocal(
       {
         position: primitive.position,
         quaternion: primitive.quaternion,
         scale: primitive.scale,
         parentBody: primitive.parentBody,
+        parentBodyPath: primitive.parentBodyPath,
       },
-      targetToken
+      targetEntry
     );
     const visualPrimitive = createUsdVisualPrimitive(
       {
@@ -2019,11 +2747,11 @@ const attachUsdMeshSceneToRoot = (
         quaternion: localPose.quaternion,
         scale: localPose.scale,
       },
-      { textureUrl }
+      { materialTextures }
     );
     if (!visualPrimitive) continue;
     const collisionPrimitive = attachCollisionProxies ? createUsdCollisionMeshFromVisual(visualPrimitive) : null;
-    attachPair(visualPrimitive, collisionPrimitive, targetToken);
+    attachPair(visualPrimitive, collisionPrimitive, targetEntry, primitive.primPath);
     attachedPrimitives += 1;
   }
 
@@ -2044,9 +2772,119 @@ const attachUsdMeshSceneToRoot = (
     attachCollisionProxies,
     materialsBound,
     texturedMaterials,
+    referencedTextures,
+    unresolvedTextureBindings,
+    aliasCollisionCount: links.aliasCollisionCount,
+    parentPoseWorldFallbacks,
   };
 
-  return { attachedMeshes, attachedPrimitives, attachedToLinks, attachedToRoot };
+  return {
+    attachedMeshes,
+    attachedPrimitives,
+    attachedToLinks,
+    attachedToRoot,
+    materialsBound,
+    texturedMaterials,
+    referencedTextures,
+    unresolvedTextureBindings,
+    aliasCollisionCount: links.aliasCollisionCount,
+    parentPoseWorldFallbacks,
+  };
+};
+
+const toTitleFromToken = (token: string): string =>
+  token
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const deriveSceneAssetContainerKey = (
+  entry: UsdLinkRenderGroupEntry,
+  rootPrimSegment: string | null
+): { key: string; sourcePrimRoot: string | null } => {
+  const primPathCandidates = Array.from(entry.sourcePrimPaths)
+    .map((path) => normalizePathAliasToken(path))
+    .filter((path): path is string => Boolean(path));
+  for (const primPath of primPathCandidates) {
+    const segments = primPath.split("/").filter(Boolean);
+    if (!segments.length) continue;
+    const trimmed =
+      rootPrimSegment && segments[0] === rootPrimSegment
+        ? segments.slice(1)
+        : segments;
+    if (!trimmed.length) continue;
+    const key = trimmed[0];
+    if (key) return { key, sourcePrimRoot: rootPrimSegment };
+  }
+  if (entry.bodyPath) {
+    const key = entry.bodyPath.split("/").filter(Boolean).pop() ?? "";
+    if (key) return { key, sourcePrimRoot: rootPrimSegment };
+  }
+  const fallback = normalizeBodyToken(entry.link.name) ?? normalizeAliasToken(entry.link.name) ?? "scene_asset";
+  return { key: fallback, sourcePrimRoot: rootPrimSegment };
+};
+
+const groupSceneAssetLinksUnderContainers = (
+  root: THREE.Object3D
+): { containerCount: number; groupedLinks: number } => {
+  const lookup = collectUsdLinkGroups(root, false);
+  const directEntries = lookup.entries.filter((entry) => entry.link.parent === root);
+  if (directEntries.length < 2) return { containerCount: 0, groupedLinks: 0 };
+
+  const allPrimPaths = directEntries.flatMap((entry) => Array.from(entry.sourcePrimPaths));
+  const rootPrimSegment = (() => {
+    const firstSegments = allPrimPaths
+      .map((path) => normalizePathAliasToken(path))
+      .filter((path): path is string => Boolean(path))
+      .map((path) => path.split("/").filter(Boolean)[0])
+      .filter((segment): segment is string => Boolean(segment));
+    if (firstSegments.length < 2) return null;
+    const first = firstSegments[0];
+    return firstSegments.every((segment) => segment === first) ? first : null;
+  })();
+
+  const groups = new Map<string, UsdLinkRenderGroupEntry[]>();
+  for (const entry of directEntries) {
+    const { key } = deriveSceneAssetContainerKey(entry, rootPrimSegment);
+    const normalizedKey = normalizeAliasToken(key) ?? "scene_asset";
+    const bucket = groups.get(normalizedKey);
+    if (!bucket) {
+      groups.set(normalizedKey, [entry]);
+    } else {
+      bucket.push(entry);
+    }
+  }
+  if (groups.size <= 1) return { containerCount: 0, groupedLinks: 0 };
+
+  const containerByKey = new Map<string, THREE.Group>();
+  for (const [groupKey, entries] of groups.entries()) {
+    const container = new THREE.Group();
+    container.name = toTitleFromToken(groupKey) || "Scene Asset";
+    container.userData.editorKind = "group";
+    container.userData.sceneAssetContainer = true;
+    container.userData.sceneAssetContainerKey = groupKey;
+    container.userData.sceneAssetContainerSource = "usd_prim_lineage";
+    root.add(container);
+    containerByKey.set(groupKey, container);
+
+    for (const entry of entries) {
+      if (entry.link.parent !== root) continue;
+      const sourcePrimPaths = Array.from(entry.sourcePrimPaths);
+      entry.link.userData.sceneAssetLineage = {
+        groupKey,
+        sourcePrimRoot: rootPrimSegment,
+        sourcePrimPaths,
+        bodyPath: entry.bodyPath,
+      };
+      container.add(entry.link);
+    }
+  }
+
+  return {
+    containerCount: containerByKey.size,
+    groupedLinks: directEntries.length,
+  };
 };
 
 const normalizeSlashPath = (value: string) => value.replace(/\\/g, "/").replace(/\/+/g, "/");
@@ -2070,6 +2908,13 @@ const normalizePrimPath = (value: string): string | null => {
 };
 
 const pathDepth = (path: string) => path.split("/").filter(Boolean).length;
+
+const isSemanticUsdPathCandidate = (path: string): boolean => {
+  const segments = path.split("/").filter(Boolean);
+  if (!segments.length) return false;
+  if (segments.some((segment) => LINK_NAME_RE.test(segment) || JOINT_NAME_RE.test(segment))) return true;
+  return segments.some((segment) => /[A-Za-z]/.test(segment) && /\d/.test(segment) && segment.length >= 3);
+};
 
 const extractPrintableTokens = (bytes: Uint8Array): string[] => {
   const out: string[] = [];
@@ -2353,6 +3198,25 @@ const parseMeshRgba = (value: unknown): [number, number, number, number] | null 
   ];
 };
 
+const parseUnitNumberOrNull = (value: unknown): number | null => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(1, num));
+};
+
+const parseColorTriplet = (value: unknown): [number, number, number] | null => {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const r = Number(value[0]);
+  const g = Number(value[1]);
+  const b = Number(value[2]);
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return null;
+  return [
+    Math.max(0, Math.min(1, r)),
+    Math.max(0, Math.min(1, g)),
+    Math.max(0, Math.min(1, b)),
+  ];
+};
+
 const parseOptionalText = (value: unknown): string | null => {
   const text = String(value ?? "").trim();
   return text ? text : null;
@@ -2383,6 +3247,78 @@ const parsePositiveNumberOrNull = (value: unknown): number | null => {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return null;
   return num;
+};
+
+const MESH_SCENE_PATH_TOKEN_SKIP_RE =
+  /^(world|root|scene|env|environment|robot|robots|xform|scope|geom|geometry|mesh|meshes|material|materials|looks|visual|collision|collider|physics|render|model|default)$/i;
+
+const deriveMeshSceneTokenFromPath = (value: string | null | undefined): string | null => {
+  const normalized = normalizePathAliasToken(value);
+  if (!normalized) return null;
+  const segments = normalized.split("/").filter(Boolean);
+  if (!segments.length) return null;
+
+  const pickToken = (segment: string) => {
+    const token = normalizeBodyToken(segment);
+    if (!token) return null;
+    const lower = token.toLowerCase();
+    if (PATH_SKIP_SEGMENTS.has(lower)) return null;
+    if (MESH_SCENE_PATH_TOKEN_SKIP_RE.test(lower)) return null;
+    if (JOINT_NAME_RE.test(token)) return null;
+    return token;
+  };
+
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const token = pickToken(segments[i]);
+    if (!token) continue;
+    if (LINK_NAME_RE.test(token)) return token;
+  }
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const token = pickToken(segments[i]);
+    if (!token) continue;
+    if (/[A-Za-z]/.test(token) && (/\d/.test(token) || /[_-]/.test(token))) return token;
+  }
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    const token = pickToken(segments[i]);
+    if (!token) continue;
+    return token;
+  }
+  return null;
+};
+
+const collectMeshSceneStructureTokens = (meshScene: NormalizedUsdMeshScene): Set<string> => {
+  const out = new Set<string>();
+  const register = (value: string | null | undefined) => {
+    const token = normalizeBodyToken(value);
+    if (!token) return;
+    const lower = token.toLowerCase();
+    if (PATH_SKIP_SEGMENTS.has(lower)) return;
+    if (MESH_SCENE_PATH_TOKEN_SKIP_RE.test(lower)) return;
+    out.add(token);
+  };
+  const registerPath = (value: string | null | undefined) => {
+    const token = deriveMeshSceneTokenFromPath(value);
+    if (!token) return;
+    out.add(token);
+  };
+
+  for (const body of meshScene.bodies) {
+    register(body.name);
+    register(body.parentBody);
+    registerPath(body.primPath);
+    registerPath(body.parentBodyPath);
+  }
+  for (const mesh of meshScene.meshes) {
+    register(mesh.parentBody);
+    registerPath(mesh.parentBodyPath);
+    registerPath(mesh.primPath);
+  }
+  for (const primitive of meshScene.primitives) {
+    register(primitive.parentBody);
+    registerPath(primitive.parentBodyPath);
+    registerPath(primitive.primPath);
+  }
+  return out;
 };
 
 const normalizeUsdMeshScene = (
@@ -2417,6 +3353,7 @@ const normalizeUsdMeshScene = (
       name: String(item?.name ?? "").trim() || `mesh_${meshes.length + 1}`,
       primPath: String(item?.primPath ?? "").trim(),
       parentBody: normalizeBodyToken(item?.parentBody),
+      parentBodyPath: parseOptionalText(item?.parentBodyPath),
       position: [px, py, pz],
       quaternion: quat,
       scale: [
@@ -2432,6 +3369,17 @@ const normalizeUsdMeshScene = (
       materialName: parseOptionalText(item?.materialName),
       materialSource: parseOptionalText(item?.materialSource),
       baseColorTexture: normalizeTextureAssetPath(parseOptionalText(item?.baseColorTexture)),
+      normalTexture: normalizeTextureAssetPath(parseOptionalText(item?.normalTexture)),
+      metallicTexture: normalizeTextureAssetPath(parseOptionalText(item?.metallicTexture)),
+      roughnessTexture: normalizeTextureAssetPath(parseOptionalText(item?.roughnessTexture)),
+      metallicRoughnessTexture: normalizeTextureAssetPath(parseOptionalText(item?.metallicRoughnessTexture)),
+      occlusionTexture: normalizeTextureAssetPath(parseOptionalText(item?.occlusionTexture)),
+      emissiveTexture: normalizeTextureAssetPath(parseOptionalText(item?.emissiveTexture)),
+      opacityTexture: normalizeTextureAssetPath(parseOptionalText(item?.opacityTexture)),
+      metallicFactor: parseUnitNumberOrNull(item?.metallicFactor),
+      roughnessFactor: parseUnitNumberOrNull(item?.roughnessFactor),
+      emissiveFactor: parseColorTriplet(item?.emissiveFactor),
+      opacityFactor: parseUnitNumberOrNull(item?.opacityFactor),
     });
   }
 
@@ -2469,6 +3417,7 @@ const normalizeUsdMeshScene = (
       name: String(item?.name ?? "").trim() || `primitive_${primitives.length + 1}`,
       primPath: String(item?.primPath ?? "").trim(),
       parentBody: normalizeBodyToken(item?.parentBody),
+      parentBodyPath: parseOptionalText(item?.parentBodyPath),
       kind,
       position: [px, py, pz],
       quaternion: quat,
@@ -2485,6 +3434,17 @@ const normalizeUsdMeshScene = (
       materialName: parseOptionalText(item?.materialName),
       materialSource: parseOptionalText(item?.materialSource),
       baseColorTexture: normalizeTextureAssetPath(parseOptionalText(item?.baseColorTexture)),
+      normalTexture: normalizeTextureAssetPath(parseOptionalText(item?.normalTexture)),
+      metallicTexture: normalizeTextureAssetPath(parseOptionalText(item?.metallicTexture)),
+      roughnessTexture: normalizeTextureAssetPath(parseOptionalText(item?.roughnessTexture)),
+      metallicRoughnessTexture: normalizeTextureAssetPath(parseOptionalText(item?.metallicRoughnessTexture)),
+      occlusionTexture: normalizeTextureAssetPath(parseOptionalText(item?.occlusionTexture)),
+      emissiveTexture: normalizeTextureAssetPath(parseOptionalText(item?.emissiveTexture)),
+      opacityTexture: normalizeTextureAssetPath(parseOptionalText(item?.opacityTexture)),
+      metallicFactor: parseUnitNumberOrNull(item?.metallicFactor),
+      roughnessFactor: parseUnitNumberOrNull(item?.roughnessFactor),
+      emissiveFactor: parseColorTriplet(item?.emissiveFactor),
+      opacityFactor: parseUnitNumberOrNull(item?.opacityFactor),
     });
   }
 
@@ -2505,6 +3465,7 @@ const normalizeUsdMeshScene = (
       name,
       primPath: String(item?.primPath ?? "").trim(),
       parentBody: normalizeBodyToken(item?.parentBody),
+      parentBodyPath: parseOptionalText(item?.parentBodyPath),
       position: [px, py, pz],
       quaternion: quat,
       scale: [
@@ -2512,6 +3473,11 @@ const normalizeUsdMeshScene = (
         Math.max(1e-6, Number.isFinite(sy) ? sy : 1),
         Math.max(1e-6, Number.isFinite(sz) ? sz : 1),
       ],
+      rigidBodyEnabled:
+        typeof item?.rigidBodyEnabled === "boolean" ? item.rigidBodyEnabled : null,
+      kinematicEnabled:
+        typeof item?.kinematicEnabled === "boolean" ? item.kinematicEnabled : null,
+      mass: Number.isFinite(Number(item?.mass)) ? Math.max(0, Number(item?.mass)) : null,
     });
   }
 
@@ -2664,6 +3630,12 @@ const addUsdHierarchyFallback = (robotRoot: THREE.Group, nodes: UsdPrimNode[]) =
     group.userData.usdPrimKind = node.kind;
     if (node.kind === "link" || node.kind === "joint") {
       group.userData.editorKind = node.kind;
+      if (node.kind === "link") {
+        const bodyToken = normalizeBodyToken(node.name);
+        if (bodyToken) group.userData.usdBodyToken = bodyToken;
+        const bodyPath = normalizePathAliasToken(node.path);
+        if (bodyPath) group.userData.usdBodyPath = bodyPath;
+      }
     }
     objectByPath.set(node.path, group);
   }
@@ -2721,36 +3693,29 @@ const fallbackUsdHierarchyFromTokens = async (
 
   const rootHint = robotName.replace(/\.[^/.]+$/, "").split("/").pop() || "UsdRobot";
   const primPaths = extractPathCandidates(allTokens);
-  const primNodes = buildPrimNodes(primPaths, rootHint);
+  const semanticPrimPaths = primPaths.filter((path) => isSemanticUsdPathCandidate(path));
+  const primNodes = buildPrimNodes(semanticPrimPaths, rootHint);
 
   addUsdHierarchyFallback(robotRoot, primNodes);
   logWarn("USD fallback hierarchy used (converter unavailable or conversion failed).", {
     scope: "usd",
-    data: { primCount: primNodes.length, pathCount: primPaths.length },
+    data: { primCount: primNodes.length, pathCount: primPaths.length, semanticPathCount: semanticPrimPaths.length },
   });
-
-  const placeholderGeom = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-  const placeholderMat = new THREE.MeshBasicMaterial({
-    color: 0x4a90d9,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.6,
-  });
-  const placeholder = new THREE.Mesh(placeholderGeom, placeholderMat);
-  placeholder.name = "__usd_placeholder__";
-  placeholder.userData.editorKind = "mesh";
-  robotRoot.add(placeholder);
 
   return robotRoot;
 };
 
-const createPlaceholderLinkNode = (linkName: string) => {
+const createPlaceholderLinkNode = (linkName: string, bodyPath?: string | null) => {
   const link = new THREE.Group();
   const linkFlags = link as THREE.Group & { isURDFLink?: boolean; urdfName?: string };
   link.name = linkName;
   linkFlags.isURDFLink = true;
   linkFlags.urdfName = linkName;
   link.userData.editorKind = "link";
+  const bodyToken = normalizeBodyToken(linkName);
+  if (bodyToken) link.userData.usdBodyToken = bodyToken;
+  const normalizedBodyPath = normalizePathAliasToken(bodyPath);
+  if (normalizedBodyPath) link.userData.usdBodyPath = normalizedBodyPath;
 
   const visual = new THREE.Group();
   const visualFlags = visual as THREE.Group & { isURDFVisual?: boolean; urdfName?: string };
@@ -2829,12 +3794,26 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
   robotRootFlagged.isRobot = true;
   robotRoot.userData.editorRobotRoot = true;
 
+  const bodyPathByToken = new Map<string, string>();
+  for (const joint of introspection.joints) {
+    const parentToken = normalizeBodyToken(joint.parentBody);
+    const parentPath = normalizePathAliasToken(joint.parentBodyPath);
+    if (parentToken && parentPath && !bodyPathByToken.has(parentToken)) bodyPathByToken.set(parentToken, parentPath);
+    const childToken = normalizeBodyToken(joint.childBody);
+    const childPath = normalizePathAliasToken(joint.childBodyPath);
+    if (childToken && childPath && !bodyPathByToken.has(childToken)) bodyPathByToken.set(childToken, childPath);
+  }
+
   const linksByName = new Map<string, THREE.Group>();
-  const ensureLink = (rawName: string) => {
+  const ensureLink = (rawName: string, bodyPathHint?: string | null) => {
     const key = (normalizeBodyToken(rawName) ?? rawName.trim()) || "link";
     const existing = linksByName.get(key);
     if (existing) return existing;
-    const created = createPlaceholderLinkNode(key);
+    const hintedBodyPath =
+      normalizePathAliasToken(bodyPathHint) ??
+      bodyPathByToken.get(key) ??
+      null;
+    const created = createPlaceholderLinkNode(key, hintedBodyPath);
     linksByName.set(key, created);
     return created;
   };
@@ -2859,8 +3838,8 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
           : ["base"];
   for (const rootName of rootNames) ensureLink(rootName);
   for (const joint of introspection.joints) {
-    if (joint.parentBody) ensureLink(joint.parentBody);
-    if (joint.childBody) ensureLink(joint.childBody);
+    if (joint.parentBody) ensureLink(joint.parentBody, joint.parentBodyPath);
+    if (joint.childBody) ensureLink(joint.childBody, joint.childBodyPath);
   }
 
   const attachedChildren = new Set<string>();
@@ -2878,8 +3857,8 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
     const childName = childSeed === parentName ? `${childSeed}_child` : childSeed;
     if (attachedChildren.has(childName)) continue;
 
-    const parentLink = ensureLink(parentName);
-    const childLink = ensureLink(childName);
+    const parentLink = ensureLink(parentName, joint.parentBodyPath);
+    const childLink = ensureLink(childName, joint.childBodyPath);
 
     const rawJointName = joint.name.trim() || `${parentName}_${childName}_joint`;
     const jointName = claimName(rawJointName, jointNames, "joint");
@@ -2990,6 +3969,142 @@ const buildRobotFromIntrospection = (introspection: NormalizedUsdIntrospection, 
   };
 };
 
+const buildRobotFromMeshSceneBodies = (meshScene: NormalizedUsdMeshScene, robotName: string) => {
+  const robotRoot = new THREE.Group();
+  const robotRootFlagged = robotRoot as THREE.Group & { isRobot?: boolean };
+  robotRoot.name = robotName;
+  robotRootFlagged.isRobot = true;
+  robotRoot.userData.editorRobotRoot = true;
+
+  const bodyByToken = new Map<string, NormalizedUsdMeshSceneBody>();
+  for (const body of meshScene.bodies) {
+    const token = normalizeBodyToken(body.name) ?? String(body.name ?? "").trim();
+    if (!token || bodyByToken.has(token)) continue;
+    bodyByToken.set(token, {
+      ...body,
+      name: token,
+    });
+  }
+  const structureTokens = collectMeshSceneStructureTokens(meshScene);
+  for (const token of structureTokens) {
+    if (bodyByToken.has(token)) continue;
+    bodyByToken.set(token, {
+      name: token,
+      primPath: "",
+      parentBody: null,
+      parentBodyPath: null,
+      position: [0, 0, 0],
+      quaternion: new THREE.Quaternion(0, 0, 0, 1),
+      scale: [1, 1, 1],
+      rigidBodyEnabled: null,
+      kinematicEnabled: null,
+      mass: null,
+    });
+  }
+
+  if (bodyByToken.size === 0) {
+    return { root: robotRoot, linkCount: 0, jointCount: 0 };
+  }
+
+  const linksByToken = new Map<string, THREE.Group>();
+  const ensureLink = (token: string) => {
+    const existing = linksByToken.get(token);
+    if (existing) return existing;
+    const body = bodyByToken.get(token);
+    const hintedBodyPath = normalizePathAliasToken(body?.primPath ?? body?.parentBodyPath ?? null);
+    const created = createPlaceholderLinkNode(token, hintedBodyPath);
+    created.userData.usdBodyToken = token;
+    if (hintedBodyPath) created.userData.usdBodyPath = hintedBodyPath;
+    linksByToken.set(token, created);
+    return created;
+  };
+
+  for (const token of bodyByToken.keys()) {
+    ensureLink(token);
+  }
+
+  const jointNames = new Set<string>();
+  let jointCount = 0;
+
+  for (const [token, body] of bodyByToken.entries()) {
+    const parentToken = normalizeBodyToken(body.parentBody);
+    if (!parentToken || !bodyByToken.has(parentToken) || parentToken === token) continue;
+    const parentLink = ensureLink(parentToken);
+    const childLink = ensureLink(token);
+    if (childLink.parent) continue;
+
+    const jointName = claimName(`${parentToken}_${token}_fixed`, jointNames, "joint");
+    const jointNode = new THREE.Group();
+    const jointFlags = jointNode as THREE.Group & { isURDFJoint?: boolean; urdfName?: string };
+    jointNode.name = jointName;
+    jointFlags.isURDFJoint = true;
+    jointFlags.urdfName = jointName;
+    jointNode.userData.editorKind = "joint";
+    jointNode.position.set(body.position[0], body.position[1], body.position[2]);
+    jointNode.quaternion.copy(body.quaternion);
+    jointNode.userData.urdf = {
+      kind: "joint",
+      joint: {
+        name: jointName,
+        type: "fixed",
+        parent: parentLink.name,
+        child: childLink.name,
+        origin: toPose(body.position, body.quaternion),
+        axis: [0, 0, 1],
+      } satisfies UrdfJoint,
+    };
+
+    parentLink.add(jointNode);
+    jointNode.add(childLink);
+    childLink.position.set(0, 0, 0);
+    childLink.quaternion.identity();
+    childLink.scale.set(body.scale[0], body.scale[1], body.scale[2]);
+    jointCount += 1;
+  }
+
+  for (const [token, link] of linksByToken.entries()) {
+    if (link.parent) continue;
+    const body = bodyByToken.get(token);
+    if (body) {
+      link.position.set(body.position[0], body.position[1], body.position[2]);
+      link.quaternion.copy(body.quaternion);
+      link.scale.set(body.scale[0], body.scale[1], body.scale[2]);
+    }
+    robotRoot.add(link);
+  }
+
+  let effectiveLinkCount = linksByToken.size;
+  const modelToken = normalizeBodyToken(stripFileExtension(robotName));
+  if (modelToken && linksByToken.size > 1) {
+    const modelLink = linksByToken.get(modelToken);
+    if (modelLink && modelLink.parent === robotRoot) {
+      const nearIdentityScale =
+        Math.abs(modelLink.scale.x - 1) <= 1e-4 &&
+        Math.abs(modelLink.scale.y - 1) <= 1e-4 &&
+        Math.abs(modelLink.scale.z - 1) <= 1e-4;
+      const nearIdentityPose =
+        modelLink.position.lengthSq() <= 1e-10 &&
+        modelLink.quaternion.angleTo(IDENTITY_QUAT) <= 1e-4 &&
+        nearIdentityScale;
+      if (nearIdentityPose) {
+        const children = [...modelLink.children];
+        for (const child of children) {
+          modelLink.remove(child);
+          robotRoot.add(child);
+        }
+        robotRoot.remove(modelLink);
+        effectiveLinkCount -= 1;
+      }
+    }
+  }
+
+  return {
+    root: robotRoot,
+    linkCount: effectiveLinkCount,
+    jointCount,
+  };
+};
+
 const attachUsdIntrospectionMetadata = (
   root: THREE.Object3D,
   introspection: NormalizedUsdIntrospection | null
@@ -3072,11 +4187,13 @@ const resolveUsdConverterAssetId = async (params: {
 
 const convertUsdAssetToMjcf = async (params: {
   converterAssetId: string;
+  usdKey: string;
   importOptions?: UsdImportOptions;
 }) => {
   const query = new URLSearchParams();
   query.set("floating_base", String(params.importOptions?.floatingBase ?? false));
   query.set("self_collision", String(params.importOptions?.selfCollision ?? false));
+  query.set("collision_profile", resolveUsdCollisionProfile(params.usdKey, params.importOptions));
 
   const convertRes = await fetch(
     buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(params.converterAssetId)}:convert-usd-to-mjcf?${query.toString()}`),
@@ -3126,9 +4243,14 @@ const introspectUsdAsset = async (converterAssetId: string): Promise<NormalizedU
   return normalizeUsdIntrospection(payload, converterAssetId);
 };
 
-const fetchUsdMeshScene = async (converterAssetId: string): Promise<NormalizedUsdMeshScene | null> => {
+const fetchUsdMeshScene = async (
+  converterAssetId: string,
+  profile: "balanced" | "high_fidelity"
+): Promise<NormalizedUsdMeshScene | null> => {
+  const query = new URLSearchParams();
+  query.set("profile", profile);
   const response = await fetch(
-    buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(converterAssetId)}/mesh-scene`),
+    buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(converterAssetId)}/mesh-scene?${query.toString()}`),
     {
       method: "GET",
     }
@@ -3167,6 +4289,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   let introspection: NormalizedUsdIntrospection | null = null;
   let meshScene: NormalizedUsdMeshScene | null = null;
   let detectedFloatingBase: boolean | undefined;
+  const importWarnings: UsdImportWarning[] = [];
 
   if (usdConverterEnabled) {
     if (!resolvedConverterAssetId) {
@@ -3198,6 +4321,14 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           introspection.joints.length > 0 &&
           introspection.joints.some((joint) => !joint.frame0Local)
         ) {
+          importWarnings.push({
+            code: "USD_IMPORT_FRAME_MISMATCH_FALLBACK",
+            message: "USD introspection omitted frame0Local on some joints; compatibility fallback was applied.",
+            context: {
+              usdKey,
+              converterAssetId: resolvedConverterAssetId,
+            },
+          });
           logWarn("USD introspection payload missing frame0Local on one or more joints; using compatibility fallback.", {
             scope: "usd",
             data: {
@@ -3218,7 +4349,10 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       }
 
       try {
-        meshScene = await fetchUsdMeshScene(resolvedConverterAssetId);
+        meshScene = await fetchUsdMeshScene(
+          resolvedConverterAssetId,
+          resolveUsdMeshSceneProfile(usdKey, importOptions)
+        );
       } catch (error) {
         logWarn("USD mesh scene extraction failed for converter asset.", {
           scope: "usd",
@@ -3235,6 +4369,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       if (!resolvedConverterAssetId) throw new Error("converter asset id unavailable after upload.");
       const converted = await convertUsdAssetToMjcf({
         converterAssetId: resolvedConverterAssetId,
+        usdKey,
         importOptions,
       });
       resolvedConverterAssetId = converted.converterAssetId;
@@ -3278,6 +4413,8 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
                 .filter((name): name is string => Boolean(name))
             ).size
           : 0;
+        const meshSceneBodyCount = meshScene?.bodies.length ?? 0;
+        const meshSceneStructureTokenCount = meshScene ? collectMeshSceneStructureTokens(meshScene).size : 0;
         const mjcfHierarchyIncomplete =
           introspectionJointCount > 0 &&
           (
@@ -3316,19 +4453,71 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
             },
           });
         } else {
-          root = builtFromMjcf.root;
-          logInfo("USD conversion + render completed", {
-            scope: "usd",
-            data: {
-              usdKey,
-              converterAssetId: resolvedConverterAssetId,
-              mjcfAssetId: resolvedMjcfAssetId,
-              links: builtFromMjcf.linkCount,
-              joints: builtFromMjcf.jointCount,
-              hierarchySource: "mjcf",
-              diagnostics: converted.diagnostics ?? null,
-            },
-          });
+          const mjcfLikelyCorruptedAgainstMeshScene =
+            !introspection &&
+            meshSceneStructureTokenCount >= 3 &&
+            (
+              builtFromMjcf.linkCount < Math.max(2, Math.ceil(meshSceneStructureTokenCount * 0.25)) ||
+              (meshSceneStructureTokenCount >= 2 && builtFromMjcf.jointCount === 0)
+            );
+          if (mjcfLikelyCorruptedAgainstMeshScene && meshScene) {
+            const builtFromMeshScene = buildRobotFromMeshSceneBodies(meshScene, displayName);
+            if (builtFromMeshScene.linkCount > 0) {
+              root = builtFromMeshScene.root;
+              logWarn("USD MJCF hierarchy appears incompatible with mesh-scene body graph; using mesh-scene skeleton.", {
+                scope: "usd",
+                data: {
+                  usdKey,
+                  converterAssetId: resolvedConverterAssetId,
+                  mjcfAssetId: resolvedMjcfAssetId,
+                  mjcfLinks: builtFromMjcf.linkCount,
+                  mjcfJoints: builtFromMjcf.jointCount,
+                  meshSceneBodies: meshSceneBodyCount,
+                  meshSceneStructureTokens: meshSceneStructureTokenCount,
+                },
+              });
+              logInfo("USD conversion + render completed", {
+                scope: "usd",
+                data: {
+                  usdKey,
+                  converterAssetId: resolvedConverterAssetId,
+                  mjcfAssetId: resolvedMjcfAssetId,
+                  links: builtFromMeshScene.linkCount,
+                  joints: builtFromMeshScene.jointCount,
+                  hierarchySource: "mesh_scene",
+                  diagnostics: converted.diagnostics ?? null,
+                },
+              });
+            } else {
+              root = builtFromMjcf.root;
+              logInfo("USD conversion + render completed", {
+                scope: "usd",
+                data: {
+                  usdKey,
+                  converterAssetId: resolvedConverterAssetId,
+                  mjcfAssetId: resolvedMjcfAssetId,
+                  links: builtFromMjcf.linkCount,
+                  joints: builtFromMjcf.jointCount,
+                  hierarchySource: "mjcf",
+                  diagnostics: converted.diagnostics ?? null,
+                },
+              });
+            }
+          } else {
+            root = builtFromMjcf.root;
+            logInfo("USD conversion + render completed", {
+              scope: "usd",
+              data: {
+                usdKey,
+                converterAssetId: resolvedConverterAssetId,
+                mjcfAssetId: resolvedMjcfAssetId,
+                links: builtFromMjcf.linkCount,
+                joints: builtFromMjcf.jointCount,
+                hierarchySource: "mjcf",
+                diagnostics: converted.diagnostics ?? null,
+              },
+            });
+          }
         }
       }
 
@@ -3367,6 +4556,25 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         joints: built.jointCount,
       },
     });
+  }
+
+  const meshSceneStructureTokenCount = meshScene ? collectMeshSceneStructureTokens(meshScene).size : 0;
+  if (!root && importSceneRole === "robot" && meshScene && meshSceneStructureTokenCount > 0) {
+    const built = buildRobotFromMeshSceneBodies(meshScene, displayName);
+    if (built.linkCount > 0) {
+      root = built.root;
+      logInfo("USD mesh-scene body fallback hierarchy used.", {
+        scope: "usd",
+        data: {
+          usdKey,
+          converterAssetId: resolvedConverterAssetId,
+          links: built.linkCount,
+          joints: built.jointCount,
+          bodyCount: meshScene.bodies.length,
+          structureTokenCount: meshSceneStructureTokenCount,
+        },
+      });
+    }
   }
 
   if (!root) {
@@ -3412,13 +4620,28 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       }
     }
   }
+  const shouldReplaceExistingVisuals = Boolean(
+    meshScene &&
+      !meshScene.truncated &&
+      (meshScene.meshes.length > 0 || meshScene.primitives.length > 0)
+  );
   const meshAttach = attachUsdMeshSceneToRoot(root, meshScene, {
     selfCollisionEnabled: importOptions?.selfCollision === true,
     resolveResource,
     attachCollisionProxies: useVisualCollisionSync,
-    replaceExisting: importSceneRole === "scene_asset" && Boolean(meshScene && meshScene.meshes.length > 0),
+    replaceExisting: shouldReplaceExistingVisuals,
   });
   if (meshScene && meshScene.meshes.length > 0 && meshAttach.attachedMeshes === 0) {
+    importWarnings.push({
+      code: "USD_IMPORT_MESH_ATTACH_DROP",
+      message: "USD mesh-scene contained meshes but no visual mesh could be attached.",
+      context: {
+        usdKey,
+        converterAssetId: resolvedConverterAssetId,
+        meshCount: meshScene.meshes.length,
+        primitiveCount: meshScene.primitives.length,
+      },
+    });
     logWarn("USD mesh scene contains meshes but none were attached; keeping fallback geometry.", {
       scope: "usd",
       data: {
@@ -3427,6 +4650,38 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         meshCount: meshScene.meshes.length,
         primitiveCount: meshScene.primitives.length,
         bodyCount: meshScene.bodyCount,
+      },
+    });
+  }
+  if (meshAttach.attachedToRoot > 0 || meshAttach.aliasCollisionCount > 0) {
+    importWarnings.push({
+      code: "USD_IMPORT_HIERARCHY_FLATTEN_FALLBACK",
+      message: "Some USD visuals could not be matched to a unique link lineage and were attached to root fallback containers.",
+      context: {
+        usdKey,
+        attachedToRoot: meshAttach.attachedToRoot,
+        aliasCollisionCount: meshAttach.aliasCollisionCount,
+      },
+    });
+  }
+  if (meshAttach.parentPoseWorldFallbacks > 0) {
+    importWarnings.push({
+      code: "USD_IMPORT_FRAME_MISMATCH_FALLBACK",
+      message: "Detected likely world-space body-relative mesh poses; applied compatibility rebasing to local link frames.",
+      context: {
+        usdKey,
+        parentPoseWorldFallbacks: meshAttach.parentPoseWorldFallbacks,
+      },
+    });
+  }
+  if (meshAttach.unresolvedTextureBindings > 0) {
+    importWarnings.push({
+      code: "USD_IMPORT_OPTIONAL_MATERIAL_BINDING_MISSING",
+      message: "Some USD material texture references were missing in the resolved bundle; fallback material bindings were used.",
+      context: {
+        usdKey,
+        unresolvedTextureBindings: meshAttach.unresolvedTextureBindings,
+        referencedTextures: meshAttach.referencedTextures,
       },
     });
   }
@@ -3444,29 +4699,55 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         meshSceneTruncated: Boolean(meshScene?.truncated),
         materialsBound: Number(root.userData?.usdMeshScene?.materialsBound ?? 0),
         texturedMaterials: Number(root.userData?.usdMeshScene?.texturedMaterials ?? 0),
+        unresolvedTextureBindings: Number(root.userData?.usdMeshScene?.unresolvedTextureBindings ?? 0),
+        aliasCollisionCount: Number(root.userData?.usdMeshScene?.aliasCollisionCount ?? 0),
       },
     });
   }
+  const uniqueImportWarnings = Array.from(
+    new Map(
+      importWarnings.map((warning) => [
+        `${warning.code}|${warning.message}|${JSON.stringify(warning.context ?? {})}`,
+        warning,
+      ])
+    ).values()
+  );
 
   if (importSceneRole === "scene_asset") {
     const sceneAssetRole = inferSceneAssetSourceRole(usdKey);
     const usesManagedDefaultFloor = sceneAssetRole === "terrain" && isDefaultFloorWorkspaceKey(usdKey);
+    const usesManagedRoughFloor = sceneAssetRole === "terrain" && isManagedRoughFloorWorkspaceKey(usdKey);
+    const grouping = groupSceneAssetLinksUnderContainers(root);
     let styledFloorMeshes = 0;
     if (usesManagedDefaultFloor) {
       styledFloorMeshes = applyDefaultFloorAppearanceToSceneAsset(root);
+    } else if (usesManagedRoughFloor) {
+      styledFloorMeshes = applyRoughFloorAppearanceToSceneAsset(root);
     }
     const sceneAssetMetadata: Record<string, unknown> = {
       importSceneRole,
+      sceneAssetLinkContainers: grouping.containerCount,
+      sceneAssetGroupedLinks: grouping.groupedLinks,
+      importWarnings: uniqueImportWarnings,
     };
     if (usesManagedDefaultFloor) {
       sceneAssetMetadata.managedTerrainAssetId = "floor";
       sceneAssetMetadata.visualStyle = "default_floor";
       sceneAssetMetadata.styledMeshCount = styledFloorMeshes;
+    } else if (usesManagedRoughFloor) {
+      sceneAssetMetadata.managedTerrainAssetId = "floor:rough";
+      sceneAssetMetadata.visualStyle = "rough_floor";
+      sceneAssetMetadata.styledMeshCount = styledFloorMeshes;
     }
     retagUsdRootAsSceneAsset(root, stripFileExtension(displayName) || displayName);
-    applySceneAssetPhysicsDefaults(root);
+    applySceneAssetPhysicsDefaults(root, {
+      forceRootCollider: meshAttach.attachedToRoot > 0,
+      sourceRole: sceneAssetRole,
+      meshScene,
+    });
     root.userData.usdUrl = usdUrl;
     root.userData.usdWorkspaceKey = usdKey;
+    root.userData.usdImportWarnings = uniqueImportWarnings;
     root.userData.sceneAssetSource = {
       kind: "usd",
       role: sceneAssetRole,
@@ -3490,6 +4771,15 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           managedTerrainAssetId: "floor",
         },
       });
+    } else if (usesManagedRoughFloor) {
+      logInfo("USD rough floor scene asset restyled to editor rough-floor material", {
+        scope: "usd",
+        data: {
+          usdKey,
+          styledFloorMeshes,
+          managedTerrainAssetId: "floor:rough",
+        },
+      });
     }
     logInfo("USD scene asset import completed", {
       scope: "usd",
@@ -3500,6 +4790,9 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         attachedMeshes: meshAttach.attachedMeshes,
         attachedPrimitives: meshAttach.attachedPrimitives,
         usesManagedDefaultFloor,
+        usesManagedRoughFloor,
+        sceneAssetLinkContainers: grouping.containerCount,
+        importWarningCount: uniqueImportWarnings.length,
       },
     });
     return root;
@@ -3524,11 +4817,13 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     // Visual/collision sync is part of the default import pipeline and should not
     // mark the source as user-edited. Edits are tracked later via markSceneDirty.
     isDirty: false,
+    importWarnings: uniqueImportWarnings,
   };
 
   root.userData.robotModelSource = modelSource;
   root.userData.usdUrl = usdUrl;
   root.userData.usdWorkspaceKey = usdKey;
+  root.userData.usdImportWarnings = uniqueImportWarnings;
   if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
   if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
   if (mjcfXml) root.userData.mjcfSource = mjcfXml;

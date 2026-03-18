@@ -1,6 +1,6 @@
 const BROWSER_ITEM_PREVIEW_IMAGES: Record<string, string> = {
   "floor-default": "/browser-previews/floors/default-floor.png",
-  "floor-rough": "/browser-previews/floors/rough-floor.webp",
+  "floor-rough": "/browser-previews/floors/rough-floor.svg",
   "robot-sample-cartpole": "/browser-previews/robots/cartpole.png",
   "robot-sample-ant": "/browser-previews/robots/ant.webp",
   "robot-sample-humanoid": "/browser-previews/robots/humanoid.webp",

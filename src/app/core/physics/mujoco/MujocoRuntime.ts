@@ -7,6 +7,7 @@ import type { InstancePhysics } from "../../assets/types";
 import { computeInertiaFromGeom, inferGeomInfo, isValidInertia } from "../geomUtils";
 import { sanitizeMjcfName, type MjcfNameMap } from "./mjcfNames";
 import { getDocId } from "../../scene/docIds";
+import { logInfo } from "../../services/logger";
 
 export type MujocoConfig = {
   noiseRate: number;
@@ -50,13 +51,56 @@ export type PointerSpringDebugState = {
   maxForceN: number;
 };
 
+export type MujocoRuntimeColliderType =
+  | "plane"
+  | "sphere"
+  | "capsule"
+  | "ellipsoid"
+  | "cylinder"
+  | "box"
+  | "mesh"
+  | "hfield"
+  | "sdf"
+  | "unknown";
+
+export type MujocoRuntimeMeshColliderAsset = {
+  meshId: number;
+  vertices: number[];
+  indices: number[];
+};
+
+export type MujocoRuntimeHfieldColliderAsset = {
+  hfieldId: number;
+  nrow: number;
+  ncol: number;
+  size: [number, number, number, number];
+  heights: number[];
+};
+
+export type MujocoRuntimeColliderSnapshot = {
+  geomId: number;
+  geomName: string;
+  bodyId: number;
+  bodyName: string | null;
+  type: MujocoRuntimeColliderType;
+  size: [number, number, number];
+  position: { x: number; y: number; z: number };
+  quaternion: { w: number; x: number; y: number; z: number };
+  contype: number;
+  conaffinity: number;
+  meshId: number | null;
+  hfieldId: number | null;
+  mesh: MujocoRuntimeMeshColliderAsset | null;
+  hfield: MujocoRuntimeHfieldColliderAsset | null;
+};
+
 export type MujocoRuntime = {
   loadFromScene: (
     snapshot: SceneSnapshot,
     roots: THREE.Object3D[],
     config: MujocoConfig,
     source: MujocoModelSource
-  ) => Promise<void>;
+  ) => Promise<{ warnings: string[] }>;
   step: (dt: number) => void;
   setNoiseRate: (value: number) => void;
   setNoiseScale: (value: number) => void;
@@ -74,6 +118,7 @@ export type MujocoRuntime = {
   updatePointerTarget: (worldPoint: PointerWorldPoint | null) => void;
   endPointerInteraction: () => void;
   getPointerSpringDebugState: () => PointerSpringDebugState | null;
+  getRuntimeColliderSnapshots: () => MujocoRuntimeColliderSnapshot[];
   getLastXML: () => string | null;
   dispose: () => void;
 };
@@ -106,6 +151,11 @@ const TERRAIN_ROLLING_FRICTION_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_
 const MUJOCO_MIN_SOLVER_ITERATIONS_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_SOLVER_ITERATIONS ?? "120");
 const MUJOCO_MIN_NOSLIP_ITERATIONS_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_NOSLIP_ITERATIONS ?? "8");
 const MUJOCO_MIN_IMPRATIO_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_IMPRATIO ?? "5");
+const TERRAIN_MESH_VERTEX_LIMIT_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_MESH_VERTEX_LIMIT ?? "600000");
+const TERRAIN_MESH_FACE_LIMIT_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_MESH_FACE_LIMIT ?? "1200000");
+const TERRAIN_HEIGHTMAP_GRID_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_GRID ?? "96");
+const TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_MIN_COVERAGE ?? "0.02");
+const TERRAIN_COLLISION_SIMPLIFIED_CODE = "MUJOCO_TERRAIN_COLLISION_SIMPLIFIED";
 const POINTER_CURSOR_BODY_NAME = "__pointer_cursor_body";
 const POINTER_CURSOR_PARK_Z_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_PARK_Z ?? "-1000");
 const POINTER_CURSOR_RADIUS_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_RADIUS ?? "0.06");
@@ -141,6 +191,18 @@ const MUJOCO_MIN_NOSLIP_ITERATIONS = Number.isFinite(MUJOCO_MIN_NOSLIP_ITERATION
   ? Math.max(0, Math.round(MUJOCO_MIN_NOSLIP_ITERATIONS_RAW))
   : 8;
 const MUJOCO_MIN_IMPRATIO = Number.isFinite(MUJOCO_MIN_IMPRATIO_RAW) ? Math.max(1, MUJOCO_MIN_IMPRATIO_RAW) : 5;
+const TERRAIN_MESH_VERTEX_LIMIT = Number.isFinite(TERRAIN_MESH_VERTEX_LIMIT_RAW)
+  ? Math.max(10000, Math.floor(TERRAIN_MESH_VERTEX_LIMIT_RAW))
+  : 600000;
+const TERRAIN_MESH_FACE_LIMIT = Number.isFinite(TERRAIN_MESH_FACE_LIMIT_RAW)
+  ? Math.max(20000, Math.floor(TERRAIN_MESH_FACE_LIMIT_RAW))
+  : 1200000;
+const TERRAIN_HEIGHTMAP_GRID = Number.isFinite(TERRAIN_HEIGHTMAP_GRID_RAW)
+  ? Math.max(16, Math.min(256, Math.round(TERRAIN_HEIGHTMAP_GRID_RAW)))
+  : 96;
+const TERRAIN_HEIGHTMAP_MIN_COVERAGE = Number.isFinite(TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW)
+  ? Math.max(0.001, Math.min(0.5, TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW))
+  : 0.02;
 const TERRAIN_NAME_RE = /(floor|ground|terrain|rough)/i;
 const debugLog = (...args: unknown[]) => {
   if (MUJOCO_DEBUG) console.info("[mujoco][runtime]", ...args);
@@ -279,14 +341,116 @@ function buildGeomContactAttr(solrefRaw: string, solimpRaw: string): string {
   return `${solref ? ` solref="${solref}"` : ""}${solimp ? ` solimp="${solimp}"` : ""}`;
 }
 
+function isSceneAssetRoot(root: THREE.Object3D): boolean {
+  if (root.userData?.usdSceneAsset === true) return true;
+  const source = root.userData?.sceneAssetSource as
+    | {
+        role?: string;
+        workspaceKey?: string | null;
+        metadata?: { managedTerrainAssetId?: string | null };
+      }
+    | undefined;
+  const role = String(source?.role ?? "").trim().toLowerCase();
+  if (role === "terrain" || role === "scene_asset") return true;
+  const managedTerrainAssetId = String(source?.metadata?.managedTerrainAssetId ?? "")
+    .trim()
+    .toLowerCase();
+  if (managedTerrainAssetId === "floor" || managedTerrainAssetId === "floor:rough") return true;
+  const workspaceKey = String(source?.workspaceKey ?? root.userData?.usdWorkspaceKey ?? "")
+    .trim()
+    .toLowerCase();
+  return Boolean(workspaceKey && /(terrain|rough|floor|ground)/.test(workspaceKey));
+}
+
 function hasTerrainSourceInChain(obj: THREE.Object3D): boolean {
   let current: THREE.Object3D | null = obj;
   while (current) {
-    const source = current.userData?.sceneAssetSource as { role?: string } | undefined;
-    if (String(source?.role ?? "").trim().toLowerCase() === "terrain") return true;
+    if (isSceneAssetRoot(current)) return true;
+    const source = current.userData?.sceneAssetSource as
+      | {
+          role?: string;
+          workspaceKey?: string | null;
+          metadata?: { managedTerrainAssetId?: string | null };
+        }
+      | undefined;
+    const role = String(source?.role ?? "").trim().toLowerCase();
+    if (role === "terrain") return true;
+    const managedTerrainAssetId = String(source?.metadata?.managedTerrainAssetId ?? "")
+      .trim()
+      .toLowerCase();
+    if (managedTerrainAssetId === "floor" || managedTerrainAssetId === "floor:rough") return true;
+    const workspaceKey = String(source?.workspaceKey ?? current.userData?.usdWorkspaceKey ?? "")
+      .trim()
+      .toLowerCase();
+    if (workspaceKey && /(terrain|rough|floor|ground)/.test(workspaceKey)) return true;
     current = current.parent;
   }
   return false;
+}
+
+function readTerrainSourceInChain(
+  obj: THREE.Object3D
+): { managedTerrainAssetId: string; workspaceKey: string } | null {
+  let current: THREE.Object3D | null = obj;
+  while (current) {
+    const source = current.userData?.sceneAssetSource as
+      | {
+          role?: string;
+          workspaceKey?: string | null;
+          metadata?: { managedTerrainAssetId?: string | null };
+        }
+      | undefined;
+    const managedTerrainAssetId = String(source?.metadata?.managedTerrainAssetId ?? "")
+      .trim()
+      .toLowerCase();
+    const workspaceKey = String(source?.workspaceKey ?? current.userData?.usdWorkspaceKey ?? "")
+      .trim()
+      .toLowerCase();
+    const role = String(source?.role ?? "").trim().toLowerCase();
+    if (role === "terrain" || managedTerrainAssetId.length > 0 || workspaceKey.length > 0) {
+      return {
+        managedTerrainAssetId,
+        workspaceKey,
+      };
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+function isManagedRoughTerrainObject(obj: THREE.Object3D): boolean {
+  const source = readTerrainSourceInChain(obj);
+  if (source?.managedTerrainAssetId === "floor:rough") return true;
+  if (source?.workspaceKey?.includes("rough_terrain") || source?.workspaceKey?.includes("rough_generator")) {
+    return true;
+  }
+  let current: THREE.Object3D | null = obj;
+  while (current) {
+    const name = String(current.name ?? "")
+      .trim()
+      .toLowerCase();
+    if (name.includes("rough")) return true;
+    const docId = String(getDocId(current) ?? "")
+      .trim()
+      .toLowerCase();
+    if (docId.includes("rough")) return true;
+    const workspaceHint = String(current.userData?.usdWorkspaceKey ?? "")
+      .trim()
+      .toLowerCase();
+    if (workspaceHint.includes("rough_terrain") || workspaceHint.includes("rough_generator")) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function isSimplePrimitiveMesh(mesh: THREE.Mesh): boolean {
+  const geoType = String((mesh.geometry as { type?: string } | undefined)?.type ?? "");
+  return (
+    geoType === "BoxGeometry" ||
+    geoType === "SphereGeometry" ||
+    geoType === "CylinderGeometry" ||
+    geoType === "PlaneGeometry"
+  );
 }
 
 function isTerrainObject(obj: THREE.Object3D): boolean {
@@ -307,6 +471,7 @@ function maybePromoteTerrainMeshToPlane(
   if (inferred.type === "plane") return inferred;
   if (!(obj as any).isMesh) return inferred;
   if (!isTerrainObject(obj)) return inferred;
+  if (isManagedRoughTerrainObject(obj)) return inferred;
 
   obj.updateWorldMatrix(true, false);
   const bounds = new THREE.Box3().setFromObject(obj);
@@ -353,10 +518,95 @@ function tightenSolverPrecision(model: MjModel): void {
   }
 }
 
+type TerrainColliderFailureReason =
+  | "target_not_buffer_mesh"
+  | "primitive_geometry"
+  | "invalid_position_attribute"
+  | "no_faces"
+  | "mesh_limit_exceeded"
+  | "no_valid_face_indices"
+  | "heightmap_bounds_degenerate"
+  | "heightmap_sparse_coverage"
+  | "hfield_height_degenerate";
+
+type TerrainAssetBuildResult = {
+  reason: TerrainColliderFailureReason | null;
+  detail?: Record<string, unknown>;
+};
+
+type MeshAssetBuildResult = TerrainAssetBuildResult & {
+  meshName: string | null;
+};
+
+type HfieldAssetBuildResult = TerrainAssetBuildResult & {
+  hfieldName: string | null;
+  pos?: THREE.Vector3;
+  quat?: THREE.Quaternion;
+};
+
+function formatWarningDetail(detail: Record<string, unknown> | undefined): string {
+  if (!detail) return "";
+  const parts = Object.entries(detail).flatMap(([key, value]) => {
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return `${key}=${value}`;
+      return [];
+    }
+    if (typeof value === "string") {
+      const token = value.trim();
+      if (token.length) return `${key}=${token}`;
+      return [];
+    }
+    if (typeof value === "boolean") {
+      return `${key}=${value ? "true" : "false"}`;
+    }
+    return [];
+  });
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
+function buildTerrainSimplifiedWarning(input: {
+  objectLabel: string;
+  mode: "mesh" | "primitive";
+  hfieldFailure: TerrainAssetBuildResult;
+  meshFailure?: TerrainAssetBuildResult;
+}): string {
+  const base = `[${TERRAIN_COLLISION_SIMPLIFIED_CODE}] '${input.objectLabel}' collision simplified to ${
+    input.mode === "mesh" ? "mesh fallback" : "primitive fallback"
+  } because hfield collider generation failed (${input.hfieldFailure.reason ?? "unknown"}${formatWarningDetail(
+    input.hfieldFailure.detail
+  )}).`;
+  if (input.mode === "mesh") return base;
+  if (!input.meshFailure) return base;
+  return `${base} Mesh fallback also failed (${input.meshFailure.reason ?? "unknown"}${formatWarningDetail(
+    input.meshFailure.detail
+  )}).`;
+}
+
 function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) {
+  type GeomEntry =
+    | {
+        kind: "primitive";
+        info: ReturnType<typeof inferGeomInfo>;
+        pos?: THREE.Vector3;
+        quat?: THREE.Quaternion;
+      }
+    | {
+        kind: "mesh";
+        meshName: string;
+      }
+    | {
+        kind: "hfield";
+        hfieldName: string;
+        pos?: THREE.Vector3;
+        quat?: THREE.Quaternion;
+      };
+
   const bodies: Array<{ name: string; object: THREE.Object3D }> = [];
   const lines: string[] = [];
   const jointActuators: string[] = [];
+  const collisionAssetLines: string[] = [];
+  const warnings: string[] = [];
+  let inlineMeshCounter = 0;
   const safe = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
   const sceneJointDamping = Number.isFinite(DEFAULT_SCENE_JOINT_DAMPING) ? Math.max(0, DEFAULT_SCENE_JOINT_DAMPING) : 0;
   const sceneJointArmature =
@@ -375,6 +625,8 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const tmpScale = new THREE.Vector3();
   const tmpMat = new THREE.Matrix4();
   const tmpMatInv = new THREE.Matrix4();
+  const tmpVertex = new THREE.Vector3();
+  const tmpRelative = new THREE.Matrix4();
   const cylinderYToZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 
   const candidates: THREE.Object3D[] = [];
@@ -385,7 +637,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const hasUsdSceneAssetAncestor = (obj: THREE.Object3D) => {
     let cur: THREE.Object3D | null = obj;
     while (cur) {
-      if (cur.userData?.usdSceneAsset === true) return true;
+      if (isSceneAssetRoot(cur)) return true;
       cur = cur.parent;
     }
     return false;
@@ -399,6 +651,8 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     if (obj.userData?.editorRobotRoot) return false;
     if (obj.userData?.editorKind === "joint") return false;
     if (obj.userData?.editorKind === "visual" || obj.userData?.editorKind === "collision") return false;
+    if (hasTerrainSourceInChain(obj)) return true;
+    if (TERRAIN_NAME_RE.test(String(obj.name ?? ""))) return true;
     const instance = ensureUserInstance(obj);
     return Object.values(instance.fields ?? {}).some(Boolean);
   };
@@ -423,6 +677,25 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       if (cur.userData?.editorKind === "link") return true;
       cur = cur.parent;
     }
+    return false;
+  };
+
+  const linkDescendantCache = new WeakMap<THREE.Object3D, boolean>();
+  const hasLinkDescendant = (obj: THREE.Object3D) => {
+    const cached = linkDescendantCache.get(obj);
+    if (cached !== undefined) return cached;
+    const stack = [...obj.children];
+    while (stack.length > 0) {
+      const current = stack.pop() as THREE.Object3D;
+      if (current.userData?.editorKind === "link") {
+        linkDescendantCache.set(obj, true);
+        return true;
+      }
+      for (let i = current.children.length - 1; i >= 0; i -= 1) {
+        stack.push(current.children[i]);
+      }
+    }
+    linkDescendantCache.set(obj, false);
     return false;
   };
 
@@ -485,6 +758,44 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     return meshes;
   };
 
+  const getMeshVertexCount = (target: THREE.Object3D) => {
+    const mesh = target as THREE.Mesh;
+    if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) return -1;
+    const positionAttr = mesh.geometry.getAttribute("position");
+    return positionAttr && typeof positionAttr.count === "number" && Number.isFinite(positionAttr.count)
+      ? positionAttr.count
+      : 0;
+  };
+
+  const pickDominantMeshTarget = (targets: THREE.Object3D[]): THREE.Object3D | null => {
+    let best: THREE.Object3D | null = null;
+    let bestNonPrimitive = -1;
+    let bestVertexCount = -1;
+    for (const target of targets) {
+      const mesh = target as THREE.Mesh;
+      if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) continue;
+      const vertexCount = getMeshVertexCount(target);
+      const nonPrimitive = isSimplePrimitiveMesh(mesh) ? 0 : 1;
+      if (
+        nonPrimitive > bestNonPrimitive ||
+        (nonPrimitive === bestNonPrimitive && vertexCount > bestVertexCount)
+      ) {
+        best = target;
+        bestNonPrimitive = nonPrimitive;
+        bestVertexCount = vertexCount;
+      }
+    }
+    return best;
+  };
+
+  const findDominantMeshTarget = (root: THREE.Object3D): THREE.Object3D | null => {
+    const meshTargets: THREE.Object3D[] = [];
+    root.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) meshTargets.push(obj);
+    });
+    return pickDominantMeshTarget(meshTargets);
+  };
+
   const resolveRelativeTransform = (body: THREE.Object3D, target: THREE.Object3D) => {
     body.updateWorldMatrix(true, false);
     target.updateWorldMatrix(true, false);
@@ -494,6 +805,442 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const quat = new THREE.Quaternion();
     tmpMat.decompose(pos, quat, tmpScale);
     return { pos, quat };
+  };
+
+  const buildInlineMeshAsset = (bodyObj: THREE.Object3D, targetObj: THREE.Object3D): MeshAssetBuildResult => {
+    const mesh = targetObj as THREE.Mesh;
+    if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+      debugLog("inline terrain mesh collision skipped: target is not BufferGeometry mesh", {
+        meshName: targetObj.name,
+      });
+      return {
+        meshName: null,
+        reason: "target_not_buffer_mesh",
+      };
+    }
+    if (isSimplePrimitiveMesh(mesh)) {
+      const geometryType = (mesh.geometry as { type?: string } | undefined)?.type ?? "unknown";
+      debugLog("inline terrain mesh collision skipped: primitive geometry", {
+        meshName: targetObj.name,
+        geometryType,
+      });
+      return {
+        meshName: null,
+        reason: "primitive_geometry",
+        detail: { geometryType },
+      };
+    }
+    const geometry = mesh.geometry;
+    const positionAttr = geometry.getAttribute("position");
+    if (
+      !positionAttr ||
+      typeof (positionAttr as THREE.BufferAttribute).getX !== "function" ||
+      typeof (positionAttr as THREE.BufferAttribute).getY !== "function" ||
+      typeof (positionAttr as THREE.BufferAttribute).getZ !== "function" ||
+      positionAttr.itemSize < 3 ||
+      positionAttr.count < 3
+    ) {
+      debugLog("inline terrain mesh collision skipped: invalid position attribute", {
+        meshName: targetObj.name,
+        itemSize: (positionAttr as { itemSize?: number } | null)?.itemSize ?? null,
+        count: (positionAttr as { count?: number } | null)?.count ?? null,
+      });
+      return {
+        meshName: null,
+        reason: "invalid_position_attribute",
+        detail: {
+          itemSize: (positionAttr as { itemSize?: number } | null)?.itemSize ?? null,
+          count: (positionAttr as { count?: number } | null)?.count ?? null,
+        },
+      };
+    }
+    const positionReader = positionAttr as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+
+    const indexAttr = geometry.getIndex();
+    const indexedFaceCount = indexAttr ? Math.floor(indexAttr.count / 3) : 0;
+    const nonIndexedFaceCount = Math.floor(positionAttr.count / 3);
+    const faceCount = indexAttr ? indexedFaceCount : nonIndexedFaceCount;
+    if (faceCount <= 0) {
+      debugLog("inline terrain mesh collision skipped: no faces", {
+        meshName: targetObj.name,
+      });
+      return {
+        meshName: null,
+        reason: "no_faces",
+      };
+    }
+
+    const vertexCount = positionAttr.count;
+    const indexCount = indexAttr?.count ?? 0;
+    if (vertexCount > TERRAIN_MESH_VERTEX_LIMIT || faceCount > TERRAIN_MESH_FACE_LIMIT) {
+      debugLog("inline terrain mesh collision skipped due size", {
+        meshName: targetObj.name,
+        vertexCount,
+        faceCount,
+        vertexLimit: TERRAIN_MESH_VERTEX_LIMIT,
+        faceLimit: TERRAIN_MESH_FACE_LIMIT,
+      });
+      return {
+        meshName: null,
+        reason: "mesh_limit_exceeded",
+        detail: {
+          vertexCount,
+          faceCount,
+          vertexLimit: TERRAIN_MESH_VERTEX_LIMIT,
+          faceLimit: TERRAIN_MESH_FACE_LIMIT,
+        },
+      };
+    }
+    bodyObj.updateWorldMatrix(true, false);
+    targetObj.updateWorldMatrix(true, false);
+    tmpMatInv.copy(bodyObj.matrixWorld).invert();
+    tmpRelative.copy(tmpMatInv).multiply(targetObj.matrixWorld);
+
+    const vertexValues: string[] = [];
+    vertexValues.length = vertexCount * 3;
+    let vertexOffset = 0;
+    for (let i = 0; i < vertexCount; i += 1) {
+      tmpVertex
+        .set(positionReader.getX(i), positionReader.getY(i), positionReader.getZ(i))
+        .applyMatrix4(tmpRelative);
+      vertexValues[vertexOffset] = safe(tmpVertex.x).toFixed(6);
+      vertexValues[vertexOffset + 1] = safe(tmpVertex.y).toFixed(6);
+      vertexValues[vertexOffset + 2] = safe(tmpVertex.z).toFixed(6);
+      vertexOffset += 3;
+    }
+
+    const faceValues: string[] = [];
+    if (indexAttr) {
+      for (let i = 0; i + 2 < indexCount; i += 3) {
+        const a = indexAttr.getX(i);
+        const b = indexAttr.getX(i + 1);
+        const c = indexAttr.getX(i + 2);
+        if (a < 0 || b < 0 || c < 0 || a >= vertexCount || b >= vertexCount || c >= vertexCount) continue;
+        faceValues.push(`${a}`, `${b}`, `${c}`);
+      }
+    } else {
+      for (let i = 0; i + 2 < vertexCount; i += 3) {
+        faceValues.push(`${i}`, `${i + 1}`, `${i + 2}`);
+      }
+    }
+    if (faceValues.length === 0) {
+      debugLog("inline terrain mesh collision skipped: no valid face indices", {
+        meshName: targetObj.name,
+        vertexCount,
+        indexCount,
+      });
+      return {
+        meshName: null,
+        reason: "no_valid_face_indices",
+        detail: {
+          vertexCount,
+          indexCount,
+        },
+      };
+    }
+
+    inlineMeshCounter += 1;
+    const meshName = sanitizeMjcfName(`${getDocId(targetObj)}_terrain_mesh_${inlineMeshCounter}`, "mesh");
+    collisionAssetLines.push(`    <mesh name="${meshName}" vertex="${vertexValues.join(" ")}" face="${faceValues.join(" ")}" />`);
+    debugLog("inline terrain mesh collision emitted", {
+      meshName: targetObj.name,
+      mjcfMeshName: meshName,
+      vertexCount,
+      faceCount: Math.floor(faceValues.length / 3),
+    });
+    return {
+      meshName,
+      reason: null,
+      detail: {
+        vertexCount,
+        faceCount: Math.floor(faceValues.length / 3),
+      },
+    };
+  };
+
+  const fillSparseHeightGrid = (heights: Float64Array, rows: number, cols: number, fallbackHeight: number) => {
+    for (let row = 0; row < rows; row += 1) {
+      let last = Number.NaN;
+      for (let col = 0; col < cols; col += 1) {
+        const idx = row * cols + col;
+        if (Number.isFinite(heights[idx])) {
+          last = heights[idx];
+        } else if (Number.isFinite(last)) {
+          heights[idx] = last;
+        }
+      }
+      last = Number.NaN;
+      for (let col = cols - 1; col >= 0; col -= 1) {
+        const idx = row * cols + col;
+        if (Number.isFinite(heights[idx])) {
+          last = heights[idx];
+        } else if (Number.isFinite(last)) {
+          heights[idx] = last;
+        }
+      }
+    }
+    for (let col = 0; col < cols; col += 1) {
+      let last = Number.NaN;
+      for (let row = 0; row < rows; row += 1) {
+        const idx = row * cols + col;
+        if (Number.isFinite(heights[idx])) {
+          last = heights[idx];
+        } else if (Number.isFinite(last)) {
+          heights[idx] = last;
+        }
+      }
+      last = Number.NaN;
+      for (let row = rows - 1; row >= 0; row -= 1) {
+        const idx = row * cols + col;
+        if (Number.isFinite(heights[idx])) {
+          last = heights[idx];
+        } else if (Number.isFinite(last)) {
+          heights[idx] = last;
+        }
+      }
+    }
+    for (let i = 0; i < heights.length; i += 1) {
+      if (!Number.isFinite(heights[i])) heights[i] = fallbackHeight;
+    }
+  };
+
+  const buildHeightfieldAsset = (bodyObj: THREE.Object3D, targetObj: THREE.Object3D): HfieldAssetBuildResult => {
+    const mesh = targetObj as THREE.Mesh;
+    if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
+      return {
+        hfieldName: null,
+        reason: "target_not_buffer_mesh",
+      };
+    }
+    if (isSimplePrimitiveMesh(mesh)) {
+      const geometryType = (mesh.geometry as { type?: string } | undefined)?.type ?? "unknown";
+      return {
+        hfieldName: null,
+        reason: "primitive_geometry",
+        detail: { geometryType },
+      };
+    }
+    const geometry = mesh.geometry;
+    const positionAttr = geometry.getAttribute("position");
+    if (
+      !positionAttr ||
+      typeof (positionAttr as THREE.BufferAttribute).getX !== "function" ||
+      typeof (positionAttr as THREE.BufferAttribute).getY !== "function" ||
+      typeof (positionAttr as THREE.BufferAttribute).getZ !== "function" ||
+      positionAttr.itemSize < 3 ||
+      positionAttr.count < 3
+    ) {
+      return {
+        hfieldName: null,
+        reason: "invalid_position_attribute",
+        detail: {
+          itemSize: (positionAttr as { itemSize?: number } | null)?.itemSize ?? null,
+          count: (positionAttr as { count?: number } | null)?.count ?? null,
+        },
+      };
+    }
+    const indexAttr = geometry.getIndex();
+    const indexedFaceCount = indexAttr ? Math.floor(indexAttr.count / 3) : 0;
+    const nonIndexedFaceCount = Math.floor(positionAttr.count / 3);
+    const faceCount = indexAttr ? indexedFaceCount : nonIndexedFaceCount;
+    if (faceCount <= 0) {
+      return {
+        hfieldName: null,
+        reason: "no_faces",
+      };
+    }
+
+    bodyObj.updateWorldMatrix(true, false);
+    targetObj.updateWorldMatrix(true, false);
+    tmpMatInv.copy(bodyObj.matrixWorld).invert();
+    tmpRelative.copy(tmpMatInv).multiply(targetObj.matrixWorld);
+
+    const positionReader = positionAttr as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+    const vertexCount = positionReader.count;
+    const transformed = new Float64Array(vertexCount * 3);
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+
+    let cursor = 0;
+    for (let i = 0; i < vertexCount; i += 1) {
+      tmpVertex
+        .set(positionReader.getX(i), positionReader.getY(i), positionReader.getZ(i))
+        .applyMatrix4(tmpRelative);
+      const x = safe(tmpVertex.x);
+      const y = safe(tmpVertex.y);
+      const z = safe(tmpVertex.z);
+      transformed[cursor] = x;
+      transformed[cursor + 1] = y;
+      transformed[cursor + 2] = z;
+      cursor += 3;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+    }
+
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    if (!Number.isFinite(spanX) || !Number.isFinite(spanY) || spanX <= 1e-6 || spanY <= 1e-6) {
+      return {
+        hfieldName: null,
+        reason: "heightmap_bounds_degenerate",
+        detail: {
+          spanX: Number.isFinite(spanX) ? spanX : 0,
+          spanY: Number.isFinite(spanY) ? spanY : 0,
+        },
+      };
+    }
+
+    const cols = TERRAIN_HEIGHTMAP_GRID;
+    const rows = TERRAIN_HEIGHTMAP_GRID;
+    const cellCount = cols * rows;
+    const heights = new Float64Array(cellCount);
+    heights.fill(Number.NEGATIVE_INFINITY);
+
+    for (let i = 0; i < vertexCount; i += 1) {
+      const base = i * 3;
+      const x = transformed[base];
+      const y = transformed[base + 1];
+      const z = transformed[base + 2];
+      const u = Math.max(0, Math.min(1, (x - minX) / spanX));
+      const v = Math.max(0, Math.min(1, (y - minY) / spanY));
+      const col = Math.max(0, Math.min(cols - 1, Math.round(u * (cols - 1))));
+      const row = Math.max(0, Math.min(rows - 1, Math.round(v * (rows - 1))));
+      const index = row * cols + col;
+      if (!Number.isFinite(heights[index]) || z > heights[index]) {
+        heights[index] = z;
+      }
+    }
+
+    let covered = 0;
+    for (let i = 0; i < cellCount; i += 1) {
+      if (Number.isFinite(heights[i])) covered += 1;
+    }
+    const coverage = covered / Math.max(1, cellCount);
+    if (!Number.isFinite(coverage) || coverage < TERRAIN_HEIGHTMAP_MIN_COVERAGE) {
+      return {
+        hfieldName: null,
+        reason: "heightmap_sparse_coverage",
+        detail: {
+          coverage: Number.isFinite(coverage) ? Number(coverage.toFixed(4)) : 0,
+          minCoverage: TERRAIN_HEIGHTMAP_MIN_COVERAGE,
+        },
+      };
+    }
+
+    const fallbackHeight = Number.isFinite(minZ) ? minZ : 0;
+    fillSparseHeightGrid(heights, rows, cols, fallbackHeight);
+
+    let minHeight = Number.POSITIVE_INFINITY;
+    let maxHeight = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < cellCount; i += 1) {
+      const value = heights[i] as number;
+      if (value < minHeight) minHeight = value;
+      if (value > maxHeight) maxHeight = value;
+    }
+    const heightSpan = maxHeight - minHeight;
+    if (!Number.isFinite(heightSpan) || heightSpan <= 1e-6) {
+      return {
+        hfieldName: null,
+        reason: "hfield_height_degenerate",
+        detail: {
+          minHeight: Number.isFinite(minHeight) ? Number(minHeight.toFixed(6)) : 0,
+          maxHeight: Number.isFinite(maxHeight) ? Number(maxHeight.toFixed(6)) : 0,
+        },
+      };
+    }
+
+    const radiusX = Math.max(0.001, spanX * 0.5);
+    const radiusY = Math.max(0.001, spanY * 0.5);
+    const heightScale = Math.max(0.001, heightSpan);
+    const baseDepth = Math.max(0.05, Math.min(2, heightScale * 0.25));
+    const invHeightSpan = 1 / heightSpan;
+    const elevationValues: string[] = [];
+    elevationValues.length = cellCount;
+    for (let i = 0; i < cellCount; i += 1) {
+      const normalized = Math.max(0, Math.min(1, (heights[i] - minHeight) * invHeightSpan));
+      elevationValues[i] = safe(normalized).toFixed(6);
+    }
+
+    inlineMeshCounter += 1;
+    const hfieldName = sanitizeMjcfName(`${getDocId(targetObj)}_terrain_hfield_${inlineMeshCounter}`, "hfield");
+    collisionAssetLines.push(
+      `    <hfield name="${hfieldName}" nrow="${rows}" ncol="${cols}" size="${radiusX.toFixed(6)} ${radiusY.toFixed(6)} ${heightScale.toFixed(6)} ${baseDepth.toFixed(6)}" elevation="${elevationValues.join(" ")}" />`
+    );
+    debugLog("terrain hfield collision emitted", {
+      meshName: targetObj.name,
+      hfieldName,
+      sourceVertexCount: vertexCount,
+      gridRows: rows,
+      gridCols: cols,
+      coverage: Number(coverage.toFixed(4)),
+      radiusX,
+      radiusY,
+      heightScale,
+      baseDepth,
+    });
+    return {
+      hfieldName,
+      pos: new THREE.Vector3(minX + spanX * 0.5, minY + spanY * 0.5, minHeight),
+      reason: null,
+      detail: {
+        sourceVertexCount: vertexCount,
+        gridRows: rows,
+        gridCols: cols,
+        coverage: Number(coverage.toFixed(4)),
+        radiusX: Number(radiusX.toFixed(6)),
+        radiusY: Number(radiusY.toFixed(6)),
+        heightScale: Number(heightScale.toFixed(6)),
+        baseDepth: Number(baseDepth.toFixed(6)),
+      },
+    };
+  };
+
+  const resolveManagedRoughTerrainEntry = (
+    bodyObj: THREE.Object3D,
+    geomTarget: THREE.Object3D
+  ): { entry: GeomEntry; warning?: string } => {
+    const hfield = buildHeightfieldAsset(bodyObj, geomTarget);
+    if (hfield.hfieldName) {
+      return {
+        entry: {
+          kind: "hfield",
+          hfieldName: hfield.hfieldName,
+          pos: hfield.pos,
+          quat: hfield.quat,
+        },
+      };
+    }
+
+    const fullMesh = buildInlineMeshAsset(bodyObj, geomTarget);
+    if (fullMesh.meshName) {
+      return {
+        entry: { kind: "mesh", meshName: fullMesh.meshName },
+        warning: buildTerrainSimplifiedWarning({
+          objectLabel: geomTarget.name || getDocId(geomTarget),
+          mode: "mesh",
+          hfieldFailure: hfield,
+        }),
+      };
+    }
+
+    const inferred = inferGeomInfo(geomTarget);
+    const info = maybePromoteTerrainMeshToPlane(geomTarget, inferred);
+    const relative = resolveRelativeTransform(bodyObj, geomTarget);
+    return {
+      entry: { kind: "primitive", info, pos: relative.pos, quat: relative.quat },
+      warning: buildTerrainSimplifiedWarning({
+        objectLabel: geomTarget.name || getDocId(geomTarget),
+        mode: "primitive",
+        hfieldFailure: hfield,
+        meshFailure: fullMesh,
+      }),
+    };
   };
 
   const linkSet = new Set(linkCandidates);
@@ -539,7 +1286,14 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   }
 
   const rootLinks = linkCandidates.filter((link) => !(linkInfo.get(link)?.parent));
-  const otherCandidates = candidates.filter((obj) => !linkSet.has(obj) && !hasLinkAncestor(obj));
+  const otherCandidates = candidates.filter((obj) => {
+    if (linkSet.has(obj)) return false;
+    if (hasLinkAncestor(obj)) return false;
+    // Structural USD scene containers (for example terrain roots) may wrap link bodies.
+    // Simulating those containers duplicates collision geometry at world origin.
+    if (hasLinkDescendant(obj)) return false;
+    return true;
+  });
 
   const normalizeAxis = (axis: [number, number, number]) => {
     const vec = new THREE.Vector3(axis[0], axis[1], axis[2]);
@@ -572,23 +1326,39 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
 
   const buildGeomEntriesForLink = (linkObj: THREE.Object3D, terrainLike: boolean) => {
     const collisionNodes = findCollisionNodes(linkObj);
-    const geomEntries: Array<{
-      info: ReturnType<typeof inferGeomInfo>;
-      pos?: THREE.Vector3;
-      quat?: THREE.Quaternion;
-    }> = [];
+    const geomEntries: GeomEntry[] = [];
+    const managedRoughTerrainLink = terrainLike && isManagedRoughTerrainObject(linkObj);
     const appendEntry = (geomTarget: THREE.Object3D) => {
+      const managedRoughTerrain = terrainLike && isManagedRoughTerrainObject(geomTarget);
+      if (managedRoughTerrain) {
+        const resolved = resolveManagedRoughTerrainEntry(linkObj, geomTarget);
+        geomEntries.push(resolved.entry);
+        if (resolved.warning) warnings.push(resolved.warning);
+        return;
+      }
       const inferred = inferGeomInfo(geomTarget);
       const info = terrainLike ? maybePromoteTerrainMeshToPlane(geomTarget, inferred) : inferred;
       const { pos, quat } = resolveRelativeTransform(linkObj, geomTarget);
-      geomEntries.push({ info, pos, quat });
+      geomEntries.push({ kind: "primitive", info, pos, quat });
     };
 
+    const collisionTargets: THREE.Object3D[] = [];
     for (const collisionNode of collisionNodes) {
       const geomTargets = findMeshLikes(collisionNode);
       for (const geomTarget of geomTargets) {
-        appendEntry(geomTarget);
+        collisionTargets.push(geomTarget);
       }
+    }
+
+    if (managedRoughTerrainLink) {
+      const visualTargets = findVisualMeshesForLink(linkObj);
+      const primaryTarget = pickDominantMeshTarget([...collisionTargets, ...visualTargets]);
+      if (primaryTarget) appendEntry(primaryTarget);
+      return geomEntries;
+    }
+
+    for (const geomTarget of collisionTargets) {
+      appendEntry(geomTarget);
     }
 
     // If collision nodes exist but do not have real geometry children,
@@ -617,12 +1387,30 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const appendGeomLines = (
     pad: string,
     bodyName: string,
-    entries: Array<{ info: ReturnType<typeof inferGeomInfo>; pos?: THREE.Vector3; quat?: THREE.Quaternion }>,
+    entries: GeomEntry[],
     frictionAttr: string,
     collisionAttr: string
   ) => {
     entries.forEach((entry, index) => {
       const geomName = entries.length === 1 ? `${bodyName}_geom` : `${bodyName}_geom_${index + 1}`;
+      if (entry.kind === "mesh") {
+        lines.push(
+          `${pad}<geom name="${geomName}" type="mesh" mesh="${entry.meshName}"${frictionAttr}${collisionAttr} />`
+        );
+        return;
+      }
+      if (entry.kind === "hfield") {
+        const posAttr = entry.pos
+          ? ` pos="${safe(entry.pos.x).toFixed(4)} ${safe(entry.pos.y).toFixed(4)} ${safe(entry.pos.z).toFixed(4)}"`
+          : "";
+        const quatAttr = entry.quat
+          ? ` quat="${safe(entry.quat.w, 1).toFixed(6)} ${safe(entry.quat.x).toFixed(6)} ${safe(entry.quat.y).toFixed(6)} ${safe(entry.quat.z).toFixed(6)}"`
+          : "";
+        lines.push(
+          `${pad}<geom name="${geomName}" type="hfield" hfield="${entry.hfieldName}"${posAttr}${quatAttr}${frictionAttr}${collisionAttr} />`
+        );
+        return;
+      }
       const posAttr = entry.pos
         ? ` pos="${safe(entry.pos.x).toFixed(4)} ${safe(entry.pos.y).toFixed(4)} ${safe(entry.pos.z).toFixed(4)}"`
         : "";
@@ -688,7 +1476,9 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const physics = instance.physics;
     const terrainLike = isTerrainObject(linkObj);
     const geomEntries = buildGeomEntriesForLink(linkObj, terrainLike);
-    const geomInfo = geomEntries[0]?.info;
+    const geomInfo =
+      geomEntries.find((entry): entry is Extract<GeomEntry, { kind: "primitive" }> => entry.kind === "primitive")
+        ?.info ?? null;
     const rawMass = safe(physics.mass, 0);
     const mass = physics.fixed ? 0 : Math.max(0, rawMass);
     const safeMass = mass < 1e-4 ? 0 : mass;
@@ -788,9 +1578,28 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const instance = ensureUserInstance(obj);
     const physics = instance.physics;
     const terrainLike = isTerrainObject(obj);
-    const inferred = inferGeomInfo(obj);
-    const geomInfo = terrainLike ? maybePromoteTerrainMeshToPlane(obj, inferred) : inferred;
-    const isPlane = geomInfo.type === "plane";
+    const managedRoughTerrain = terrainLike && isManagedRoughTerrainObject(obj);
+    const primaryGeomTarget = managedRoughTerrain ? findDominantMeshTarget(obj) ?? obj : obj;
+    const geomEntries: GeomEntry[] = [];
+    if (managedRoughTerrain) {
+      const resolved = resolveManagedRoughTerrainEntry(obj, primaryGeomTarget);
+      geomEntries.push(resolved.entry);
+      if (resolved.warning) warnings.push(resolved.warning);
+    } else {
+      const inferred = inferGeomInfo(primaryGeomTarget);
+      const geomInfo = terrainLike ? maybePromoteTerrainMeshToPlane(primaryGeomTarget, inferred) : inferred;
+      const relative = primaryGeomTarget !== obj ? resolveRelativeTransform(obj, primaryGeomTarget) : null;
+      geomEntries.push({
+        kind: "primitive",
+        info: geomInfo,
+        pos: relative?.pos,
+        quat: relative?.quat,
+      });
+    }
+    const primitiveInfo =
+      geomEntries.find((entry): entry is Extract<GeomEntry, { kind: "primitive" }> => entry.kind === "primitive")
+        ?.info ?? null;
+    const isPlane = primitiveInfo?.type === "plane";
     const rawMass = safe(physics.mass, 0);
     const mass = physics.fixed || isPlane ? 0 : Math.max(0, rawMass);
     const safeMass = mass < 1e-4 ? 0 : mass;
@@ -811,14 +1620,15 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
         ? ` contype="${collisionMask.contype}" conaffinity="${collisionMask.conaffinity}"`
         : ""
       : ` contype="0" conaffinity="0"`;
-
     const inertiaGeom =
-      geomInfo.type === "cylinder" && geomInfo.axis === "y" ? { ...geomInfo, axis: "z" as const } : geomInfo;
-    const computedInertia = computeInertiaFromGeom(inertiaGeom, safeMass);
+      primitiveInfo && primitiveInfo.type === "cylinder" && primitiveInfo.axis === "y"
+        ? { ...primitiveInfo, axis: "z" as const }
+        : primitiveInfo;
+    const computedInertia = inertiaGeom ? computeInertiaFromGeom(inertiaGeom, safeMass) : null;
 
-    if (safeMass <= 0 && geomInfo.type === "plane") {
+    if (safeMass <= 0 && primitiveInfo?.type === "plane") {
       lines.push(
-        `    <geom name="${bodyName}_geom" type="plane" size="${geomInfo.size}" pos="${posAttr}" quat="${quatAttr}"${frictionAttr}${collisionAttr} />`
+        `    <geom name="${bodyName}_geom" type="plane" size="${primitiveInfo.size}" pos="${posAttr}" quat="${quatAttr}"${frictionAttr}${collisionAttr} />`
       );
       return;
     }
@@ -829,7 +1639,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     appendGeomLines(
       "      ",
       bodyName,
-      [{ info: geomInfo }],
+      geomEntries,
       frictionAttr,
       collisionAttr
     );
@@ -844,6 +1654,10 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     buildLinkBody(link, 4);
   }
 
+  if (collisionAssetLines.length > 0) {
+    lines.splice(2, 0, `  <asset>`, ...collisionAssetLines, `  </asset>`);
+  }
+
   lines.push(`  </worldbody>`);
   if (jointActuators.length) {
     lines.push(`  <actuator>`);
@@ -852,7 +1666,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   }
   lines.push(`</mujoco>`);
 
-  return { xml: lines.join("\n"), bodies };
+  return { xml: lines.join("\n"), bodies, warnings: Array.from(new Set(warnings)) };
 }
 
 function buildNameMap(roots: THREE.Object3D[]) {
@@ -897,7 +1711,7 @@ function setGravity(model: MjModel, gravity: [number, number, number]) {
 }
 
 function isUrdfRoot(root: THREE.Object3D) {
-  if (root.userData?.usdSceneAsset === true) return false;
+  if (isSceneAssetRoot(root)) return false;
   // Imported URDF roots are tagged at root level; editor-built robots can also
   // carry `userData.urdf` on joints, so we must not classify them as imported.
   if (typeof root.userData?.urdfSource === "string" && root.userData.urdfSource.length > 0) return true;
@@ -927,10 +1741,28 @@ function extractWorldbodyContent(xml: string) {
   return match[1].trim();
 }
 
+function extractAssetContent(xml: string) {
+  const match = xml.match(/<asset[^>]*>([\s\S]*?)<\/asset>/i);
+  if (!match) return "";
+  return match[1].trim();
+}
+
 function extractActuatorContent(xml: string) {
   const match = xml.match(/<actuator[^>]*>([\s\S]*?)<\/actuator>/i);
   if (!match) return "";
   return match[1].trim();
+}
+
+function mergeAsset(xml: string, extraAsset: string) {
+  const extra = extraAsset.trim();
+  if (!extra) return xml;
+  if (!/<asset/i.test(xml)) {
+    if (/<worldbody/i.test(xml)) {
+      return xml.replace(/<worldbody/i, `  <asset>\n${extra}\n  </asset>\n  <worldbody`);
+    }
+    return xml.replace(/<\/mujoco>/i, `  <asset>\n${extra}\n  </asset>\n</mujoco>`);
+  }
+  return xml.replace(/<\/asset>/i, `\n${extra}\n  </asset>`);
 }
 
 function mergeWorldbody(xml: string, extraWorld: string) {
@@ -961,6 +1793,49 @@ function buildPointerCursorWorldbody() {
     `        solref="0.002 1.2" solimp="0.95 0.995 0.0001" rgba="1 0.3 0.3 0.15" />`,
     `</body>`,
   ].join("\n");
+}
+
+function finiteOr(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function resolveRuntimeGeomTypeFromEnumName(name: string): MujocoRuntimeColliderType {
+  switch (name) {
+    case "mjGEOM_PLANE":
+      return "plane";
+    case "mjGEOM_SPHERE":
+      return "sphere";
+    case "mjGEOM_CAPSULE":
+      return "capsule";
+    case "mjGEOM_ELLIPSOID":
+      return "ellipsoid";
+    case "mjGEOM_CYLINDER":
+      return "cylinder";
+    case "mjGEOM_BOX":
+      return "box";
+    case "mjGEOM_MESH":
+      return "mesh";
+    case "mjGEOM_HFIELD":
+      return "hfield";
+    case "mjGEOM_SDF":
+      return "sdf";
+    default:
+      return "unknown";
+  }
+}
+
+function buildRuntimeGeomTypeLookup(mujoco: MainModule): Map<number, MujocoRuntimeColliderType> {
+  const lookup = new Map<number, MujocoRuntimeColliderType>();
+  const enumBag = (mujoco as any).mjtGeom as Record<string, unknown> | undefined;
+  if (!enumBag) return lookup;
+  for (const [name, rawValue] of Object.entries(enumBag)) {
+    if (!name.startsWith("mjGEOM_")) continue;
+    const enumValue = mjtObjValue(rawValue);
+    if (!Number.isFinite(enumValue)) continue;
+    lookup.set(enumValue, resolveRuntimeGeomTypeFromEnumName(name));
+  }
+  return lookup;
 }
 
 export function createMujocoRuntime(): MujocoRuntime {
@@ -1009,6 +1884,19 @@ export function createMujocoRuntime(): MujocoRuntime {
   let pointerSpringMaxForce = Math.max(1, POINTER_DRAG_MAX_FORCE);
   let pointerSpringDebugState: PointerSpringDebugState | null = null;
   let pointerPrevValid = false;
+  let objBodyType = 0;
+  let objGeomType = 0;
+  let geomTypeByEnum = new Map<number, MujocoRuntimeColliderType>();
+  let geomTypeView: Int32Array = new Int32Array();
+  let geomSizeView: Float64Array = new Float64Array();
+  let geomDataIdView: Int32Array = new Int32Array();
+  let geomContypeView: Int32Array = new Int32Array();
+  let geomConaffinityView: Int32Array = new Int32Array();
+  let geomBodyIdView: Int32Array = new Int32Array();
+  let geomXposView: Float64Array = new Float64Array();
+  let geomXmatView: Float64Array = new Float64Array();
+  let meshColliderAssets = new Map<number, MujocoRuntimeMeshColliderAsset>();
+  let hfieldColliderAssets = new Map<number, MujocoRuntimeHfieldColliderAsset>();
   const pointerPrevWorldPoint = new THREE.Vector3();
   const pointerPrevTarget = new THREE.Vector3();
   const tmpBodyPos = new THREE.Vector3();
@@ -1033,6 +1921,19 @@ export function createMujocoRuntime(): MujocoRuntime {
     jntQposAdr = new Int32Array();
     jntDofAdr = new Int32Array();
     objJointType = 0;
+    objBodyType = 0;
+    objGeomType = 0;
+    geomTypeByEnum = new Map();
+    geomTypeView = new Int32Array();
+    geomSizeView = new Float64Array();
+    geomDataIdView = new Int32Array();
+    geomContypeView = new Int32Array();
+    geomConaffinityView = new Int32Array();
+    geomBodyIdView = new Int32Array();
+    geomXposView = new Float64Array();
+    geomXmatView = new Float64Array();
+    meshColliderAssets = new Map();
+    hfieldColliderAssets = new Map();
     ctrlView = new Float64Array();
     qfrcAppliedView = new Float64Array();
     bodyMassView = new Float64Array();
@@ -1129,6 +2030,179 @@ export function createMujocoRuntime(): MujocoRuntime {
         }
       }
     }
+  };
+
+  const rebuildRuntimeColliderAssets = () => {
+    if (!model) {
+      meshColliderAssets = new Map();
+      hfieldColliderAssets = new Map();
+      return;
+    }
+
+    const nextMeshAssets = new Map<number, MujocoRuntimeMeshColliderAsset>();
+    const nmesh = Math.max(0, Math.trunc(finiteOr((model as any).nmesh, 0)));
+    const meshVertAdrView = getIntView((model as any).mesh_vertadr);
+    const meshVertNumView = getIntView((model as any).mesh_vertnum);
+    const meshFaceAdrView = getIntView((model as any).mesh_faceadr);
+    const meshFaceNumView = getIntView((model as any).mesh_facenum);
+    const meshVertView = getBufferView((model as any).mesh_vert);
+    const meshFaceView = getIntView((model as any).mesh_face);
+    for (let meshId = 0; meshId < nmesh; meshId += 1) {
+      const vertAdr = Math.max(0, Math.trunc(meshVertAdrView[meshId] ?? 0));
+      const vertNum = Math.max(0, Math.trunc(meshVertNumView[meshId] ?? 0));
+      const faceAdr = Math.max(0, Math.trunc(meshFaceAdrView[meshId] ?? 0));
+      const faceNum = Math.max(0, Math.trunc(meshFaceNumView[meshId] ?? 0));
+      if (vertNum <= 0 || faceNum <= 0) continue;
+
+      const vertices: number[] = [];
+      const indices: number[] = [];
+      const vertBase = vertAdr * 3;
+      const vertLimit = vertBase + vertNum * 3;
+      for (let i = vertBase; i + 2 < vertLimit && i + 2 < meshVertView.length; i += 3) {
+        vertices.push(finiteOr(meshVertView[i]), finiteOr(meshVertView[i + 1]), finiteOr(meshVertView[i + 2]));
+      }
+
+      const faceBase = faceAdr * 3;
+      const faceLimit = faceBase + faceNum * 3;
+      for (let i = faceBase; i + 2 < faceLimit && i + 2 < meshFaceView.length; i += 3) {
+        const a = Math.trunc(finiteOr(meshFaceView[i], -1));
+        const b = Math.trunc(finiteOr(meshFaceView[i + 1], -1));
+        const c = Math.trunc(finiteOr(meshFaceView[i + 2], -1));
+        if (a < 0 || b < 0 || c < 0 || a >= vertNum || b >= vertNum || c >= vertNum) continue;
+        indices.push(a, b, c);
+      }
+      if (vertices.length < 9 || indices.length < 3) continue;
+      nextMeshAssets.set(meshId, { meshId, vertices, indices });
+    }
+    meshColliderAssets = nextMeshAssets;
+
+    const nextHfieldAssets = new Map<number, MujocoRuntimeHfieldColliderAsset>();
+    const nhfield = Math.max(0, Math.trunc(finiteOr((model as any).nhfield, 0)));
+    const hfieldRowView = getIntView((model as any).hfield_nrow);
+    const hfieldColView = getIntView((model as any).hfield_ncol);
+    const hfieldAdrView = getIntView((model as any).hfield_adr);
+    const hfieldSizeView = getBufferView((model as any).hfield_size);
+    const hfieldDataView = getBufferView((model as any).hfield_data);
+    for (let hfieldId = 0; hfieldId < nhfield; hfieldId += 1) {
+      const nrow = Math.max(0, Math.trunc(hfieldRowView[hfieldId] ?? 0));
+      const ncol = Math.max(0, Math.trunc(hfieldColView[hfieldId] ?? 0));
+      if (nrow <= 0 || ncol <= 0) continue;
+      const adr = Math.max(0, Math.trunc(hfieldAdrView[hfieldId] ?? 0));
+      const count = nrow * ncol;
+      const heights: number[] = [];
+      heights.length = count;
+      for (let i = 0; i < count; i += 1) {
+        const raw = hfieldDataView[adr + i];
+        heights[i] = finiteOr(raw);
+      }
+      const sizeBase = hfieldId * 4;
+      const size: [number, number, number, number] = [
+        Math.max(1e-6, Math.abs(finiteOr(hfieldSizeView[sizeBase], 1))),
+        Math.max(1e-6, Math.abs(finiteOr(hfieldSizeView[sizeBase + 1], 1))),
+        Math.max(1e-6, Math.abs(finiteOr(hfieldSizeView[sizeBase + 2], 0.2))),
+        Math.max(1e-6, Math.abs(finiteOr(hfieldSizeView[sizeBase + 3], 0.1))),
+      ];
+      nextHfieldAssets.set(hfieldId, {
+        hfieldId,
+        nrow,
+        ncol,
+        size,
+        heights,
+      });
+    }
+    hfieldColliderAssets = nextHfieldAssets;
+  };
+
+  const collectRuntimeColliderSnapshots = (): MujocoRuntimeColliderSnapshot[] => {
+    if (!mujoco || !model || !data) return [];
+    const geomCount = Math.max(0, Math.trunc(finiteOr((model as any).ngeom, 0)));
+    if (geomCount <= 0) return [];
+
+    const snapshots: MujocoRuntimeColliderSnapshot[] = [];
+    const rotMat = new THREE.Matrix4();
+    const rotQuat = new THREE.Quaternion();
+    for (let geomId = 0; geomId < geomCount; geomId += 1) {
+      const contype = Math.max(0, Math.trunc(finiteOr(geomContypeView[geomId], 0)));
+      const conaffinity = Math.max(0, Math.trunc(finiteOr(geomConaffinityView[geomId], 0)));
+      if (contype === 0 && conaffinity === 0) continue;
+
+      const typeEnum = Math.trunc(finiteOr(geomTypeView[geomId], -1));
+      const type = geomTypeByEnum.get(typeEnum) ?? "unknown";
+      const sizeBase = geomId * 3;
+      const sizeFromModel: [number, number, number] = [
+        Math.abs(finiteOr(geomSizeView[sizeBase], 0)),
+        Math.abs(finiteOr(geomSizeView[sizeBase + 1], 0)),
+        Math.abs(finiteOr(geomSizeView[sizeBase + 2], 0)),
+      ];
+      const bodyId = Math.max(0, Math.trunc(finiteOr(geomBodyIdView[geomId], 0)));
+      const geomName = (objGeomType ? mujoco.mj_id2name(model, objGeomType, geomId) : "") || `geom_${geomId}`;
+      const bodyName = objBodyType ? mujoco.mj_id2name(model, objBodyType, bodyId) : null;
+      if (geomName.startsWith(`${POINTER_CURSOR_BODY_NAME}_`) || bodyName === POINTER_CURSOR_BODY_NAME) {
+        continue;
+      }
+
+      const posBase = geomId * 3;
+      const position = {
+        x: finiteOr(geomXposView[posBase]),
+        y: finiteOr(geomXposView[posBase + 1]),
+        z: finiteOr(geomXposView[posBase + 2]),
+      };
+
+      const matBase = geomId * 9;
+      if (matBase + 8 < geomXmatView.length) {
+        rotMat.set(
+          finiteOr(geomXmatView[matBase]),
+          finiteOr(geomXmatView[matBase + 1]),
+          finiteOr(geomXmatView[matBase + 2]),
+          0,
+          finiteOr(geomXmatView[matBase + 3]),
+          finiteOr(geomXmatView[matBase + 4]),
+          finiteOr(geomXmatView[matBase + 5]),
+          0,
+          finiteOr(geomXmatView[matBase + 6]),
+          finiteOr(geomXmatView[matBase + 7]),
+          finiteOr(geomXmatView[matBase + 8]),
+          0,
+          0,
+          0,
+          0,
+          1
+        );
+        rotQuat.setFromRotationMatrix(rotMat);
+      } else {
+        rotQuat.set(0, 0, 0, 1);
+      }
+
+      const dataIdRaw = Math.trunc(finiteOr(geomDataIdView[geomId], -1));
+      const mesh = type === "mesh" && dataIdRaw >= 0 ? (meshColliderAssets.get(dataIdRaw) ?? null) : null;
+      const hfield = type === "hfield" && dataIdRaw >= 0 ? (hfieldColliderAssets.get(dataIdRaw) ?? null) : null;
+      const size = hfield
+        ? [hfield.size[0], hfield.size[1], hfield.size[2]] as [number, number, number]
+        : sizeFromModel;
+      snapshots.push({
+        geomId,
+        geomName,
+        bodyId,
+        bodyName,
+        type,
+        size,
+        position,
+        quaternion: {
+          w: finiteOr(rotQuat.w, 1),
+          x: finiteOr(rotQuat.x),
+          y: finiteOr(rotQuat.y),
+          z: finiteOr(rotQuat.z),
+        },
+        contype,
+        conaffinity,
+        meshId: mesh ? mesh.meshId : null,
+        hfieldId: hfield ? hfield.hfieldId : null,
+        mesh,
+        hfield,
+      });
+    }
+
+    return snapshots;
   };
 
   const normalizeAngle = (value: number) => {
@@ -1466,24 +2540,79 @@ export function createMujocoRuntime(): MujocoRuntime {
       let generatedBodies: Array<{ name: string; object: THREE.Object3D }> | null = null;
       let extraBodies: Array<{ name: string; object: THREE.Object3D }> | null = null;
       let xmlToWrite = "";
+      const loadWarnings: string[] = [];
 
       if (source.kind === "generated") {
         const built = buildSceneMJCF(roots);
         generatedBodies = built.bodies;
         xmlToWrite = built.xml;
+        loadWarnings.push(...built.warnings);
       } else {
         xmlPath = `/working/${source.filename}`;
         xmlToWrite = source.content;
-        const extraRoots = roots.filter((root) => !isUrdfRoot(root) && root.userData?.editorRobotRoot !== true);
+        const extraRoots = roots.filter((root) => {
+          if (root.userData?.editorRobotRoot === true) return false;
+          const modelSource = root.userData?.robotModelSource as { kind?: string } | undefined;
+          if (modelSource?.kind === "usd" || modelSource?.kind === "urdf") return false;
+          if (isSceneAssetRoot(root)) return true;
+          const workspaceKey = String(root.userData?.usdWorkspaceKey ?? "")
+            .trim()
+            .toLowerCase();
+          if (workspaceKey && /(terrain|rough|floor|ground)/.test(workspaceKey)) return true;
+          const rootName = String(root.name ?? "").trim().toLowerCase();
+          if (rootName && /(terrain|rough|floor|ground)/.test(rootName)) return true;
+          return !isUrdfRoot(root);
+        });
+        logInfo("MuJoCo: extra root classification", {
+          scope: "mujoco",
+          data: {
+            sourceKind: source.kind,
+            totalRoots: roots.length,
+            extraRoots: extraRoots.length,
+            roots: roots.map((root) => ({
+              id: getDocId(root),
+              name: root.name,
+              editorRobotRoot: root.userData?.editorRobotRoot === true,
+              usdSceneAsset: root.userData?.usdSceneAsset === true,
+              workspaceKey: String(root.userData?.usdWorkspaceKey ?? ""),
+              sceneRole: String((root.userData?.sceneAssetSource as { role?: string } | undefined)?.role ?? ""),
+              modelSourceKind: String((root.userData?.robotModelSource as { kind?: string } | undefined)?.kind ?? ""),
+              classifiedAsUrdfRoot: isUrdfRoot(root),
+              classifiedAsSceneAssetRoot: isSceneAssetRoot(root),
+            })),
+          },
+        });
         if (extraRoots.length) {
           const extraCollisionMask = resolveExtraSceneCollisionMask(MUJOCO_SELF_COLLIDE);
           const built = buildSceneMJCF(extraRoots, extraCollisionMask);
           extraBodies = built.bodies;
+          loadWarnings.push(...built.warnings);
+          const extraAsset = extractAssetContent(built.xml);
           const extraWorld = extractWorldbodyContent(built.xml);
           const extraActuator = extractActuatorContent(built.xml);
+          xmlToWrite = mergeAsset(xmlToWrite, extraAsset);
           xmlToWrite = mergeWorldbody(xmlToWrite, extraWorld);
           xmlToWrite = mergeActuator(xmlToWrite, extraActuator);
-          debugLog("merged extra roots", { count: extraRoots.length, extraBodies: built.bodies.length });
+          logInfo("MuJoCo: merged extra scene roots", {
+            scope: "mujoco",
+            data: {
+              extraRootCount: extraRoots.length,
+              extraBodyCount: built.bodies.length,
+              extraWarningCount: built.warnings.length,
+              hasExtraAsset: extraAsset.length > 0,
+              hasExtraWorld: extraWorld.length > 0,
+            },
+          });
+          debugLog("merged extra roots", {
+            count: extraRoots.length,
+            extraBodies: built.bodies.length,
+            extraAssetEntries: extraAsset
+              ? extraAsset
+                  .split("\n")
+                  .filter((line) => line.includes("<mesh ") || line.includes("<hfield "))
+                  .length
+              : 0,
+          });
         }
         writeFileTree(mujoco, source.files);
       }
@@ -1564,7 +2693,19 @@ export function createMujocoRuntime(): MujocoRuntime {
       actuatorByName = new Map();
       actuatorIdCache = new Map();
       jointIdCache = new Map();
+      geomTypeByEnum = buildRuntimeGeomTypeLookup(mujoco);
+      geomTypeView = getIntView((model as any).geom_type);
+      geomSizeView = getBufferView((model as any).geom_size);
+      geomDataIdView = getIntView((model as any).geom_dataid);
+      geomContypeView = getIntView((model as any).geom_contype);
+      geomConaffinityView = getIntView((model as any).geom_conaffinity);
+      geomBodyIdView = getIntView((model as any).geom_bodyid);
+      geomXposView = getBufferView((data as any).geom_xpos);
+      geomXmatView = getBufferView((data as any).geom_xmat);
+      rebuildRuntimeColliderAssets();
       objJointType = mjtObjValue((mujoco as any).mjtObj?.mjOBJ_JOINT);
+      objBodyType = mjtObjValue((mujoco as any).mjtObj?.mjOBJ_BODY);
+      objGeomType = mjtObjValue((mujoco as any).mjtObj?.mjOBJ_GEOM);
       const objAct = mjtObjValue((mujoco as any).mjtObj?.mjOBJ_ACTUATOR);
       if (objAct && model.nu > 0) {
         for (let i = 0; i < model.nu; i += 1) {
@@ -1587,10 +2728,9 @@ export function createMujocoRuntime(): MujocoRuntime {
           linkNameByMjcf.set(mjcf, raw);
         }
       }
-      const objBody = mjtObjValue((mujoco as any).mjtObj?.mjOBJ_BODY);
       if (generatedBodies) {
         for (const entry of generatedBodies) {
-          const bodyId = mujoco.mj_name2id(model, objBody, entry.name);
+          const bodyId = mujoco.mj_name2id(model, objBodyType, entry.name);
           if (bodyId >= 0) {
             bindings.push({
               bodyId,
@@ -1603,7 +2743,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       } else {
         if (extraBodies) {
           for (const entry of extraBodies) {
-            const bodyId = mujoco.mj_name2id(model, objBody, entry.name);
+            const bodyId = mujoco.mj_name2id(model, objBodyType, entry.name);
             if (bodyId >= 0) {
               bindings.push({
                 bodyId,
@@ -1615,7 +2755,7 @@ export function createMujocoRuntime(): MujocoRuntime {
           }
         }
         for (let i = 1; i < model.nbody; i += 1) {
-          const name = mujoco.mj_id2name(model, objBody, i);
+          const name = mujoco.mj_id2name(model, objBodyType, i);
           if (!name) continue;
           const lookup = linkNameByMjcf.get(name) ?? name;
           let obj: THREE.Object3D | null | undefined = null;
@@ -1649,7 +2789,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       }
 
       pointerCursorMocapId = -1;
-      const pointerBodyId = mujoco.mj_name2id(model, objBody, POINTER_CURSOR_BODY_NAME);
+      const pointerBodyId = mujoco.mj_name2id(model, objBodyType, POINTER_CURSOR_BODY_NAME);
       if (pointerBodyId >= 0 && pointerBodyId < bodyMocapIdView.length) {
         pointerCursorMocapId = bodyMocapIdView[pointerBodyId] ?? -1;
       }
@@ -1660,6 +2800,7 @@ export function createMujocoRuntime(): MujocoRuntime {
       parkPointerCursor();
 
       syncBindings();
+      return { warnings: Array.from(new Set(loadWarnings)) };
     },
     step(dt) {
       if (!mujoco || !model || !data) return;
@@ -1897,6 +3038,9 @@ export function createMujocoRuntime(): MujocoRuntime {
         stiffnessNPerMeter: pointerSpringDebugState.stiffnessNPerMeter,
         maxForceN: pointerSpringDebugState.maxForceN,
       };
+    },
+    getRuntimeColliderSnapshots() {
+      return collectRuntimeColliderSnapshots();
     },
     getLastXML() {
       return lastXML;

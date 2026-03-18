@@ -21,6 +21,7 @@ import type { InertiaTensor } from "../assets/types";
 import { computeComRadius, computeInertiaBox } from "../physics/inertiaDebug";
 import { ensureUserInstance } from "../assets/assetInstance";
 import { getDocId } from "../scene/docIds";
+import type { MujocoRuntimeColliderSnapshot } from "../physics/mujoco/MujocoRuntime";
 
 type UrdfDebugOptions = {
   showVisuals: boolean;
@@ -48,6 +49,9 @@ const FLOOR_REFLECTOR_KEY = "__floorReflector";
 const FLOOR_REFLECTOR_NAME = "__floor_reflector__";
 const FLOOR_SHADOW_CATCHER_KEY = "__floorShadowCatcher";
 const FLOOR_SHADOW_CATCHER_NAME = "__floor_shadow_catcher__";
+const RUNTIME_COLLIDER_ROOT_NAME = "__runtime_collision_overlay__";
+const RUNTIME_COLLIDER_OBJECT_KEY = "__runtime_collider_object__";
+const RUNTIME_COLLIDER_GEOMETRY_KEY = "__runtime_collider_geometry__";
 const HELPER_LAYER = 1;
 const ORIENTATION_GIZMO_SIZE_MIN_PX = 92;
 const ORIENTATION_GIZMO_SIZE_MAX_PX = 156;
@@ -200,6 +204,10 @@ export class Viewer {
   private pointerMovePos: { x: number; y: number } | null = null;
   private pointerSpringGroup: THREE.Group | null = null;
   private pointerSpringArrow: THREE.ArrowHelper | null = null;
+  private runtimeColliderRoot: THREE.Group | null = null;
+  private runtimeColliderObjects = new Map<string, THREE.Object3D>();
+  private runtimeColliderGeometryCache = new Map<string, THREE.BufferGeometry>();
+  private runtimeColliderMaterial: THREE.MeshBasicMaterial | null = null;
   private orientationScene: THREE.Scene | null = null;
   private orientationCamera: THREE.OrthographicCamera | null = null;
   private orientationAxesRoot: THREE.Group | null = null;
@@ -307,6 +315,7 @@ export class Viewer {
     // dispose SOLO user scene (y helpers creados)
     this.clearUserScene();
     this.clearPointerSpringVisual();
+    this.clearRuntimeCollisionOverlay();
     this.disposeOrientationGizmo();
 
     this.renderer?.dispose();
@@ -325,6 +334,10 @@ export class Viewer {
     this.pointerMovePos = null;
     this.pointerSpringGroup = null;
     this.pointerSpringArrow = null;
+    this.runtimeColliderRoot = null;
+    this.runtimeColliderObjects = new Map<string, THREE.Object3D>();
+    this.runtimeColliderGeometryCache = new Map<string, THREE.BufferGeometry>();
+    this.runtimeColliderMaterial = null;
     this.orientationScene = null;
     this.orientationCamera = null;
     this.orientationAxesRoot = null;
@@ -658,24 +671,245 @@ export class Viewer {
     group.visible = true;
   }
 
+  setRuntimeCollisionSnapshots(snapshots: Array<MujocoRuntimeColliderSnapshot & { runtimeId: string }> | null) {
+    if (!this.scene) return;
+    if (!snapshots || snapshots.length === 0) {
+      this.clearRuntimeCollisionObjects();
+      return;
+    }
+
+    const root = this.ensureRuntimeCollisionRoot();
+    if (!root) return;
+    const nextKeys = new Set<string>();
+    for (const snapshot of snapshots) {
+      const key = `${snapshot.runtimeId}:${snapshot.geomId}`;
+      nextKeys.add(key);
+      const object = this.ensureRuntimeColliderObject(key, snapshot);
+      if (!object) continue;
+      object.position.set(snapshot.position.x, snapshot.position.y, snapshot.position.z);
+      object.quaternion.set(
+        snapshot.quaternion.x,
+        snapshot.quaternion.y,
+        snapshot.quaternion.z,
+        snapshot.quaternion.w
+      );
+      object.visible = true;
+    }
+
+    for (const [key, object] of this.runtimeColliderObjects.entries()) {
+      if (nextKeys.has(key)) continue;
+      object.removeFromParent();
+      this.runtimeColliderObjects.delete(key);
+    }
+  }
+
   // -------------------------
   // internals
   // -------------------------
 
+  private ensureRuntimeCollisionMaterial() {
+    if (this.runtimeColliderMaterial) return this.runtimeColliderMaterial;
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xff7f50,
+      transparent: true,
+      opacity: 0.36,
+      wireframe: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+    this.runtimeColliderMaterial = material;
+    return material;
+  }
+
+  private ensureRuntimeCollisionRoot() {
+    if (!this.scene) return null;
+    if (this.runtimeColliderRoot) return this.runtimeColliderRoot;
+    const root = new THREE.Group();
+    root.name = RUNTIME_COLLIDER_ROOT_NAME;
+    root.userData[NON_PICKABLE_KEY] = true;
+    root.renderOrder = 20;
+    this.scene.add(root);
+    this.runtimeColliderRoot = root;
+    return root;
+  }
+
+  private clearRuntimeCollisionObjects() {
+    for (const object of this.runtimeColliderObjects.values()) {
+      object.removeFromParent();
+    }
+    this.runtimeColliderObjects.clear();
+  }
+
+  private clearRuntimeCollisionOverlay() {
+    this.clearRuntimeCollisionObjects();
+    if (this.runtimeColliderRoot) {
+      this.runtimeColliderRoot.removeFromParent();
+    }
+    for (const geometry of this.runtimeColliderGeometryCache.values()) {
+      geometry.dispose();
+    }
+    this.runtimeColliderGeometryCache.clear();
+    if (this.runtimeColliderMaterial) {
+      this.runtimeColliderMaterial.dispose();
+      this.runtimeColliderMaterial = null;
+    }
+  }
+
+  private buildRuntimeHfieldGeometry(snapshot: MujocoRuntimeColliderSnapshot) {
+    const hfield = snapshot.hfield;
+    if (!hfield) return null;
+    const nrow = Math.max(1, Math.trunc(hfield.nrow));
+    const ncol = Math.max(1, Math.trunc(hfield.ncol));
+    const [sxRaw, syRaw, szRaw, baseRaw] = hfield.size;
+    const sx = Math.max(1e-6, Math.abs(Number(sxRaw) || 1));
+    const sy = Math.max(1e-6, Math.abs(Number(syRaw) || 1));
+    const sz = Math.max(1e-6, Math.abs(Number(szRaw) || 0.2));
+    const base = Math.max(1e-6, Math.abs(Number(baseRaw) || 0.1));
+    const vertexCount = nrow * ncol;
+    if (vertexCount < 4) return null;
+
+    const positions = new Float32Array(vertexCount * 3);
+    let cursor = 0;
+    for (let row = 0; row < nrow; row += 1) {
+      const v = nrow > 1 ? row / (nrow - 1) : 0;
+      const y = -sy + v * sy * 2;
+      for (let col = 0; col < ncol; col += 1) {
+        const u = ncol > 1 ? col / (ncol - 1) : 0;
+        const x = -sx + u * sx * 2;
+        const idx = row * ncol + col;
+        const rawHeight = Number(hfield.heights[idx] ?? 0);
+        const normalized = Number.isFinite(rawHeight) ? rawHeight : 0;
+        const z = normalized * sz - base;
+        positions[cursor] = x;
+        positions[cursor + 1] = y;
+        positions[cursor + 2] = z;
+        cursor += 3;
+      }
+    }
+
+    const indices: number[] = [];
+    for (let row = 0; row + 1 < nrow; row += 1) {
+      for (let col = 0; col + 1 < ncol; col += 1) {
+        const a = row * ncol + col;
+        const b = a + 1;
+        const c = a + ncol;
+        const d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    if (indices.length < 3) return null;
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  private buildRuntimeColliderGeometry(snapshot: MujocoRuntimeColliderSnapshot) {
+    const [sx, sy, sz] = snapshot.size;
+    if (snapshot.type === "plane") {
+      return new THREE.PlaneGeometry(Math.max(0.01, sx * 2), Math.max(0.01, sy * 2), 1, 1);
+    }
+    if (snapshot.type === "box") {
+      return new THREE.BoxGeometry(Math.max(1e-4, sx * 2), Math.max(1e-4, sy * 2), Math.max(1e-4, sz * 2));
+    }
+    if (snapshot.type === "sphere") {
+      return new THREE.SphereGeometry(Math.max(1e-4, sx), 16, 12);
+    }
+    if (snapshot.type === "ellipsoid") {
+      const geometry = new THREE.SphereGeometry(1, 16, 12);
+      geometry.scale(Math.max(1e-4, sx), Math.max(1e-4, sy), Math.max(1e-4, sz));
+      return geometry;
+    }
+    if (snapshot.type === "cylinder") {
+      const geometry = new THREE.CylinderGeometry(
+        Math.max(1e-4, sx),
+        Math.max(1e-4, sx),
+        Math.max(1e-4, sy * 2),
+        18
+      );
+      geometry.rotateX(Math.PI / 2);
+      return geometry;
+    }
+    if (snapshot.type === "capsule") {
+      const geometry = new THREE.CapsuleGeometry(Math.max(1e-4, sx), Math.max(0, sy * 2), 8, 16);
+      geometry.rotateX(Math.PI / 2);
+      return geometry;
+    }
+    if (snapshot.type === "mesh" && snapshot.mesh) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(snapshot.mesh.vertices), 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(snapshot.mesh.indices), 1));
+      geometry.computeVertexNormals();
+      geometry.computeBoundingSphere();
+      return geometry;
+    }
+    if (snapshot.type === "hfield") {
+      return this.buildRuntimeHfieldGeometry(snapshot) ?? new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    }
+    return new THREE.BoxGeometry(0.08, 0.08, 0.08);
+  }
+
+  private runtimeColliderGeometryCacheKey(snapshot: MujocoRuntimeColliderSnapshot): string {
+    if (snapshot.type === "mesh" && snapshot.meshId !== null) {
+      return `mesh:${snapshot.meshId}`;
+    }
+    if (snapshot.type === "hfield" && snapshot.hfieldId !== null) {
+      return `hfield:${snapshot.hfieldId}`;
+    }
+    const [sx, sy, sz] = snapshot.size;
+    return `${snapshot.type}:${sx.toFixed(6)}:${sy.toFixed(6)}:${sz.toFixed(6)}`;
+  }
+
+  private ensureRuntimeColliderObject(key: string, snapshot: MujocoRuntimeColliderSnapshot) {
+    const root = this.ensureRuntimeCollisionRoot();
+    if (!root) return null;
+    const geometryKey = this.runtimeColliderGeometryCacheKey(snapshot);
+    const existing = this.runtimeColliderObjects.get(key);
+    if (existing && existing.userData?.[RUNTIME_COLLIDER_GEOMETRY_KEY] === geometryKey) {
+      return existing;
+    }
+    if (existing) {
+      existing.removeFromParent();
+      this.runtimeColliderObjects.delete(key);
+    }
+
+    let geometry = this.runtimeColliderGeometryCache.get(geometryKey);
+    if (!geometry) {
+      geometry = this.buildRuntimeColliderGeometry(snapshot);
+      this.runtimeColliderGeometryCache.set(geometryKey, geometry);
+    }
+
+    const mesh = new THREE.Mesh(geometry, this.ensureRuntimeCollisionMaterial());
+    mesh.name = snapshot.geomName || `RuntimeCollider_${snapshot.geomId}`;
+    mesh.userData[NON_PICKABLE_KEY] = true;
+    mesh.userData[RUNTIME_COLLIDER_OBJECT_KEY] = key;
+    mesh.userData[RUNTIME_COLLIDER_GEOMETRY_KEY] = geometryKey;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 22;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    root.add(mesh);
+    this.runtimeColliderObjects.set(key, mesh);
+    return mesh;
+  }
+
   private applyUrdfDebugOptions(rebuildHelpers: boolean) {
     if (!this.userRoot) return;
-    const { showVisuals, showCollisions, showAxes, showJointAxes, showCOM } = this.urdfDebugOptions;
+    const { showVisuals, showAxes, showJointAxes, showCOM } = this.urdfDebugOptions;
     const wantsVisualTransparency = showAxes || showJointAxes || showCOM;
 
     this.userRoot.traverse((obj) => {
       const anyObj = obj as any;
       const editorKind = obj.userData?.editorKind;
       if (anyObj.isURDFVisual || editorKind === "visual") obj.visible = showVisuals;
-      if (anyObj.isURDFCollider || editorKind === "collision") obj.visible = showCollisions;
+      if (anyObj.isURDFCollider || editorKind === "collision") obj.visible = false;
     });
 
     this.updateUrdfVisualTransparency(wantsVisualTransparency);
-    this.updateUrdfCollisionMaterials(showCollisions);
+    this.updateUrdfCollisionMaterials(false);
 
     if (rebuildHelpers) {
       this.rebuildUrdfHelpers();
@@ -1290,11 +1524,22 @@ export class Viewer {
 
     if ((material as any).isMeshPhysicalMaterial) {
       const pbr = material as THREE.MeshPhysicalMaterial;
-      pbr.envMapIntensity = Math.max(1.0, pbr.envMapIntensity ?? 0);
-      pbr.roughness = Math.min(0.82, Math.max(0.18, pbr.roughness ?? 0.5));
-      pbr.metalness = Math.min(0.4, Math.max(0, pbr.metalness ?? 0));
-      pbr.clearcoat = Math.max(0.2, pbr.clearcoat ?? 0);
-      pbr.clearcoatRoughness = Math.min(0.45, Math.max(0.12, pbr.clearcoatRoughness ?? 0.24));
+      const surfaceProfile = String((pbr.userData as Record<string, unknown> | undefined)?.viewportSurfaceProfile ?? "")
+        .trim()
+        .toLowerCase();
+      if (surfaceProfile === "usd_pbr") {
+        pbr.envMapIntensity = Math.min(0.18, Math.max(0.02, pbr.envMapIntensity ?? 0.08));
+        pbr.roughness = Math.min(1.0, Math.max(0.85, pbr.roughness ?? 0.94));
+        pbr.metalness = Math.min(0.04, Math.max(0, pbr.metalness ?? 0));
+        pbr.clearcoat = 0;
+        pbr.clearcoatRoughness = Math.max(0.9, pbr.clearcoatRoughness ?? 0.94);
+      } else {
+        pbr.envMapIntensity = Math.max(1.0, pbr.envMapIntensity ?? 0);
+        pbr.roughness = Math.min(0.82, Math.max(0.18, pbr.roughness ?? 0.5));
+        pbr.metalness = Math.min(0.4, Math.max(0, pbr.metalness ?? 0));
+        pbr.clearcoat = Math.max(0.2, pbr.clearcoat ?? 0);
+        pbr.clearcoatRoughness = Math.min(0.45, Math.max(0.12, pbr.clearcoatRoughness ?? 0.24));
+      }
       if (pbr.map) pbr.map.colorSpace = THREE.SRGBColorSpace;
       pbr.needsUpdate = true;
       this.viewportMaterialCache.set(material, material);
@@ -1303,9 +1548,18 @@ export class Viewer {
 
     if ((material as any).isMeshStandardMaterial) {
       const std = material as THREE.MeshStandardMaterial;
-      std.envMapIntensity = Math.max(1.0, std.envMapIntensity ?? 0);
-      std.roughness = Math.min(0.82, Math.max(0.18, std.roughness ?? 0.5));
-      std.metalness = Math.min(0.4, Math.max(0, std.metalness ?? 0));
+      const surfaceProfile = String((std.userData as Record<string, unknown> | undefined)?.viewportSurfaceProfile ?? "")
+        .trim()
+        .toLowerCase();
+      if (surfaceProfile === "usd_pbr") {
+        std.envMapIntensity = Math.min(0.18, Math.max(0.02, std.envMapIntensity ?? 0.08));
+        std.roughness = Math.min(1.0, Math.max(0.85, std.roughness ?? 0.94));
+        std.metalness = Math.min(0.04, Math.max(0, std.metalness ?? 0));
+      } else {
+        std.envMapIntensity = Math.max(1.0, std.envMapIntensity ?? 0);
+        std.roughness = Math.min(0.82, Math.max(0.18, std.roughness ?? 0.5));
+        std.metalness = Math.min(0.4, Math.max(0, std.metalness ?? 0));
+      }
       if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
       std.needsUpdate = true;
       this.viewportMaterialCache.set(material, material);
@@ -1332,6 +1586,15 @@ export class Viewer {
     if (mesh.children.some((child) => child.name === PRIMITIVE_SURFACE_LINES_NAME)) return;
 
     const cached = mesh.userData?.[VIEWPORT_EDGE_OVERLAY_KEY] as THREE.LineSegments | undefined;
+    const disableOverlay = mesh.userData?.disableViewportEdgeOverlay === true;
+    if (disableOverlay) {
+      if (cached) {
+        cached.removeFromParent();
+        disposeObject3D(cached);
+        delete mesh.userData[VIEWPORT_EDGE_OVERLAY_KEY];
+      }
+      return;
+    }
     const sourceGeomId = geom.uuid;
     if (cached?.userData?.sourceGeometry === sourceGeomId) return;
     if (cached) {

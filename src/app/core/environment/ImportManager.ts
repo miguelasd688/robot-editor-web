@@ -87,12 +87,20 @@ function snapshotEnvironment() {
   return environmentDocumentManager.getEnvironment(editorEngine.getDoc());
 }
 
+function collectImportDiagnostics(environment: EnvironmentDoc | null): EnvironmentDiagnostic[] {
+  if (!environment) return [];
+  return environment.diagnostics.filter((diagnostic) => diagnostic.source === "import");
+}
+
 function successResult(rootId: string | null, diagnostics: EnvironmentDiagnostic[] = []): ImportManagerResult {
+  const environment = snapshotEnvironment();
+  const importDiagnostics = collectImportDiagnostics(environment);
+  const mergedDiagnostics = [...diagnostics, ...importDiagnostics];
   return {
     ok: true,
     rootId,
-    environment: snapshotEnvironment(),
-    diagnostics,
+    environment,
+    diagnostics: mergedDiagnostics,
   };
 }
 

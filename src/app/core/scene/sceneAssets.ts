@@ -164,7 +164,7 @@ export const sceneAssetCatalog: SceneAssetDefinition[] = [
   {
     id: "floor:rough",
     name: "Rough Floor",
-    description: "Floor with raised blocks for rough-terrain testing",
+    description: "Procedural multi-zone rough terrain (stairs, irregular patch, cube field)",
     icon: "▨",
     category: "geometry",
   },
@@ -396,35 +396,73 @@ export function createSceneAssetTree(
   }
 
   if (assetId === "floor:rough") {
+    const floorGroupId = rootId;
+    const floorLinkId = createDocId();
+    const floorVisualId = createDocId();
+    const floorCollisionId = createDocId();
+    const floorMeshId = createDocId();
     const floorTransform = defaultTransform({
       position: { x: 0, y: 0, z: -1.5 },
     });
-    const basePlaneId = rootId;
-    const bumpSpecs: Array<{ x: number; y: number; z: number; sx: number; sy: number; sz: number }> = [
-      { x: -1.8, y: -1.6, z: 0.11, sx: 0.45, sy: 0.45, sz: 0.22 },
-      { x: -0.9, y: -0.9, z: 0.08, sx: 0.35, sy: 0.35, sz: 0.16 },
-      { x: 0.0, y: -1.5, z: 0.1, sx: 0.4, sy: 0.55, sz: 0.2 },
-      { x: 0.9, y: -0.8, z: 0.09, sx: 0.35, sy: 0.35, sz: 0.18 },
-      { x: 1.7, y: -1.7, z: 0.12, sx: 0.5, sy: 0.4, sz: 0.24 },
-      { x: -1.4, y: 0.2, z: 0.09, sx: 0.35, sy: 0.35, sz: 0.18 },
-      { x: -0.4, y: 0.7, z: 0.1, sx: 0.4, sy: 0.35, sz: 0.2 },
-      { x: 0.7, y: 0.4, z: 0.08, sx: 0.3, sy: 0.3, sz: 0.16 },
-      { x: 1.6, y: 0.1, z: 0.1, sx: 0.45, sy: 0.35, sz: 0.2 },
-      { x: -1.9, y: 1.6, z: 0.12, sx: 0.5, sy: 0.4, sz: 0.24 },
-      { x: -0.6, y: 1.5, z: 0.09, sx: 0.35, sy: 0.45, sz: 0.18 },
-      { x: 0.8, y: 1.4, z: 0.11, sx: 0.45, sy: 0.35, sz: 0.22 },
-      { x: 1.8, y: 1.7, z: 0.13, sx: 0.5, sy: 0.5, sz: 0.26 },
-    ];
+    const createSeededRandom = (seed: number) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state / 0x100000000;
+      };
+    };
+    const random = createSeededRandom(20260317);
+    const pushRoughCube = (
+      nodes: CreateNodeInput[],
+      name: string,
+      x: number,
+      y: number,
+      height: number,
+      sx: number,
+      sy: number
+    ) => {
+      const sz = Math.max(0.02, height);
+      nodes.push({
+        id: createDocId(),
+        name,
+        kind: "mesh",
+        parentId: floorVisualId,
+        source: { kind: "primitive", shape: "cube" },
+        components: {
+          transform: defaultTransform({
+            position: { x, y, z: sz * 0.5 },
+            scale: { x: Math.max(0.08, sx), y: Math.max(0.08, sy), z: sz },
+          }),
+        },
+      });
+    };
 
     const nodes: CreateNodeInput[] = [
       {
-        id: basePlaneId,
+        id: floorGroupId,
         name: "Rough Floor",
-        kind: "mesh",
+        kind: "group",
         parentId: null,
-        source: { kind: "primitive", shape: "plane" },
         components: {
           transform: floorTransform,
+          sceneAssetSource: {
+            kind: "generated",
+            role: "terrain",
+            metadata: {
+              generatedFrom: "scene_asset_catalog",
+              managedTerrainAssetId: "floor:rough",
+              sceneAssetId: "floor:rough",
+            },
+          },
+        },
+      },
+      {
+        id: floorLinkId,
+        name: "Link",
+        kind: "link",
+        parentId: floorGroupId,
+        components: {
+          transform: defaultTransform(),
           ...withPhysics({
             mass: 0,
             fixed: true,
@@ -435,34 +473,71 @@ export function createSceneAssetTree(
           }),
         },
       },
+      createVisualNode(floorVisualId, floorLinkId),
+      createCollisionNode(floorCollisionId, floorLinkId),
+      {
+        id: floorMeshId,
+        name: "Rough Floor Base",
+        kind: "mesh",
+        parentId: floorVisualId,
+        source: { kind: "primitive", shape: "plane" },
+        components: { transform: defaultTransform() },
+      },
     ];
 
-    for (const [index, bump] of bumpSpecs.entries()) {
-      nodes.push({
-        id: createDocId(),
-        name: `Rough Bump ${index + 1}`,
-        kind: "mesh",
-        parentId: basePlaneId,
-        source: { kind: "primitive", shape: "cube" },
-        components: {
-          transform: defaultTransform({
-            position: { x: bump.x, y: bump.y, z: bump.z },
-            scale: { x: bump.sx, y: bump.sy, z: bump.sz },
-          }),
-          ...withPhysics({
-            mass: 0,
-            fixed: true,
-            useDensity: false,
-            friction: 1.0,
-            restitution: 0.0,
-            collisionsEnabled: true,
-          }),
-        },
-      });
+    // zone_stairs_up: pyramid-like ascending steps.
+    for (let level = 0; level < 6; level += 1) {
+      const t = level / 5;
+      const span = 1.6 - t * 1.1;
+      const height = 0.045 + level * 0.018;
+      pushRoughCube(nodes, `zone_stairs_up_${level + 1}`, -1.65, 1.65, height, span, span);
+    }
+
+    // zone_stairs_down: inverse pyramid-like descending profile.
+    for (let level = 0; level < 6; level += 1) {
+      const t = level / 5;
+      const span = 0.5 + t * 1.1;
+      const height = 0.045 + (5 - level) * 0.018;
+      pushRoughCube(nodes, `zone_stairs_down_${level + 1}`, -1.65, -1.65, height, span, span);
+    }
+
+    // zone_irregular: low-amplitude gravel/hills patch on a fixed grid.
+    const irregularRows = 8;
+    const irregularCols = 8;
+    const irregularStep = 0.24;
+    for (let row = 0; row < irregularRows; row += 1) {
+      for (let col = 0; col < irregularCols; col += 1) {
+        const localX = (col - (irregularCols - 1) * 0.5) * irregularStep;
+        const localY = (row - (irregularRows - 1) * 0.5) * irregularStep;
+        const radial = Math.hypot(localX, localY);
+        const wave = Math.sin(localX * 4.3) * Math.cos(localY * 5.1);
+        const noise = (random() - 0.5) * 0.04;
+        const height = Math.max(0.025, 0.07 + wave * 0.02 - radial * 0.015 + noise);
+        pushRoughCube(
+          nodes,
+          `zone_irregular_${row + 1}_${col + 1}`,
+          1.45 + localX,
+          1.45 + localY,
+          height,
+          0.16,
+          0.16
+        );
+      }
+    }
+
+    // zone_cube_field: scattered cubes at different heights.
+    const cubeFieldCount = 40;
+    for (let i = 0; i < cubeFieldCount; i += 1) {
+      const x = 1.45 + (random() * 2 - 1) * 0.9;
+      const y = -1.45 + (random() * 2 - 1) * 0.9;
+      const height = 0.05 + random() * 0.26;
+      const sx = 0.1 + random() * 0.16;
+      const sy = 0.1 + random() * 0.16;
+      pushRoughCube(nodes, `zone_cube_field_${i + 1}`, x, y, height, sx, sy);
     }
 
     return {
-      rootId: basePlaneId,
+      rootId: floorGroupId,
       nodes,
     };
   }

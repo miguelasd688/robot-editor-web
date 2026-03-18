@@ -1,4 +1,5 @@
 import type { AssetEntry } from "../../app/core/assets/assetRegistryTypes";
+import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import type { UrdfImportOptions } from "../../app/core/urdf/urdfImportOptions";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 import { getLibrarySamplePreviewImage } from "./browserPreviewCatalog";
@@ -11,6 +12,19 @@ export type LibrarySampleTrainingDefaults = {
   taskTemplate: string;
   task: string;
   ikModelId?: string;
+};
+
+export type LibrarySampleDataArtifact = {
+  id: string;
+  label: string;
+  workspaceKey: string;
+  kind: "training_checkpoint" | "rl_model" | "policy" | "dataset" | "metadata";
+  description?: string;
+};
+
+export type LibrarySampleDataContract = {
+  artifacts?: LibrarySampleDataArtifact[];
+  metadata?: Record<string, unknown>;
 };
 
 export type LibrarySampleUsdVariant = {
@@ -60,10 +74,19 @@ export type LibrarySample = {
    * under `library/` (e.g. `library/floors/flat_floor.usda`).
    */
   environmentUsdEntries?: string[];
+  /**
+   * Optional generated scene asset used for full-scene import when no dedicated environment USD
+   * bundle should be loaded.
+   */
+  fullSceneSceneAssetId?: SceneAssetId;
   trainingDefaults?: LibrarySampleTrainingDefaults;
+  /** Optional extensible contract for sample-related training/model/policy artifacts. */
+  sampleData?: LibrarySampleDataContract;
 };
 
 export const LIBRARY_ROOT = "library";
+export const MANAGED_FLAT_FLOOR_WORKSPACE_KEY = "library/floors/flat_floor.usda";
+const SAMPLE_TERRAIN_SCENE_ASSET_PREFIX = "__sample_scene_asset__:";
 // Library sample files are served from: /public/library/<sampleId>/<entry and dependencies>
 
 export const LIBRARY_SAMPLES: LibrarySample[] = [
@@ -108,7 +131,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "configuration/ant_colored_robot_schema.usd",
       "configuration/ant_instanceable_robot_schema.usd",
       "configuration/ant_robot_schema.usd",
-      "library/floors/flat_floor.usda",
+      MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -132,7 +155,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Ant-v0",
     },
     terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["library/floors/flat_floor.usda"],
+    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
     usdVariants: [
       {
         id: "standard",
@@ -158,7 +181,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "humanoid_instanceable.usd",
       "configuration/humanoid_instanceable_robot_schema.usd",
       "configuration/humanoid_robot_schema.usd",
-      "library/floors/flat_floor.usda",
+      MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -182,7 +205,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Humanoid-v0",
     },
     terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["library/floors/flat_floor.usda"],
+    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
   },
   {
     id: "anymal_c",
@@ -232,7 +255,6 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       "legacy/materials/thigh.jpg",
       "legacy/materials/top_shell.jpg",
       "legacy/materials/wide_angle_camera.jpg",
-      "terrain/rough_generator_exact_5x5.usda",
     ],
     badge: "USD",
     importLabel: "Load sample",
@@ -247,6 +269,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       usd: {
         floatingBase: true,
         selfCollision: false,
+        collisionProfile: "outer_hull",
       },
     },
     trainingDefaults: {
@@ -256,7 +279,8 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
       task: "Isaac-Velocity-Rough-Anymal-C-v0",
     },
     terrainOptions: ["none", "flat", "rough", "full_scene"],
-    environmentUsdEntries: ["terrain/rough_generator_exact_5x5.usda"],
+    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
+    fullSceneSceneAssetId: "floor:rough",
     usdVariants: [
       {
         id: "anymal_c",
@@ -275,7 +299,7 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
     label: "UR10 Sample",
     description: "Isaac Lab UR10 sample with Reach manager and original cube-stack IK manager variants.",
     kind: "usd",
-    entry: "ur10.usd",
+    entry: "Legacy/ur10.usd",
     files: [
       "Legacy/Props/Materials/material_library.usd",
       "Legacy/Props/long_gripper.usd",
@@ -364,10 +388,44 @@ export const LIBRARY_SAMPLES: LibrarySample[] = [
     },
     terrainOptions: ["none", "flat", "full_scene"],
     environmentUsdEntries: ["environment/ur10_table_cubes_scene.usda"],
+    sampleData: {
+      artifacts: [
+        {
+          id: "ur10-reach-default-policy",
+          label: "UR10 Reach Policy (placeholder)",
+          workspaceKey: "library/ur10/training/policies/ur10_reach_policy.onnx",
+          kind: "policy",
+          description: "Reserved contract entry for future bundled UR10 reach policy artifacts.",
+        },
+        {
+          id: "ur10-cube-stack-ik-checkpoint",
+          label: "UR10 Cube Stack IK Checkpoint (placeholder)",
+          workspaceKey: "library/ur10/training/checkpoints/ur10_stack_ik.ckpt",
+          kind: "training_checkpoint",
+          description: "Reserved contract entry for future bundled stack-IK training checkpoints.",
+        },
+      ],
+      metadata: {
+        modelFamily: "ur10",
+        supportStatus: "contract_only_placeholder",
+      },
+    },
     usdVariants: [
       {
         id: "standard",
         label: "Standard (default)",
+        entry: "Legacy/ur10.usd",
+        trainingDefaults: {
+          templateId: "isaaclab.ur10.reach.manager.v1",
+          recipeId: "isaaclab.ur10.reach.manager.v1",
+          taskTemplate: "ur10_reach_manager",
+          task: "Isaac-Reach-UR10-v0",
+          ikModelId: "none",
+        },
+      },
+      {
+        id: "modern_compact",
+        label: "Modern compact",
         entry: "ur10.usd",
         trainingDefaults: {
           templateId: "isaaclab.ur10.reach.manager.v1",
@@ -491,10 +549,24 @@ export function listLibrarySampleEnvironmentWorkspaceKeys(sample: LibrarySample)
   return Array.from(new Set(entries.map((entry) => resolveLibraryWorkspaceKey(sample, entry))));
 }
 
+export function buildLibrarySampleSceneAssetTerrainOptionValue(assetId: SceneAssetId): string {
+  return `${SAMPLE_TERRAIN_SCENE_ASSET_PREFIX}${assetId}`;
+}
+
+export function resolveLibrarySampleFullSceneSceneAssetId(sample: LibrarySample): SceneAssetId | null {
+  if (sample.kind !== "usd") return null;
+  const assetId = sample.fullSceneSceneAssetId;
+  return assetId ? assetId : null;
+}
+
 export function resolveDefaultSampleEnvironmentWorkspaceKey(
   sample: LibrarySample,
   selectedUsdWorkspaceKey: string | null | undefined
 ): string | null {
+  const fullSceneAssetId = resolveLibrarySampleFullSceneSceneAssetId(sample);
+  if (fullSceneAssetId && Array.isArray(sample.terrainOptions) && sample.terrainOptions.includes("full_scene")) {
+    return buildLibrarySampleSceneAssetTerrainOptionValue(fullSceneAssetId);
+  }
   const environmentEntries = listLibrarySampleEnvironmentWorkspaceKeys(sample);
   if (environmentEntries.length === 0) return null;
   const preferred = normalizeLibraryFile(String(selectedUsdWorkspaceKey ?? "").trim());
@@ -507,6 +579,7 @@ export function resolveDefaultSampleEnvironmentWorkspaceKey(
 export function hasLibrarySampleEnvironment(sample: LibrarySample): boolean {
   if (sample.kind !== "usd") return false;
   if (Array.isArray(sample.terrainOptions) && sample.terrainOptions.includes("full_scene")) return true;
+  if (resolveLibrarySampleFullSceneSceneAssetId(sample)) return true;
   return listLibrarySampleEnvironmentWorkspaceKeys(sample).length > 0;
 }
 

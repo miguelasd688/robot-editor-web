@@ -7,6 +7,7 @@ import {
   createMujocoRuntime,
   type MujocoRuntime,
   type JointActuatorConfig,
+  type MujocoRuntimeColliderSnapshot,
   type PointerInteractionMode,
   type PointerSpringDebugState,
   type PointerWorldPoint,
@@ -76,6 +77,7 @@ type MujocoState = {
   updatePointerTarget: (worldPoint: PointerWorldPoint | null) => void;
   endPointerInteraction: () => void;
   getPointerSpringDebugState: () => PointerSpringDebugState | null;
+  getRuntimeColliderSnapshots: () => Array<MujocoRuntimeColliderSnapshot & { runtimeId: string }>;
   getLastMJCF: () => string | null;
   updateInitialFromScene: () => void;
   markSceneDirty: (options?: { markUsdSourceDirty?: boolean }) => void;
@@ -680,6 +682,16 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
     }
     return null;
   },
+  getRuntimeColliderSnapshots: () => {
+    const snapshots: Array<MujocoRuntimeColliderSnapshot & { runtimeId: string }> = [];
+    for (const [runtimeId, rt] of runtimes.entries()) {
+      const runtimeSnapshots = rt.getRuntimeColliderSnapshots();
+      for (const snapshot of runtimeSnapshots) {
+        snapshots.push({ ...snapshot, runtimeId });
+      }
+    }
+    return snapshots;
+  },
   getLastMJCF: () => {
     for (const rt of runtimes.values()) {
       const xml = rt.getLastXML();
@@ -811,7 +823,8 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
 
         logInfo("MuJoCo: loading runtime", { scope: "mujoco", data: { mode: "single" } });
         const runtimeInstance = getRuntimeFor("default");
-        await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, buildResult.source);
+        const runtimeLoad = await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, buildResult.source);
+        warnings.push(...runtimeLoad.warnings);
         {
           const { pointerSpringStiffnessNPerM, pointerMaxForceN } = get();
           runtimeInstance.setPointerForceConfig({

@@ -13,7 +13,7 @@ import { useBrowserPreviewStore } from "../../app/core/store/useBrowserPreviewSt
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 import { logInfo, logWarn } from "../../app/core/services/logger";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
-import { isDefaultFloorWorkspaceKey } from "../../app/core/assets/floorAppearance";
+import { isDefaultFloorWorkspaceKey, isManagedRoughFloorWorkspaceKey } from "../../app/core/assets/floorAppearance";
 import { isUrdfLikePath } from "../../app/core/urdf/urdfFileTypes";
 import { DarkSelect } from "../../app/ui/DarkSelect";
 import { tickSimulation } from "./services/simulationService";
@@ -23,12 +23,14 @@ import { ThreeSceneAdapter } from "../../app/core/editor/adapters/three/ThreeSce
 import { setThreeAdapter } from "../../app/core/editor/adapters/three/adapterSingleton";
 import { hasBrowserImportPayload, payloadFromDataTransfer, type BrowserImportPayload } from "../asset-library/browserDragDrop";
 import {
+  buildLibrarySampleSceneAssetTerrainOptionValue,
   LIBRARY_ROOT,
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
   listLibrarySampleEnvironmentWorkspaceKeys,
   listLibrarySampleUsdWorkspaceKeys,
+  resolveLibrarySampleFullSceneSceneAssetId,
   resolveDefaultSampleEnvironmentWorkspaceKey,
 } from "../asset-library/librarySamples";
 import { importManager } from "../../app/core/environment/ImportManager";
@@ -56,6 +58,20 @@ const isUsdPath = (path: string) => {
 };
 const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
 const isLibraryWorkspaceKey = (path: string) => normalizeWorkspaceFilePath(path).startsWith(`${LIBRARY_ROOT}/`);
+const BROWSER_PREVIEW_CAPTURE = {
+  maxWidth: 640,
+  maxHeight: 360,
+  mimeType: "image/webp",
+  quality: 0.78,
+} as const;
+const DEFAULT_URDF_DEBUG_OPTIONS: UrdfDebugOptions = {
+  showVisuals: true,
+  showCollisions: false,
+  showInertias: false,
+  showCOM: false,
+  showAxes: false,
+  showJointAxes: false,
+};
 
 function isTerrainLikeWorkspaceUsdKey(key: string): boolean {
   const normalized = normalizeWorkspaceFilePath(key).toLowerCase();
@@ -65,6 +81,8 @@ function isTerrainLikeWorkspaceUsdKey(key: string): boolean {
     normalized.includes("/terrain/") ||
     normalized.includes("/environment/") ||
     normalized.includes("flat_floor") ||
+    normalized.includes("rough_terrain") ||
+    normalized.includes("rough_generator") ||
     normalized.includes("rough_preview") ||
     normalized.includes("table_scene")
   );
@@ -357,6 +375,8 @@ function resolveTerrainOptionPolicy(selectedUsdKey: string): TerrainOptionPolicy
 
 function buildTerrainDialogOptions(selectedUsdKey: string, terrainUsdKeys: string[]): TerrainDialogOption[] {
   const policy = resolveTerrainOptionPolicy(selectedUsdKey);
+  const sample = findLibrarySampleByWorkspaceKey(selectedUsdKey);
+  const fullSceneSceneAssetId = sample ? resolveLibrarySampleFullSceneSceneAssetId(sample) : null;
 
   const options: TerrainDialogOption[] = [
     {
@@ -372,23 +392,35 @@ function buildTerrainDialogOptions(selectedUsdKey: string, terrainUsdKeys: strin
 
   const terrainUsdOptions = Array.from(
     new Set(
-      [selectedUsdKey, ...(terrainUsdKeys ?? [])]
+      [...(terrainUsdKeys ?? [])]
         .map((key) => String(key ?? "").trim())
         .filter((key) => key.length > 0)
     )
   );
-  if (policy.allowFullScene && terrainUsdOptions.length > 0) {
-    for (const terrainUsdKey of terrainUsdOptions) {
-      const isSelectedVariant = terrainUsdKey === selectedUsdKey;
+  if (policy.allowFullScene) {
+    if (fullSceneSceneAssetId) {
       options.push({
-        value: terrainUsdKey,
-        mode: "usd",
-        usdKey: terrainUsdKey,
-        sceneAssetId: null,
+        value: buildLibrarySampleSceneAssetTerrainOptionValue(fullSceneSceneAssetId),
+        mode: "plane",
+        usdKey: null,
+        sceneAssetId: fullSceneSceneAssetId,
         replaceFullScene: true,
-        label: isSelectedVariant ? "Full environment bundle (selected)" : "Full environment bundle",
-        hint: "Replaces the entire scene and imports the environment USD bundle.",
+        label: "Full environment (generated)",
+        hint: "Replaces the entire scene and instantiates the generated environment for this sample.",
       });
+    } else if (terrainUsdOptions.length > 0) {
+      for (const terrainUsdKey of terrainUsdOptions) {
+        const isSelectedVariant = terrainUsdKey === selectedUsdKey;
+        options.push({
+          value: terrainUsdKey,
+          mode: "usd",
+          usdKey: terrainUsdKey,
+          sceneAssetId: null,
+          replaceFullScene: true,
+          label: isSelectedVariant ? "Full environment bundle (selected)" : "Full environment bundle",
+          hint: "Replaces the entire scene and imports the environment USD bundle.",
+        });
+      }
     }
   }
 
@@ -418,15 +450,28 @@ function buildTerrainDialogOptions(selectedUsdKey: string, terrainUsdKeys: strin
   }
 
   if (policy.allowRough) {
-    options.push({
-      value: TERRAIN_OPTION_ROUGH,
-      mode: "plane",
-      usdKey: null,
-      sceneAssetId: "floor:rough",
-      replaceFullScene: false,
-      label: "Rough floor (library)",
-      hint: "Uses your Rough Floor asset in viewport and built-in plane terrain mode for training.",
-    });
+    const roughFloorUsdKey = terrainUsdOptions.find((key) => isManagedRoughFloorWorkspaceKey(key)) ?? null;
+    if (roughFloorUsdKey) {
+      options.push({
+        value: TERRAIN_OPTION_ROUGH,
+        mode: "usd",
+        usdKey: roughFloorUsdKey,
+        sceneAssetId: null,
+        replaceFullScene: false,
+        label: "Rough floor (library)",
+        hint: "Imports the managed Rough Floor USD bundle and keeps it as terrain source-of-truth.",
+      });
+    } else {
+      options.push({
+        value: TERRAIN_OPTION_ROUGH,
+        mode: "plane",
+        usdKey: null,
+        sceneAssetId: "floor:rough",
+        replaceFullScene: false,
+        label: "Rough floor (library)",
+        hint: "Uses your Rough Floor container as fallback when managed rough terrain is unavailable.",
+      });
+    }
   }
   return options;
 }
@@ -645,10 +690,13 @@ export default function ViewportPanel() {
   const usdOptions = useAssetStore((s) => s.usdOptions);
   const setUSD = useAssetStore((s) => s.setUSD);
   const setUSDOptions = useAssetStore((s) => s.setUSDOptions);
+  const libraryCaptureQueue = useBrowserPreviewStore((s) => s.libraryCaptureQueue);
 
   const viewer = useMemo(() => new Viewer(), []);
   const adapterRef = useRef<ThreeSceneAdapter | null>(null);
   const pointerInteractionRef = useRef<{ pointerId: number; depth: number } | null>(null);
+  const debugOptionsRef = useRef<UrdfDebugOptions>(DEFAULT_URDF_DEBUG_OPTIONS);
+  const libraryPreviewCaptureInFlightRef = useRef<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [dropHint, setDropHint] = useState("Drop to import");
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
@@ -659,6 +707,7 @@ export default function ViewportPanel() {
   const fpsLastFrameRef = useRef<number | null>(null);
   const handleDebugChange = useCallback(
     (options: UrdfDebugOptions) => {
+      debugOptionsRef.current = options;
       viewer.setUrdfDebugOptions(options);
     },
     [viewer]
@@ -902,12 +951,7 @@ export default function ViewportPanel() {
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
-        const dataUrl = await viewer.captureThumbnail({
-          maxWidth: 640,
-          maxHeight: 360,
-          mimeType: "image/webp",
-          quality: 0.78,
-        });
+        const dataUrl = await viewer.captureThumbnail(BROWSER_PREVIEW_CAPTURE);
         if (!dataUrl) {
           useBrowserPreviewStore.getState().setFailed(normalizedKey);
           return;
@@ -922,6 +966,58 @@ export default function ViewportPanel() {
     [viewer]
   );
 
+  const captureLibraryItemPreviewIfNeeded = useCallback(
+    async (libraryItemId: string) => {
+      const normalizedKey = normalizeWorkspaceFilePath(libraryItemId);
+      if (!normalizedKey) return;
+
+      const previewStore = useBrowserPreviewStore.getState();
+      const current = previewStore.libraryItemPreviews[normalizedKey];
+      if (current?.status === "ready") {
+        previewStore.touchLibraryItem(normalizedKey);
+        return;
+      }
+      if (current?.status !== "loading") {
+        previewStore.markLibraryItemLoading(normalizedKey);
+      }
+
+      try {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        const dataUrl = await viewer.captureThumbnail(BROWSER_PREVIEW_CAPTURE);
+        if (!dataUrl) {
+          useBrowserPreviewStore.getState().setLibraryItemFailed(normalizedKey);
+          return;
+        }
+        const nextStore = useBrowserPreviewStore.getState();
+        nextStore.setLibraryItemReady(normalizedKey, dataUrl);
+        nextStore.evictLibraryItemOverflow(60);
+      } catch {
+        useBrowserPreviewStore.getState().setLibraryItemFailed(normalizedKey);
+      }
+    },
+    [viewer]
+  );
+
+  useEffect(() => {
+    if (libraryCaptureQueue.length === 0) return;
+    if (libraryPreviewCaptureInFlightRef.current) return;
+    const nextKey = libraryCaptureQueue[0];
+    if (!nextKey) return;
+
+    libraryPreviewCaptureInFlightRef.current = nextKey;
+    void (async () => {
+      try {
+        await captureLibraryItemPreviewIfNeeded(nextKey);
+      } finally {
+        const previewStore = useBrowserPreviewStore.getState();
+        previewStore.dequeueLibraryItemCapture(nextKey);
+        libraryPreviewCaptureInFlightRef.current = null;
+      }
+    })();
+  }, [captureLibraryItemPreviewIfNeeded, libraryCaptureQueue]);
+
   const confirmLoadUSD = useCallback(async (input: {
     options: UsdDialogFormOptions;
     usdKey: string;
@@ -934,20 +1030,27 @@ export default function ViewportPanel() {
     if (!selectedUsdKey) return;
     const terrainMode = input.terrainMode ?? "none";
     const requestedTerrainUsdKey = String(input.terrainUsdKey ?? "").trim() || null;
+    const resolvedImportOptions: UsdImportOptions = {
+      ...(usdDialogOptionOverrides ?? {}),
+      ...input.options,
+    };
+    const hasFullSceneTerrainSource =
+      (terrainMode === "usd" && Boolean(requestedTerrainUsdKey)) ||
+      (terrainMode === "plane" && Boolean(input.terrainAssetId));
     const shouldReplaceFullScene =
-      input.replaceFullScene === true && terrainMode === "usd" && Boolean(requestedTerrainUsdKey);
-    if (shouldReplaceFullScene) {
+      input.replaceFullScene === true && hasFullSceneTerrainSource;
+    const sceneRootsBeforeReplace = shouldReplaceFullScene ? collectAllSceneRootsForReplacement(viewer) : [];
+    if (shouldReplaceFullScene && sceneRootsBeforeReplace.length > 0) {
       const approved = window.confirm(
-        "This environment bundle will replace the full current scene. Continue and overwrite all assets?"
+        "This environment import will replace the full current scene. Continue and overwrite all assets?"
       );
       if (!approved) return;
     }
     setUSD(selectedUsdKey);
-    setUSDOptions(input.options);
+    setUSDOptions(resolvedImportOptions);
     closeUsdImportDialog();
     const assetStore = useAssetStore.getState();
     if (shouldReplaceFullScene) {
-      const sceneRootsBeforeReplace = collectAllSceneRootsForReplacement(viewer);
       useLoaderStore.getState().clear();
       logInfo("Viewport full-scene overwrite cleared all roots before USD environment import", {
         scope: "assets",
@@ -977,7 +1080,7 @@ export default function ViewportPanel() {
     const robotLoadResult = await importManager.import_usd({
       usdKey: selectedUsdKey,
       assets: assetStore.assets,
-      importOptions: input.options satisfies UsdImportOptions,
+      importOptions: resolvedImportOptions satisfies UsdImportOptions,
       bundleHintPaths: resolveScopedBundleHintPaths(selectedUsdKey, usdDialogBundleHintPaths),
     });
     diagnostics.push(...robotLoadResult.diagnostics);
@@ -1044,7 +1147,7 @@ export default function ViewportPanel() {
         const envLoadResult = await importManager.import_usd({
           usdKey: requestedTerrainUsdKey,
           assets: assetStore.assets,
-          importOptions: input.options satisfies UsdImportOptions,
+          importOptions: resolvedImportOptions satisfies UsdImportOptions,
           bundleHintPaths: resolveScopedBundleHintPaths(requestedTerrainUsdKey, usdDialogBundleHintPaths),
           sceneRole: "scene_asset",
           frameOnAdd: false,
@@ -1098,11 +1201,20 @@ export default function ViewportPanel() {
         terrainMode,
         replaceFullScene: shouldReplaceFullScene,
         diagnosticsCount: diagnostics.length,
-        options: input.options,
+        options: resolvedImportOptions,
       },
     });
     await captureWorkspacePreviewIfNeeded(selectedUsdKey);
-  }, [captureWorkspacePreviewIfNeeded, closeUsdImportDialog, setSelected, setUSD, setUSDOptions, usdDialogBundleHintPaths, viewer]);
+  }, [
+    captureWorkspacePreviewIfNeeded,
+    closeUsdImportDialog,
+    setSelected,
+    setUSD,
+    setUSDOptions,
+    usdDialogBundleHintPaths,
+    usdDialogOptionOverrides,
+    viewer,
+  ]);
 
   const confirmLoadURDF = useCallback(async (selectedOptions: UrdfDialogFormOptions) => {
     if (!urdfDialogKey) return;
@@ -1185,6 +1297,10 @@ export default function ViewportPanel() {
     viewer.setFrameCallback((dt) => {
       tickSimulation(dt);
 
+      const showRuntimeColliders = debugOptionsRef.current.showCollisions;
+      const runtimeColliders = showRuntimeColliders ? useMujocoStore.getState().getRuntimeColliderSnapshots() : null;
+      viewer.setRuntimeCollisionSnapshots(showRuntimeColliders ? runtimeColliders : null);
+
       const now = performance.now();
       const last = fpsLastFrameRef.current;
       fpsLastFrameRef.current = now;
@@ -1216,6 +1332,7 @@ export default function ViewportPanel() {
     return () => {
       viewer.setFrameCallback(null);
       viewer.setPointerSpringVisual(null);
+      viewer.setRuntimeCollisionSnapshots(null);
       fpsLastFrameRef.current = null;
     };
   }, [viewer]);
@@ -1227,6 +1344,7 @@ export default function ViewportPanel() {
     useMujocoStore.getState().endPointerInteraction();
     viewer.setOrbitEnabled(true);
     viewer.setPointerSpringVisual(null);
+    viewer.setRuntimeCollisionSnapshots(null);
   }, [simState, viewer]);
 
   useEffect(() => {
