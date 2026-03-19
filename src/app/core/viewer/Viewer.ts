@@ -795,11 +795,10 @@ export class Viewer {
     if (!hfield) return null;
     const nrow = Math.max(1, Math.trunc(hfield.nrow));
     const ncol = Math.max(1, Math.trunc(hfield.ncol));
-    const [sxRaw, syRaw, szRaw, baseRaw] = hfield.size;
+    const [sxRaw, syRaw, szRaw] = hfield.size;
     const sx = Math.max(1e-6, Math.abs(Number(sxRaw) || 1));
     const sy = Math.max(1e-6, Math.abs(Number(syRaw) || 1));
     const sz = Math.max(1e-6, Math.abs(Number(szRaw) || 0.2));
-    const base = Math.max(1e-6, Math.abs(Number(baseRaw) || 0.1));
     const vertexCount = nrow * ncol;
     if (vertexCount < 4) return null;
 
@@ -814,7 +813,7 @@ export class Viewer {
         const idx = row * ncol + col;
         const rawHeight = Number(hfield.heights[idx] ?? 0);
         const normalized = Number.isFinite(rawHeight) ? rawHeight : 0;
-        const z = normalized * sz - base;
+        const z = normalized * sz;
         positions[cursor] = x;
         positions[cursor + 1] = y;
         positions[cursor + 2] = z;
@@ -1563,9 +1562,9 @@ export class Viewer {
         .trim()
         .toLowerCase();
       if (surfaceProfile === "usd_pbr") {
-        pbr.envMapIntensity = Math.min(0.18, Math.max(0.02, pbr.envMapIntensity ?? 0.08));
-        pbr.roughness = Math.min(1.0, Math.max(0.85, pbr.roughness ?? 0.94));
-        pbr.metalness = Math.min(0.04, Math.max(0, pbr.metalness ?? 0));
+        pbr.envMapIntensity = Math.min(0.12, Math.max(0.01, pbr.envMapIntensity ?? 0.06));
+        pbr.roughness = Math.min(1.0, Math.max(0.9, pbr.roughness ?? 0.96));
+        pbr.metalness = Math.min(0.02, Math.max(0, pbr.metalness ?? 0));
         pbr.clearcoat = 0;
         pbr.clearcoatRoughness = Math.max(0.9, pbr.clearcoatRoughness ?? 0.94);
       } else {
@@ -1587,9 +1586,9 @@ export class Viewer {
         .trim()
         .toLowerCase();
       if (surfaceProfile === "usd_pbr") {
-        std.envMapIntensity = Math.min(0.18, Math.max(0.02, std.envMapIntensity ?? 0.08));
-        std.roughness = Math.min(1.0, Math.max(0.85, std.roughness ?? 0.94));
-        std.metalness = Math.min(0.04, Math.max(0, std.metalness ?? 0));
+        std.envMapIntensity = Math.min(0.12, Math.max(0.01, std.envMapIntensity ?? 0.06));
+        std.roughness = Math.min(1.0, Math.max(0.9, std.roughness ?? 0.96));
+        std.metalness = Math.min(0.02, Math.max(0, std.metalness ?? 0));
       } else {
         std.envMapIntensity = Math.max(1.0, std.envMapIntensity ?? 0);
         std.roughness = Math.min(0.82, Math.max(0.18, std.roughness ?? 0.5));

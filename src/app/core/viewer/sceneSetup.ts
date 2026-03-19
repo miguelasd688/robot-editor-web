@@ -108,17 +108,17 @@ export function createSceneBundle(
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.03;
+  renderer.toneMappingExposure = 0.97;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.VSMShadowMap;
   renderer.setClearColor(0x091425, 1);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b1930);
-  scene.fog = new THREE.Fog(0x0b1930, 30, 190);
+  scene.background = new THREE.Color(0x081426);
+  scene.fog = new THREE.Fog(0x081426, 42, 220);
 
   const pmremGenerator = new THREE.PMREMGenerator(renderer);
-  const environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04);
+  const environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.03);
   scene.environment = environment.texture;
   pmremGenerator.dispose();
 
@@ -213,10 +213,10 @@ export function createSceneBundle(
   });
   scene.add(transformControls);
 
-  const hemi = new THREE.HemisphereLight(0x9dbde0, 0x0a1524, 0.28);
+  const hemi = new THREE.HemisphereLight(0x9dbde0, 0x0a1524, 0.22);
   scene.add(hemi);
 
-  const key = new THREE.DirectionalLight(0xf8fcff, 1.8);
+  const key = new THREE.DirectionalLight(0xf8fcff, 2.05);
   key.position.set(8, 12, 6);
   key.castShadow = true;
   key.shadow.mapSize.set(4096, 4096);
@@ -235,11 +235,11 @@ export function createSceneBundle(
   scene.add(key.target);
   scene.add(key);
 
-  const fill = new THREE.DirectionalLight(0x5f89b8, 0.2);
+  const fill = new THREE.DirectionalLight(0x5f89b8, 0.14);
   fill.position.set(-8, 6, -5);
   scene.add(fill);
 
-  const rim = new THREE.DirectionalLight(0x8db0d4, 0.16);
+  const rim = new THREE.DirectionalLight(0x8db0d4, 0.12);
   rim.position.set(6, 4, -8);
   scene.add(rim);
 

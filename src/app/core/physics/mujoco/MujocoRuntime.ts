@@ -155,6 +155,9 @@ const MUJOCO_MIN_IMPRATIO_RAW = Number(import.meta.env.VITE_MUJOCO_MIN_IMPRATIO 
 const TERRAIN_MESH_VERTEX_LIMIT_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_MESH_VERTEX_LIMIT ?? "600000");
 const TERRAIN_MESH_FACE_LIMIT_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_MESH_FACE_LIMIT ?? "1200000");
 const TERRAIN_HEIGHTMAP_GRID_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_GRID ?? "96");
+const MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID_RAW = Number(
+  import.meta.env.VITE_MUJOCO_MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID ?? "320"
+);
 const TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_MIN_COVERAGE ?? "0.02");
 const TERRAIN_COLLISION_SIMPLIFIED_CODE = "MUJOCO_TERRAIN_COLLISION_SIMPLIFIED";
 const TERRAIN_COLLISION_INCOMPLETE_CODE = "MUJOCO_TERRAIN_COLLISION_INCOMPLETE";
@@ -202,6 +205,9 @@ const TERRAIN_MESH_FACE_LIMIT = Number.isFinite(TERRAIN_MESH_FACE_LIMIT_RAW)
 const TERRAIN_HEIGHTMAP_GRID = Number.isFinite(TERRAIN_HEIGHTMAP_GRID_RAW)
   ? Math.max(16, Math.min(256, Math.round(TERRAIN_HEIGHTMAP_GRID_RAW)))
   : 96;
+const MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID = Number.isFinite(MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID_RAW)
+  ? Math.max(64, Math.min(512, Math.round(MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID_RAW)))
+  : 320;
 const TERRAIN_HEIGHTMAP_MIN_COVERAGE = Number.isFinite(TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW)
   ? Math.max(0.001, Math.min(0.5, TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW))
   : 0.02;
@@ -1017,20 +1023,186 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     }
   };
 
-  const buildHeightfieldAsset = (bodyObj: THREE.Object3D, targetObj: THREE.Object3D): HfieldAssetBuildResult => {
+  const getHeightCoverage = (heights: Float64Array) => {
+    let covered = 0;
+    for (let i = 0; i < heights.length; i += 1) {
+      if (Number.isFinite(heights[i])) covered += 1;
+    }
+    return covered / Math.max(1, heights.length);
+  };
+
+  const seedHeightsFromVertices = (input: {
+    heights: Float64Array;
+    transformed: Float64Array;
+    vertexCount: number;
+    minX: number;
+    minY: number;
+    spanX: number;
+    spanY: number;
+    rows: number;
+    cols: number;
+  }) => {
+    for (let i = 0; i < input.vertexCount; i += 1) {
+      const base = i * 3;
+      const x = input.transformed[base];
+      const y = input.transformed[base + 1];
+      const z = input.transformed[base + 2];
+      const u = Math.max(0, Math.min(1, (x - input.minX) / input.spanX));
+      const v = Math.max(0, Math.min(1, (y - input.minY) / input.spanY));
+      const col = Math.max(0, Math.min(input.cols - 1, Math.round(u * (input.cols - 1))));
+      const row = Math.max(0, Math.min(input.rows - 1, Math.round(v * (input.rows - 1))));
+      const index = row * input.cols + col;
+      if (!Number.isFinite(input.heights[index]) || z > input.heights[index]) {
+        input.heights[index] = z;
+      }
+    }
+  };
+
+  const rasterizeHeightsFromTriangles = (input: {
+    heights: Float64Array;
+    transformed: Float64Array;
+    vertexCount: number;
+    indexAttr: THREE.BufferAttribute | null;
+    minX: number;
+    minY: number;
+    spanX: number;
+    spanY: number;
+    rows: number;
+    cols: number;
+  }) => {
+    const rowDenom = Math.max(1, input.rows - 1);
+    const colDenom = Math.max(1, input.cols - 1);
+    const sampleXs = new Float64Array(input.cols);
+    const sampleYs = new Float64Array(input.rows);
+    for (let col = 0; col < input.cols; col += 1) {
+      sampleXs[col] = input.minX + (col / colDenom) * input.spanX;
+    }
+    for (let row = 0; row < input.rows; row += 1) {
+      sampleYs[row] = input.minY + (row / rowDenom) * input.spanY;
+    }
+    const dx = input.cols > 1 ? input.spanX / (input.cols - 1) : input.spanX;
+    const dy = input.rows > 1 ? input.spanY / (input.rows - 1) : input.spanY;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || dx <= 1e-9 || dy <= 1e-9) {
+      return {
+        coverage: 0,
+        sampledTriangles: 0,
+      };
+    }
+    const indexCount = input.indexAttr?.count ?? 0;
+    const faceCount = input.indexAttr ? Math.floor(indexCount / 3) : Math.floor(input.vertexCount / 3);
+    const epsilon = 1e-9;
+    let sampledTriangles = 0;
+    for (let face = 0; face < faceCount; face += 1) {
+      const faceOffset = face * 3;
+      const ia = input.indexAttr ? Math.trunc(input.indexAttr.getX(faceOffset)) : faceOffset;
+      const ib = input.indexAttr ? Math.trunc(input.indexAttr.getX(faceOffset + 1)) : faceOffset + 1;
+      const ic = input.indexAttr ? Math.trunc(input.indexAttr.getX(faceOffset + 2)) : faceOffset + 2;
+      if (
+        ia < 0 ||
+        ib < 0 ||
+        ic < 0 ||
+        ia >= input.vertexCount ||
+        ib >= input.vertexCount ||
+        ic >= input.vertexCount
+      ) {
+        continue;
+      }
+      const aBase = ia * 3;
+      const bBase = ib * 3;
+      const cBase = ic * 3;
+      const ax = input.transformed[aBase];
+      const ay = input.transformed[aBase + 1];
+      const az = input.transformed[aBase + 2];
+      const bx = input.transformed[bBase];
+      const by = input.transformed[bBase + 1];
+      const bz = input.transformed[bBase + 2];
+      const cx = input.transformed[cBase];
+      const cy = input.transformed[cBase + 1];
+      const cz = input.transformed[cBase + 2];
+
+      const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+      if (!Number.isFinite(denom) || Math.abs(denom) <= 1e-12) continue;
+      const invDenom = 1 / denom;
+      const triMinX = Math.min(ax, bx, cx);
+      const triMaxX = Math.max(ax, bx, cx);
+      const triMinY = Math.min(ay, by, cy);
+      const triMaxY = Math.max(ay, by, cy);
+      const colStart = Math.max(0, Math.floor((triMinX - input.minX) / dx));
+      const colEnd = Math.min(input.cols - 1, Math.ceil((triMaxX - input.minX) / dx));
+      const rowStart = Math.max(0, Math.floor((triMinY - input.minY) / dy));
+      const rowEnd = Math.min(input.rows - 1, Math.ceil((triMaxY - input.minY) / dy));
+      if (colStart > colEnd || rowStart > rowEnd) continue;
+      sampledTriangles += 1;
+
+      for (let row = rowStart; row <= rowEnd; row += 1) {
+        const y = sampleYs[row];
+        for (let col = colStart; col <= colEnd; col += 1) {
+          const x = sampleXs[col];
+          const w1 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) * invDenom;
+          if (w1 < -epsilon) continue;
+          const w2 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) * invDenom;
+          if (w2 < -epsilon) continue;
+          const w3 = 1 - w1 - w2;
+          if (w3 < -epsilon) continue;
+          const z = w1 * az + w2 * bz + w3 * cz;
+          const idx = row * input.cols + col;
+          if (!Number.isFinite(input.heights[idx]) || z > input.heights[idx]) {
+            input.heights[idx] = z;
+          }
+        }
+      }
+    }
+    return {
+      coverage: getHeightCoverage(input.heights),
+      sampledTriangles,
+    };
+  };
+
+  type TerrainHeightfieldSample = {
+    heights: Float64Array;
+    rows: number;
+    cols: number;
+    minX: number;
+    minY: number;
+    spanX: number;
+    spanY: number;
+    minHeight: number;
+    maxHeight: number;
+    sourceVertexCount: number;
+    sourceFaceCount: number;
+    sampledTriangles: number;
+    coverage: number;
+    samplingFallback: "none" | "vertex_seed";
+    managedRoughTerrain: boolean;
+    gridSize: number;
+  };
+
+  type HfieldGeomEntry = Extract<GeomEntry, { kind: "hfield" }>;
+
+  const sampleTerrainHeightfield = (
+    bodyObj: THREE.Object3D,
+    targetObj: THREE.Object3D,
+    gridSizeOverride?: number
+  ): { ok: true; sample: TerrainHeightfieldSample } | { ok: false; failure: HfieldAssetBuildResult } => {
     const mesh = targetObj as THREE.Mesh;
     if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) {
       return {
-        hfieldName: null,
-        reason: "target_not_buffer_mesh",
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "target_not_buffer_mesh",
+        },
       };
     }
     if (isSimplePrimitiveMesh(mesh)) {
       const geometryType = (mesh.geometry as { type?: string } | undefined)?.type ?? "unknown";
       return {
-        hfieldName: null,
-        reason: "primitive_geometry",
-        detail: { geometryType },
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "primitive_geometry",
+          detail: { geometryType },
+        },
       };
     }
     const geometry = mesh.geometry;
@@ -1044,11 +1216,14 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       positionAttr.count < 3
     ) {
       return {
-        hfieldName: null,
-        reason: "invalid_position_attribute",
-        detail: {
-          itemSize: (positionAttr as { itemSize?: number } | null)?.itemSize ?? null,
-          count: (positionAttr as { count?: number } | null)?.count ?? null,
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "invalid_position_attribute",
+          detail: {
+            itemSize: (positionAttr as { itemSize?: number } | null)?.itemSize ?? null,
+            count: (positionAttr as { count?: number } | null)?.count ?? null,
+          },
         },
       };
     }
@@ -1058,8 +1233,11 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const faceCount = indexAttr ? indexedFaceCount : nonIndexedFaceCount;
     if (faceCount <= 0) {
       return {
-        hfieldName: null,
-        reason: "no_faces",
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "no_faces",
+        },
       };
     }
 
@@ -1100,48 +1278,73 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const spanY = maxY - minY;
     if (!Number.isFinite(spanX) || !Number.isFinite(spanY) || spanX <= 1e-6 || spanY <= 1e-6) {
       return {
-        hfieldName: null,
-        reason: "heightmap_bounds_degenerate",
-        detail: {
-          spanX: Number.isFinite(spanX) ? spanX : 0,
-          spanY: Number.isFinite(spanY) ? spanY : 0,
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "heightmap_bounds_degenerate",
+          detail: {
+            spanX: Number.isFinite(spanX) ? spanX : 0,
+            spanY: Number.isFinite(spanY) ? spanY : 0,
+          },
         },
       };
     }
 
-    const cols = TERRAIN_HEIGHTMAP_GRID;
-    const rows = TERRAIN_HEIGHTMAP_GRID;
-    const cellCount = cols * rows;
+    const managedRoughTerrain = isManagedRoughTerrainObject(targetObj);
+    const rawGridSize = Number.isFinite(gridSizeOverride)
+      ? Number(gridSizeOverride)
+      : managedRoughTerrain
+        ? MANAGED_ROUGH_TERRAIN_HEIGHTMAP_GRID
+        : TERRAIN_HEIGHTMAP_GRID;
+    const gridSize = Math.max(16, Math.round(rawGridSize));
+    const rows = gridSize;
+    const cols = gridSize;
+    const cellCount = rows * cols;
     const heights = new Float64Array(cellCount);
     heights.fill(Number.NEGATIVE_INFINITY);
 
-    for (let i = 0; i < vertexCount; i += 1) {
-      const base = i * 3;
-      const x = transformed[base];
-      const y = transformed[base + 1];
-      const z = transformed[base + 2];
-      const u = Math.max(0, Math.min(1, (x - minX) / spanX));
-      const v = Math.max(0, Math.min(1, (y - minY) / spanY));
-      const col = Math.max(0, Math.min(cols - 1, Math.round(u * (cols - 1))));
-      const row = Math.max(0, Math.min(rows - 1, Math.round(v * (rows - 1))));
-      const index = row * cols + col;
-      if (!Number.isFinite(heights[index]) || z > heights[index]) {
-        heights[index] = z;
-      }
+    const sampled = rasterizeHeightsFromTriangles({
+      heights,
+      transformed,
+      vertexCount,
+      indexAttr,
+      minX,
+      minY,
+      spanX,
+      spanY,
+      rows,
+      cols,
+    });
+    let coverage = sampled.coverage;
+    let samplingFallback: "none" | "vertex_seed" = "none";
+    if (!Number.isFinite(coverage) || coverage < TERRAIN_HEIGHTMAP_MIN_COVERAGE) {
+      seedHeightsFromVertices({
+        heights,
+        transformed,
+        vertexCount,
+        minX,
+        minY,
+        spanX,
+        spanY,
+        rows,
+        cols,
+      });
+      coverage = getHeightCoverage(heights);
+      samplingFallback = "vertex_seed";
     }
-
-    let covered = 0;
-    for (let i = 0; i < cellCount; i += 1) {
-      if (Number.isFinite(heights[i])) covered += 1;
-    }
-    const coverage = covered / Math.max(1, cellCount);
     if (!Number.isFinite(coverage) || coverage < TERRAIN_HEIGHTMAP_MIN_COVERAGE) {
       return {
-        hfieldName: null,
-        reason: "heightmap_sparse_coverage",
-        detail: {
-          coverage: Number.isFinite(coverage) ? Number(coverage.toFixed(4)) : 0,
-          minCoverage: TERRAIN_HEIGHTMAP_MIN_COVERAGE,
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "heightmap_sparse_coverage",
+          detail: {
+            coverage: Number.isFinite(coverage) ? Number(coverage.toFixed(4)) : 0,
+            minCoverage: TERRAIN_HEIGHTMAP_MIN_COVERAGE,
+            managedRoughTerrain,
+            gridSize,
+            samplingFallback,
+          },
         },
       };
     }
@@ -1156,86 +1359,225 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       if (value < minHeight) minHeight = value;
       if (value > maxHeight) maxHeight = value;
     }
-    const heightSpan = maxHeight - minHeight;
-    if (!Number.isFinite(heightSpan) || heightSpan <= 1e-6) {
+    if (!Number.isFinite(minHeight) || !Number.isFinite(maxHeight)) {
       return {
-        hfieldName: null,
-        reason: "hfield_height_degenerate",
-        detail: {
-          minHeight: Number.isFinite(minHeight) ? Number(minHeight.toFixed(6)) : 0,
-          maxHeight: Number.isFinite(maxHeight) ? Number(maxHeight.toFixed(6)) : 0,
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "hfield_height_degenerate",
+          detail: {
+            minHeight: Number.isFinite(minHeight) ? Number(minHeight.toFixed(6)) : 0,
+            maxHeight: Number.isFinite(maxHeight) ? Number(maxHeight.toFixed(6)) : 0,
+          },
         },
       };
     }
 
-    const radiusX = Math.max(0.001, spanX * 0.5);
-    const radiusY = Math.max(0.001, spanY * 0.5);
-    const heightScale = Math.max(0.001, heightSpan);
-    const baseDepth = Math.max(0.05, Math.min(2, heightScale * 0.25));
-    const invHeightSpan = 1 / heightSpan;
-    const elevationValues: string[] = [];
-    elevationValues.length = cellCount;
-    for (let i = 0; i < cellCount; i += 1) {
-      const normalized = Math.max(0, Math.min(1, (heights[i] - minHeight) * invHeightSpan));
-      elevationValues[i] = safe(normalized).toFixed(6);
-    }
-
-    inlineMeshCounter += 1;
-    const hfieldName = sanitizeMjcfName(`${getDocId(targetObj)}_terrain_hfield_${inlineMeshCounter}`, "hfield");
-    collisionAssetLines.push(
-      `    <hfield name="${hfieldName}" nrow="${rows}" ncol="${cols}" size="${radiusX.toFixed(6)} ${radiusY.toFixed(6)} ${heightScale.toFixed(6)} ${baseDepth.toFixed(6)}" elevation="${elevationValues.join(" ")}" />`
-    );
-    debugLog("terrain hfield collision emitted", {
-      meshName: targetObj.name,
-      hfieldName,
-      sourceVertexCount: vertexCount,
-      gridRows: rows,
-      gridCols: cols,
-      coverage: Number(coverage.toFixed(4)),
-      radiusX,
-      radiusY,
-      heightScale,
-      baseDepth,
-    });
     return {
-      hfieldName,
-      pos: new THREE.Vector3(minX + spanX * 0.5, minY + spanY * 0.5, minHeight),
-      reason: null,
-      detail: {
+      ok: true,
+      sample: {
+        heights,
+        rows,
+        cols,
+        minX,
+        minY,
+        spanX,
+        spanY,
+        minHeight,
+        maxHeight,
         sourceVertexCount: vertexCount,
-        gridRows: rows,
-        gridCols: cols,
-        coverage: Number(coverage.toFixed(4)),
-        radiusX: Number(radiusX.toFixed(6)),
-        radiusY: Number(radiusY.toFixed(6)),
-        heightScale: Number(heightScale.toFixed(6)),
-        baseDepth: Number(baseDepth.toFixed(6)),
+        sourceFaceCount: faceCount,
+        sampledTriangles: sampled.sampledTriangles,
+        coverage,
+        samplingFallback,
+        managedRoughTerrain,
+        gridSize,
       },
     };
   };
 
-  const resolveManagedRoughTerrainEntry = (
+  const emitHfieldFromGrid = (input: {
+    targetObj: THREE.Object3D;
+    heights: Float64Array;
+    rows: number;
+    cols: number;
+    minX: number;
+    minY: number;
+    spanX: number;
+    spanY: number;
+    allowDegenerate?: boolean;
+    nameHint?: string;
+  }): { ok: true; entry: HfieldGeomEntry; minHeight: number; maxHeight: number; heightScale: number; baseDepth: number } | {
+    ok: false;
+    failure: HfieldAssetBuildResult;
+  } => {
+    const cellCount = input.rows * input.cols;
+    if (cellCount <= 0 || input.heights.length < cellCount) {
+      return {
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "heightmap_sparse_coverage",
+          detail: {
+            rows: input.rows,
+            cols: input.cols,
+            cellCount,
+            providedHeights: input.heights.length,
+          },
+        },
+      };
+    }
+    if (!Number.isFinite(input.spanX) || !Number.isFinite(input.spanY) || input.spanX <= 1e-6 || input.spanY <= 1e-6) {
+      return {
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "heightmap_bounds_degenerate",
+          detail: {
+            spanX: Number.isFinite(input.spanX) ? Number(input.spanX.toFixed(6)) : 0,
+            spanY: Number.isFinite(input.spanY) ? Number(input.spanY.toFixed(6)) : 0,
+          },
+        },
+      };
+    }
+
+    let minHeight = Number.POSITIVE_INFINITY;
+    let maxHeight = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < cellCount; i += 1) {
+      const value = input.heights[i] as number;
+      if (!Number.isFinite(value)) continue;
+      if (value < minHeight) minHeight = value;
+      if (value > maxHeight) maxHeight = value;
+    }
+    const heightSpan = maxHeight - minHeight;
+    if (!Number.isFinite(minHeight) || !Number.isFinite(maxHeight) || (!input.allowDegenerate && heightSpan <= 1e-6)) {
+      return {
+        ok: false,
+        failure: {
+          hfieldName: null,
+          reason: "hfield_height_degenerate",
+          detail: {
+            minHeight: Number.isFinite(minHeight) ? Number(minHeight.toFixed(6)) : 0,
+            maxHeight: Number.isFinite(maxHeight) ? Number(maxHeight.toFixed(6)) : 0,
+          },
+        },
+      };
+    }
+
+    const effectiveHeightSpan = heightSpan > 1e-6 ? heightSpan : 1e-6;
+    const invHeightSpan = heightSpan > 1e-6 ? 1 / heightSpan : 0;
+    const elevationValues: string[] = [];
+    elevationValues.length = cellCount;
+    for (let i = 0; i < cellCount; i += 1) {
+      const normalized = heightSpan > 1e-6 ? Math.max(0, Math.min(1, (input.heights[i] - minHeight) * invHeightSpan)) : 0;
+      elevationValues[i] = safe(normalized).toFixed(6);
+    }
+
+    const radiusX = Math.max(0.001, input.spanX * 0.5);
+    const radiusY = Math.max(0.001, input.spanY * 0.5);
+    const heightScale = Math.max(0.001, effectiveHeightSpan);
+    const baseDepth = Math.max(0.05, Math.min(2, heightScale * 0.25));
+    inlineMeshCounter += 1;
+    const suffix = input.nameHint ? `_${input.nameHint}` : "";
+    const hfieldName = sanitizeMjcfName(
+      `${getDocId(input.targetObj)}_terrain_hfield_${inlineMeshCounter}${suffix}`,
+      "hfield"
+    );
+    collisionAssetLines.push(
+      `    <hfield name="${hfieldName}" nrow="${input.rows}" ncol="${input.cols}" size="${radiusX.toFixed(6)} ${radiusY.toFixed(6)} ${heightScale.toFixed(6)} ${baseDepth.toFixed(6)}" elevation="${elevationValues.join(" ")}" />`
+    );
+    return {
+      ok: true,
+      entry: {
+        kind: "hfield",
+        hfieldName,
+        pos: new THREE.Vector3(input.minX + input.spanX * 0.5, input.minY + input.spanY * 0.5, minHeight),
+      },
+      minHeight,
+      maxHeight,
+      heightScale,
+      baseDepth,
+    };
+  };
+
+  const buildHeightfieldAsset = (bodyObj: THREE.Object3D, targetObj: THREE.Object3D): HfieldAssetBuildResult => {
+    const sampled = sampleTerrainHeightfield(bodyObj, targetObj);
+    if (!sampled.ok) return sampled.failure;
+    const sample = sampled.sample;
+    const emitted = emitHfieldFromGrid({
+      targetObj,
+      heights: sample.heights,
+      rows: sample.rows,
+      cols: sample.cols,
+      minX: sample.minX,
+      minY: sample.minY,
+      spanX: sample.spanX,
+      spanY: sample.spanY,
+      allowDegenerate: false,
+    });
+    if (!emitted.ok) return emitted.failure;
+
+    debugLog("terrain hfield collision emitted", {
+      meshName: targetObj.name,
+      hfieldName: emitted.entry.hfieldName,
+      sourceVertexCount: sample.sourceVertexCount,
+      sourceFaceCount: sample.sourceFaceCount,
+      gridRows: sample.rows,
+      gridCols: sample.cols,
+      coverage: Number(sample.coverage.toFixed(4)),
+      sampledTriangles: sample.sampledTriangles,
+      samplingFallback: sample.samplingFallback,
+      managedRoughTerrain: sample.managedRoughTerrain,
+      heightScale: emitted.heightScale,
+      baseDepth: emitted.baseDepth,
+    });
+    return {
+      hfieldName: emitted.entry.hfieldName,
+      pos: emitted.entry.pos,
+      reason: null,
+      detail: {
+        sourceVertexCount: sample.sourceVertexCount,
+        sourceFaceCount: sample.sourceFaceCount,
+        gridRows: sample.rows,
+        gridCols: sample.cols,
+        coverage: Number(sample.coverage.toFixed(4)),
+        sampledTriangles: sample.sampledTriangles,
+        samplingFallback: sample.samplingFallback,
+        managedRoughTerrain: sample.managedRoughTerrain,
+        heightScale: Number(emitted.heightScale.toFixed(6)),
+        baseDepth: Number(emitted.baseDepth.toFixed(6)),
+      },
+    };
+  };
+
+  const resolveManagedRoughTerrainEntries = (
     bodyObj: THREE.Object3D,
     geomTarget: THREE.Object3D
-  ): { entry: GeomEntry; warning?: string; mode: "hfield" | "mesh" | "primitive" } => {
+  ): {
+    entries: GeomEntry[];
+    warning?: string;
+    counts: { hfield: number; mesh: number; primitive: number };
+  } => {
     const hfield = buildHeightfieldAsset(bodyObj, geomTarget);
     if (hfield.hfieldName) {
       return {
-        entry: {
-          kind: "hfield",
-          hfieldName: hfield.hfieldName,
-          pos: hfield.pos,
-          quat: hfield.quat,
-        },
-        mode: "hfield",
+        entries: [
+          {
+            kind: "hfield",
+            hfieldName: hfield.hfieldName,
+            pos: hfield.pos,
+            quat: hfield.quat,
+          },
+        ],
+        counts: { hfield: 1, mesh: 0, primitive: 0 },
       };
     }
 
     const fullMesh = buildInlineMeshAsset(bodyObj, geomTarget);
     if (fullMesh.meshName) {
       return {
-        entry: { kind: "mesh", meshName: fullMesh.meshName },
-        mode: "mesh",
+        entries: [{ kind: "mesh", meshName: fullMesh.meshName }],
+        counts: { hfield: 0, mesh: 1, primitive: 0 },
         warning: buildTerrainSimplifiedWarning({
           objectLabel: geomTarget.name || getDocId(geomTarget),
           mode: "mesh",
@@ -1248,8 +1590,8 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const info = maybePromoteTerrainMeshToPlane(geomTarget, inferred);
     const relative = resolveRelativeTransform(bodyObj, geomTarget);
     return {
-      entry: { kind: "primitive", info, pos: relative.pos, quat: relative.quat },
-      mode: "primitive",
+      entries: [{ kind: "primitive", info, pos: relative.pos, quat: relative.quat }],
+      counts: { hfield: 0, mesh: 0, primitive: 1 },
       warning: buildTerrainSimplifiedWarning({
         objectLabel: geomTarget.name || getDocId(geomTarget),
         mode: "primitive",
@@ -1384,11 +1726,11 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const appendEntry = (geomTarget: THREE.Object3D) => {
       const managedRoughTerrain = terrainLike && isManagedRoughTerrainObject(geomTarget);
       if (managedRoughTerrain) {
-        const resolved = resolveManagedRoughTerrainEntry(linkObj, geomTarget);
-        geomEntries.push(resolved.entry);
-        if (resolved.mode === "hfield") hfieldGeoms += 1;
-        else if (resolved.mode === "mesh") meshGeoms += 1;
-        else primitiveGeoms += 1;
+        const resolved = resolveManagedRoughTerrainEntries(linkObj, geomTarget);
+        geomEntries.push(...resolved.entries);
+        hfieldGeoms += resolved.counts.hfield;
+        meshGeoms += resolved.counts.mesh;
+        primitiveGeoms += resolved.counts.primitive;
         if (resolved.warning) warnings.push(resolved.warning);
         return;
       }
@@ -1658,11 +2000,11 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       const orderedTargets = sortTerrainTargets(meshTargets.length > 0 ? meshTargets : [obj]);
       attemptedTargets = orderedTargets.length;
       for (const target of orderedTargets) {
-        const resolved = resolveManagedRoughTerrainEntry(obj, target);
-        geomEntries.push(resolved.entry);
-        if (resolved.mode === "hfield") hfieldGeoms += 1;
-        else if (resolved.mode === "mesh") meshGeoms += 1;
-        else primitiveGeoms += 1;
+        const resolved = resolveManagedRoughTerrainEntries(obj, target);
+        geomEntries.push(...resolved.entries);
+        hfieldGeoms += resolved.counts.hfield;
+        meshGeoms += resolved.counts.mesh;
+        primitiveGeoms += resolved.counts.primitive;
         if (resolved.warning) warnings.push(resolved.warning);
       }
       pushTerrainCollisionCoverage({

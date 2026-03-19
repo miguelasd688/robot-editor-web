@@ -303,19 +303,23 @@ export function createDefaultFloorMaterial(): THREE.MeshPhysicalMaterial {
 }
 
 export function createRoughFloorMaterial(): THREE.MeshPhysicalMaterial {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xffffff,
+  const material = new THREE.MeshPhysicalMaterial({
+    // Slightly darker neutral gray so rough terrain does not blow out under key light.
+    color: 0xb8bdc4,
     map: getSharedRoughFloorMap(),
     roughnessMap: getSharedRoughFloorNoise(),
     bumpMap: getSharedRoughFloorNoise(),
-    bumpScale: 0.045,
-    roughness: 0.76,
-    metalness: 0.06,
-    clearcoat: 0.04,
-    clearcoatRoughness: 0.88,
-    reflectivity: 0.15,
-    envMapIntensity: 0.38,
+    bumpScale: 0.012,
+    roughness: 0.98,
+    metalness: 0.0,
+    clearcoat: 0.0,
+    clearcoatRoughness: 1.0,
+    reflectivity: 0.0,
+    envMapIntensity: 0.02,
   });
+  material.flatShading = true;
+  (material.userData ??= {}).viewportSurfaceProfile = "usd_pbr";
+  return material;
 }
 
 export function applyDefaultFloorAppearanceToMesh(
@@ -332,10 +336,13 @@ export function applyRoughFloorAppearanceToMesh(
   mesh: THREE.Mesh,
   sharedMaterial?: THREE.MeshPhysicalMaterial
 ): void {
+  // Keep hard-edged terrain facets for step readability in the viewport.
   mesh.geometry.computeVertexNormals();
   ensurePlanarUv(mesh.geometry);
   const material = sharedMaterial ?? createRoughFloorMaterial();
-  material.flatShading = false;
+  material.flatShading = true;
+  (material.userData ??= {}).viewportSurfaceProfile = "usd_pbr";
+  material.needsUpdate = true;
   mesh.material = material;
   mesh.receiveShadow = true;
   mesh.castShadow = false;

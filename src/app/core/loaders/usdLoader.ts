@@ -19,7 +19,9 @@ import {
 } from "./usdConverterClient";
 import {
   applyDefaultFloorAppearanceToMesh,
+  applyRoughFloorAppearanceToMesh,
   createDefaultFloorMaterial,
+  createRoughFloorMaterial,
   isDefaultFloorWorkspaceKey,
   isManagedRoughFloorWorkspaceKey,
 } from "../assets/floorAppearance";
@@ -528,8 +530,8 @@ const applyRoughFloorAppearanceToSceneAsset = (root: THREE.Object3D): number =>
   applyManagedFloorAppearanceToSceneAsset(root, {
     materialName: "Rough Floor",
     materialSource: "editor.rough_floor",
-    createMaterial: createDefaultFloorMaterial,
-    applyToMesh: applyDefaultFloorAppearanceToMesh,
+    createMaterial: createRoughFloorMaterial,
+    applyToMesh: applyRoughFloorAppearanceToMesh,
   });
 
 const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) => {
