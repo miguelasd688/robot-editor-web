@@ -26,6 +26,7 @@ import {
   ensureLibrarySampleImported,
   ensureLibraryWorkspaceKeysImported,
   findLibrarySampleByWorkspaceKey,
+  getLibrarySampleVariantByWorkspaceKey,
   getLibrarySampleById,
   getLibrarySampleEnvironmentById,
   listLibrarySampleEnvironments,
@@ -115,8 +116,10 @@ function collectAllSceneRootsForReplacement(viewer: Viewer) {
 function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] | null | undefined): string[] | undefined {
   const hints = (bundleHintPaths ?? [])
     .map((item) => String(item ?? "").trim())
+    .map((item) => normalizeWorkspaceFilePath(item))
     .filter((item) => item.length > 0);
   if (hints.length === 0) return undefined;
+  const uniqueHints = Array.from(new Set(hints));
   const normalizedUsdKey = normalizeWorkspaceFilePath(usdKey);
   const usdDir = (() => {
     const idx = normalizedUsdKey.lastIndexOf("/");
@@ -126,8 +129,7 @@ function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] 
 
   const sample = findLibrarySampleByWorkspaceKey(usdKey);
   if (!sample || sample.kind !== "usd") {
-    const scoped = hints.filter((item) => {
-      const normalizedHint = normalizeWorkspaceFilePath(item);
+    const scoped = uniqueHints.filter((normalizedHint) => {
       if (!normalizedHint) return false;
       if (normalizedHint === normalizedUsdKey) return true;
 
@@ -148,22 +150,20 @@ function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] 
     return scoped.length > 0 ? scoped : undefined;
   }
 
-  const samplePrefix = normalizeWorkspaceFilePath(`${resolveLibraryBundleRoot(sample)}/`);
+  const sampleRoot = normalizeWorkspaceFilePath(resolveLibraryBundleRoot(sample));
+  const samplePrefix = `${sampleRoot}/`;
   if (!normalizedUsdKey.startsWith(samplePrefix)) return hints;
-  const relativeEntry = normalizedUsdKey.slice(samplePrefix.length);
-  const entryDir = relativeEntry.includes("/") ? relativeEntry.slice(0, relativeEntry.lastIndexOf("/") + 1) : "";
-  if (!entryDir) return hints;
-  const scoped = hints.filter((item) => {
-    const normalizedHint = normalizeWorkspaceFilePath(item);
+  // For catalog-backed USD samples keep full sample-relative hint scope.
+  // Variants often reference sibling trees (for example `configuration/` and `grippers/`)
+  // that should not be dropped just because the selected entry lives under `Legacy/`.
+  const scoped = uniqueHints.filter((normalizedHint) => {
     if (!normalizedHint) return false;
     if (normalizedHint.startsWith(`${LIBRARY_ROOT}/`)) {
-      if (normalizedHint === normalizedUsdKey) return true;
-      if (usdDir && normalizedHint.startsWith(`${usdDir}/`)) return true;
-      return false;
+      return normalizedHint === normalizedUsdKey || normalizedHint.startsWith(samplePrefix);
     }
-    return normalizedHint.startsWith(entryDir) || normalizedHint.startsWith("terrain/") || normalizedHint.startsWith("environment/");
+    return true;
   });
-  return scoped.length > 0 ? scoped : hints;
+  return scoped.length > 0 ? scoped : uniqueHints;
 }
 
 type UrdfDialogFormOptions = {
@@ -313,6 +313,11 @@ type UsdDialogVariantOption = {
   value: string;
   label: string;
   description?: string;
+  importHints?: {
+    referenceVariantId?: string;
+    extraBundleHintPaths?: string[];
+    posePolicy?: "auto" | "prefer_frame_pair" | "prefer_mjcf";
+  };
 };
 
 type UsdDialogEnvironmentOption = {
@@ -344,6 +349,7 @@ function UsdImportDialogOverlay(props: {
       value: resolveLibraryWorkspaceKey(sample, variant.entry),
       label: variant.label,
       ...(variant.description ? { description: variant.description } : {}),
+      ...(variant.importHints ? { importHints: { ...variant.importHints } } : {}),
     }));
   }, [sample, usdKey]);
   const [selectedUsdKey, setSelectedUsdKey] = useState<string>(variantOptions[0]?.value ?? usdKey ?? "");
@@ -1000,6 +1006,73 @@ export default function ViewportPanel() {
       ...(usdDialogOptionOverrides ?? {}),
       ...input.options,
     };
+    const selectedVariant = sample && sample.kind === "usd"
+      ? getLibrarySampleVariantByWorkspaceKey(sample, selectedUsdKey)
+      : null;
+    const variantImportHints = selectedVariant?.importHints ?? null;
+    const referenceUsdKey = (() => {
+      if (!sample || sample.kind !== "usd") return null;
+      const referenceVariantId = String(variantImportHints?.referenceVariantId ?? "").trim();
+      if (!referenceVariantId) return null;
+      const referenceVariant =
+        listLibrarySampleUsdVariants(sample, { includeHidden: true }).find((variant) => variant.id === referenceVariantId) ??
+        null;
+      if (!referenceVariant) return null;
+      return resolveLibraryWorkspaceKey(sample, referenceVariant.entry);
+    })();
+    const variantExtraBundleWorkspaceKeys = sample && sample.kind === "usd"
+      ? (variantImportHints?.extraBundleHintPaths ?? [])
+          .map((item) => String(item ?? "").trim())
+          .filter((item) => item.length > 0)
+          .map((item) =>
+            normalizeWorkspaceFilePath(item).startsWith(`${LIBRARY_ROOT}/`)
+              ? normalizeWorkspaceFilePath(item)
+              : resolveLibraryWorkspaceKey(sample, item)
+          )
+      : [];
+    const variantHintWorkspaceKeys = Array.from(
+      new Set([
+        ...variantExtraBundleWorkspaceKeys,
+        ...(referenceUsdKey ? [referenceUsdKey] : []),
+      ])
+    );
+    if (variantHintWorkspaceKeys.length > 0) {
+      const ready = await ensureLibraryWorkspaceKeysImported(
+        variantHintWorkspaceKeys,
+        () => useAssetStore.getState().assets,
+        useAssetStore.getState().importFiles
+      );
+      if (!ready) {
+        useTrainingImportContextStore.getState().setDiagnostics([
+          environmentDocumentManager.buildImportDiagnostic({
+            code: "USD_VARIANT_HINT_IMPORT_MISSING_ASSETS",
+            severity: "error",
+            message: "Variant import hints reference assets that could not be loaded into workspace assets.",
+            context: {
+              usdKey: selectedUsdKey,
+              variantId: selectedVariant?.id ?? null,
+              missingVariantHintAssets: variantHintWorkspaceKeys,
+            },
+          }),
+        ]);
+        return;
+      }
+    }
+    const robotBundleHintPaths = resolveScopedBundleHintPaths(
+      selectedUsdKey,
+      [
+        ...(usdDialogBundleHintPaths ?? []),
+        ...variantExtraBundleWorkspaceKeys,
+        ...(referenceUsdKey ? [referenceUsdKey] : []),
+      ]
+    );
+    const robotVariantImportHints =
+      variantImportHints || referenceUsdKey
+        ? {
+            ...(referenceUsdKey ? { referenceUsdKey } : {}),
+            ...(variantImportHints?.posePolicy ? { posePolicy: variantImportHints.posePolicy } : {}),
+          }
+        : undefined;
     const shouldReplaceFullScene = selectedEnvironment !== null || environmentOverrideActive;
     const sceneRootsBeforeReplace = shouldReplaceFullScene ? collectAllSceneRootsForReplacement(viewer) : [];
     if (shouldReplaceFullScene && sceneRootsBeforeReplace.length > 0) {
@@ -1011,7 +1084,6 @@ export default function ViewportPanel() {
     setUSD(selectedUsdKey);
     setUSDOptions(resolvedImportOptions);
     closeUsdImportDialog();
-    const assetStore = useAssetStore.getState();
     const diagnostics: ReturnType<typeof useTrainingImportContextStore.getState>["diagnostics"] = [];
     const executionActions: ImportExecutionAction[] = [];
     if (selectedEnvironment && sample) {
@@ -1087,10 +1159,12 @@ export default function ViewportPanel() {
       }
     }
 
+    const latestAssets = useAssetStore.getState().assets;
     const executionResult = await importManager.executeUsdImportPlan({
-      assets: assetStore.assets,
+      assets: latestAssets,
       robotUsdKey: selectedUsdKey,
-      robotBundleHintPaths: resolveScopedBundleHintPaths(selectedUsdKey, usdDialogBundleHintPaths),
+      robotBundleHintPaths,
+      robotVariantImportHints,
       options: resolvedImportOptions satisfies UsdImportOptions,
       environmentId: selectedEnvironment?.id ?? null,
       environmentOverrideActive,
@@ -1135,6 +1209,8 @@ export default function ViewportPanel() {
         terrainMode: executionResult.terrainMode,
         replaceFullScene: shouldReplaceFullScene,
         diagnosticsCount: diagnostics.length,
+        variantId: selectedVariant?.id ?? null,
+        variantImportHints: robotVariantImportHints ?? null,
         replacedRoots: executionResult.replacedRoots,
         runtimeBuildReport: executionResult.runtimeBuildReport,
         options: resolvedImportOptions,

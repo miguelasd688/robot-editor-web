@@ -3,4 +3,5 @@ export type UsdImportOptions = {
   selfCollision?: boolean;
   meshSceneProfile?: "balanced" | "high_fidelity";
   collisionProfile?: "authored" | "outer_hull";
+  debugTrace?: "off" | "detailed";
 };

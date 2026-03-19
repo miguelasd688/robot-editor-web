@@ -655,6 +655,18 @@
           "defaultEnvironmentId": "stack",
           "entry": "Legacy/ur10_long_suction.usd",
           "id": "long_suction",
+          "importHints": {
+            "extraBundleHintPaths": [
+              "configuration/ur10_robot_schema.usd",
+              "configuration/ur10_physics.usd",
+              "configuration/ur10_sensor.usd",
+              "configuration/ur10_base.usd",
+              "grippers/long_gripper.usd",
+              "Legacy/Props/Materials/material_library.usd"
+            ],
+            "posePolicy": "auto",
+            "referenceVariantId": "standard"
+          },
           "label": "Long suction",
           "trainingDefaults": {
             "ikModelId": "native_stack_ik",
@@ -668,6 +680,18 @@
           "defaultEnvironmentId": "stack",
           "entry": "Legacy/ur10_short_suction.usd",
           "id": "short_suction",
+          "importHints": {
+            "extraBundleHintPaths": [
+              "configuration/ur10_robot_schema.usd",
+              "configuration/ur10_physics.usd",
+              "configuration/ur10_sensor.usd",
+              "configuration/ur10_base.usd",
+              "grippers/short_gripper.usd",
+              "Legacy/Props/Materials/material_library.usd"
+            ],
+            "posePolicy": "auto",
+            "referenceVariantId": "standard"
+          },
           "label": "Short suction",
           "trainingDefaults": {
             "ikModelId": "native_stack_ik",

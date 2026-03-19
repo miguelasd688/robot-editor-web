@@ -25,6 +25,18 @@ import {
   isDefaultFloorWorkspaceKey,
   isManagedRoughFloorWorkspaceKey,
 } from "../assets/floorAppearance";
+import {
+  buildJointPoseError,
+  chooseUsdJointPoseSource,
+  type UsdJointPoseDecision,
+  type UsdJointPoseError,
+  type UsdJointPosePolicy,
+} from "./usdPosePolicy";
+
+export type UsdVariantImportHints = {
+  referenceUsdKey?: string | null;
+  posePolicy?: UsdJointPosePolicy;
+};
 
 export type USDLoaderParams = {
   usdUrl: string;
@@ -44,6 +56,7 @@ export type USDLoaderParams = {
   converterAssetId?: string;
   assetsByKey?: Record<string, UsdWorkspaceAssetEntry>;
   bundleHintPaths?: string[];
+  variantImportHints?: UsdVariantImportHints;
 };
 
 type MjcfGeomDef = {
@@ -175,6 +188,7 @@ type UsdConverterMeshSceneMesh = {
   roughnessFactor?: unknown;
   emissiveFactor?: unknown;
   opacityFactor?: unknown;
+  materialChannelSources?: unknown;
 };
 
 type UsdConverterMeshScenePrimitive = {
@@ -205,6 +219,7 @@ type UsdConverterMeshScenePrimitive = {
   roughnessFactor?: unknown;
   emissiveFactor?: unknown;
   opacityFactor?: unknown;
+  materialChannelSources?: unknown;
 };
 
 type UsdConverterMeshSceneBody = {
@@ -277,6 +292,17 @@ type NormalizedUsdIntrospection = {
   stageUpAxis: "X" | "Y" | "Z" | "unknown";
 };
 
+type NormalizedUsdMaterialChannelSources = {
+  baseColor: "explicit" | "generic_fallback" | null;
+  normal: "explicit" | "generic_fallback" | null;
+  metallic: "explicit" | "generic_fallback" | null;
+  roughness: "explicit" | "generic_fallback" | null;
+  metallicRoughness: "explicit" | "generic_fallback" | null;
+  occlusion: "explicit" | "generic_fallback" | null;
+  emissive: "explicit" | "generic_fallback" | null;
+  opacity: "explicit" | "generic_fallback" | null;
+};
+
 type NormalizedUsdMeshSceneMesh = {
   name: string;
   primPath: string;
@@ -304,6 +330,7 @@ type NormalizedUsdMeshSceneMesh = {
   roughnessFactor: number | null;
   emissiveFactor: [number, number, number] | null;
   opacityFactor: number | null;
+  materialChannelSources: NormalizedUsdMaterialChannelSources | null;
 };
 
 type NormalizedUsdMeshScenePrimitiveKind = "sphere" | "capsule" | "cylinder" | "cone" | "cube";
@@ -336,6 +363,7 @@ type NormalizedUsdMeshScenePrimitive = {
   roughnessFactor: number | null;
   emissiveFactor: [number, number, number] | null;
   opacityFactor: number | null;
+  materialChannelSources: NormalizedUsdMaterialChannelSources | null;
 };
 
 type NormalizedUsdMeshSceneBody = {
@@ -444,6 +472,24 @@ const resolveUsdCollisionProfile = (
     return "outer_hull";
   }
   return "authored";
+};
+
+const resolveUsdImportDebugTrace = (
+  importOptions?: UsdImportOptions
+): "off" | "detailed" => {
+  if (importOptions?.debugTrace === "detailed") return "detailed";
+  const envToken = String(import.meta.env.VITE_USD_IMPORT_DEBUG ?? "")
+    .trim()
+    .toLowerCase();
+  if (envToken === "1" || envToken === "true" || envToken === "yes") return "detailed";
+  return "off";
+};
+
+const createUsdImportTraceId = (usdKey: string) => {
+  const seed = String(usdKey ?? "").split("/").pop() ?? "usd";
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${seed}:${ts}:${rand}`;
 };
 
 const normalizeUsdConverterDiagnostics = (value: unknown): NormalizedUsdConverterDiagnostics => {
@@ -1156,11 +1202,40 @@ const addMjcfGeomMeshes = (
   return { visuals, collisions };
 };
 
+type UsdJointPoseDecisionRecord = {
+  jointName: string;
+  parentLinkName: string;
+  childLinkName: string;
+  source: "frame_pair" | "mjcf_body";
+  reason: UsdJointPoseDecision["reason"];
+  framePairMismatchDistance: number | null;
+  framePairErrorToMjcf: UsdJointPoseError | null;
+  framePairErrorToMesh: UsdJointPoseError | null;
+  mjcfErrorToMesh: UsdJointPoseError | null;
+  meshReferenceSource: "payload_local" | "world_rebased" | "none";
+};
+
+type UsdJointPoseDecisionSummary = {
+  totalDecisions: number;
+  framePairDecisions: number;
+  mjcfDecisions: number;
+  fallbackCount: number;
+  fallbackJoints: string[];
+  decisions: UsdJointPoseDecisionRecord[];
+};
+
 const buildRobotFromMjcf = (
   parsed: ParsedMjcf,
   robotName: string,
-  options?: { instantiateRenderGroups?: boolean; introspection?: NormalizedUsdIntrospection | null }
-): { root: THREE.Group; linkCount: number; jointCount: number } => {
+  options?: {
+    instantiateRenderGroups?: boolean;
+    introspection?: NormalizedUsdIntrospection | null;
+    meshScene?: NormalizedUsdMeshScene | null;
+    posePolicy?: UsdJointPosePolicy;
+    traceId?: string;
+    debugTraceDetailed?: boolean;
+  }
+): { root: THREE.Group; linkCount: number; jointCount: number; poseSummary: UsdJointPoseDecisionSummary } => {
   const robotRoot = new THREE.Group();
   const robotRootFlagged = robotRoot as THREE.Group & { isRobot?: boolean };
   robotRoot.name = robotName;
@@ -1184,6 +1259,19 @@ const buildRobotFromMjcf = (
   const usedIntrospectionJointIndexes = new Set<number>();
   let linkCount = 0;
   let jointCount = 0;
+  const posePolicy: UsdJointPosePolicy = options?.posePolicy ?? "auto";
+  const debugTraceDetailed = options?.debugTraceDetailed === true;
+  const traceId = String(options?.traceId ?? "").trim() || null;
+  const meshSceneBodyByToken = new Map(
+    (options?.meshScene?.bodies ?? [])
+      .map((body) => {
+        const token = normalizeBodyToken(body.name);
+        return token ? ([token, body] as const) : null;
+      })
+      .filter((entry): entry is readonly [string, NormalizedUsdMeshSceneBody] => Boolean(entry))
+  );
+  const poseDecisionRecords: UsdJointPoseDecisionRecord[] = [];
+  const poseFallbackJoints: string[] = [];
 
   const normalizeJointToken = (value: string | null | undefined) => {
     const raw = String(value ?? "").trim();
@@ -1237,7 +1325,33 @@ const buildRobotFromMjcf = (
     return {
       positionError: impliedChildPos.distanceTo(bodyPos),
       rotationError: impliedChildQuat.angleTo(bodyQuat),
+      impliedChildPose: {
+        position: [impliedChildPos.x, impliedChildPos.y, impliedChildPos.z] as [number, number, number],
+        quaternion: impliedChildQuat,
+      },
+      mjcfPose: {
+        position: [bodyPos.x, bodyPos.y, bodyPos.z] as [number, number, number],
+        quaternion: bodyQuat,
+      },
       childPoseInJoint,
+    };
+  };
+
+  const resolveMeshReferencePose = (parentLinkName: string, childLinkName: string) => {
+    const childToken = normalizeBodyToken(childLinkName);
+    if (!childToken) return null;
+    const childBody = meshSceneBodyByToken.get(childToken);
+    if (!childBody) return null;
+    const expectedParentToken = normalizeBodyToken(parentLinkName);
+    const resolved = resolveMeshSceneBodyLocalPose({
+      body: childBody,
+      expectedParentToken,
+      bodyByToken: meshSceneBodyByToken,
+    });
+    if (!resolved) return null;
+    return {
+      ...resolved.localPose,
+      source: resolved.source,
     };
   };
 
@@ -1397,14 +1511,55 @@ const buildRobotFromMjcf = (
             : null)
       );
       const hasFramePair = Boolean(frame0Local && frame1Local);
-      const frameMismatchDistance = Number(introspectionJoint?.frameMismatchDistance);
+      const frameMismatchDistanceToken = Number(introspectionJoint?.frameMismatchDistance);
+      const frameMismatchDistance = Number.isFinite(frameMismatchDistanceToken) ? frameMismatchDistanceToken : null;
       const framePairMismatchOk =
-        !Number.isFinite(frameMismatchDistance) || frameMismatchDistance <= FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M;
-      const useFramePair = hasFramePair && framePairMismatchOk;
+        frameMismatchDistance === null || frameMismatchDistance <= FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M;
       const framePairComparison =
         frame0Local && frame1Local ? compareFramePairAgainstBodyPose(frame0Local, frame1Local, body) : null;
+      const meshReferencePose = resolveMeshReferencePose(parentLinkName, linkName);
+      const framePairErrorToMesh =
+        framePairComparison && meshReferencePose
+          ? buildJointPoseError(
+              new THREE.Vector3(
+                framePairComparison.impliedChildPose.position[0],
+                framePairComparison.impliedChildPose.position[1],
+                framePairComparison.impliedChildPose.position[2]
+              ).distanceTo(
+                new THREE.Vector3(
+                  meshReferencePose.position[0],
+                  meshReferencePose.position[1],
+                  meshReferencePose.position[2]
+                )
+              ),
+              framePairComparison.impliedChildPose.quaternion.angleTo(meshReferencePose.quaternion)
+            )
+          : null;
+      const mjcfErrorToMesh = meshReferencePose
+        ? buildJointPoseError(
+            new THREE.Vector3(body.pos[0], body.pos[1], body.pos[2]).distanceTo(
+              new THREE.Vector3(
+                meshReferencePose.position[0],
+                meshReferencePose.position[1],
+                meshReferencePose.position[2]
+              )
+            ),
+            body.quat.clone().normalize().angleTo(meshReferencePose.quaternion)
+          )
+        : null;
+      const poseDecision = chooseUsdJointPoseSource({
+        policy: posePolicy,
+        hasFramePair,
+        framePairMismatchOk,
+        meshReferenceAvailable: Boolean(meshReferencePose),
+        framePairErrorToMesh,
+        mjcfErrorToMesh,
+        severePositionThresholdM: 0.08,
+        severeRotationThresholdRad: 0.75,
+      });
+      const useFramePairFinal = poseDecision.source === "frame_pair" && Boolean(frame0Local && frame1Local);
 
-      if (hasFramePair && !useFramePair) {
+      if (hasFramePair && !framePairMismatchOk) {
         logWarn("USD joint frame pair reports large frame mismatch; falling back to MJCF local pose for this joint.", {
           scope: "usd",
           data: {
@@ -1415,7 +1570,11 @@ const buildRobotFromMjcf = (
             frameMismatchTolerance: FRAME_PAIR_WORLD_MISMATCH_TOLERANCE_M,
           },
         });
-      } else if (useFramePair && framePairComparison && framePairComparison.positionError > 1e-4) {
+      } else if (
+        useFramePairFinal &&
+        framePairComparison &&
+        (framePairComparison.positionError > 1e-4 || framePairComparison.rotationError > 1e-3)
+      ) {
         logWarn("USD frame pair and MJCF body pose diverge; keeping USD frame pair for local chain coherence.", {
           scope: "usd",
           data: {
@@ -1426,10 +1585,65 @@ const buildRobotFromMjcf = (
             mjcfBodyRotationErrorRad: framePairComparison.rotationError,
           },
         });
+      } else if (hasFramePair && poseDecision.source === "mjcf_body") {
+        logWarn("USD joint pose switched to MJCF body local pose based on policy/evidence.", {
+          scope: "usd",
+          data: {
+            traceId,
+            jointName,
+            parentLinkName,
+            childLinkName: linkName,
+            reason: poseDecision.reason,
+            frameMismatchDistance,
+            framePairErrorToMesh,
+            mjcfErrorToMesh,
+          },
+        });
+      }
+      if (hasFramePair && poseDecision.source === "mjcf_body") {
+        poseFallbackJoints.push(jointName);
+      }
+      poseDecisionRecords.push({
+        jointName,
+        parentLinkName,
+        childLinkName: linkName,
+        source: poseDecision.source,
+        reason: poseDecision.reason,
+        framePairMismatchDistance: frameMismatchDistance,
+        framePairErrorToMjcf: framePairComparison
+          ? buildJointPoseError(framePairComparison.positionError, framePairComparison.rotationError)
+          : null,
+        framePairErrorToMesh,
+        mjcfErrorToMesh,
+        meshReferenceSource: meshReferencePose?.source ?? "none",
+      });
+      if (debugTraceDetailed) {
+        logInfo("USD joint pose decision", {
+          scope: "usd",
+          data: {
+            traceId,
+            jointName,
+            parentLinkName,
+            childLinkName: linkName,
+            policy: posePolicy,
+            source: poseDecision.source,
+            reason: poseDecision.reason,
+            framePairMismatchDistance: frameMismatchDistance,
+            framePairErrorToMjcf: framePairComparison
+              ? {
+                  positionErrorM: framePairComparison.positionError,
+                  rotationErrorRad: framePairComparison.rotationError,
+                }
+              : null,
+            framePairErrorToMesh,
+            mjcfErrorToMesh,
+            meshReferenceSource: meshReferencePose?.source ?? "none",
+          },
+        });
       }
       const rawJointAxis = introspectionJoint?.axisLocal ?? introspectionJoint?.axis ?? rawJoint?.axis ?? [0, 0, 1];
       const fallbackAxis = rawJoint?.axis ?? introspectionJoint?.axisLocal ?? introspectionJoint?.axis ?? [0, 0, 1];
-      const jointAxis = useFramePair && frame0Local
+      const jointAxis = useFramePairFinal && frame0Local
         ? axisInJointFrame([rawJointAxis[0], rawJointAxis[1], rawJointAxis[2]], frame0Local.quaternion)
         : normalizeAxisTuple([fallbackAxis[0], fallbackAxis[1], fallbackAxis[2]]);
       const actuator = rawJoint ? parsed.actuatorsByJoint.get(rawJoint.name) : undefined;
@@ -1454,8 +1668,8 @@ const buildRobotFromMjcf = (
       jointFlags.isURDFJoint = true;
       jointFlags.urdfName = jointName;
       joint.userData.editorKind = "joint";
-      const jointPosePosition = useFramePair && frame0Local ? frame0Local.position : body.pos;
-      const jointPoseQuaternion = useFramePair && frame0Local ? frame0Local.quaternion : body.quat;
+      const jointPosePosition = useFramePairFinal && frame0Local ? frame0Local.position : body.pos;
+      const jointPoseQuaternion = useFramePairFinal && frame0Local ? frame0Local.quaternion : body.quat;
       joint.position.set(jointPosePosition[0], jointPosePosition[1], jointPosePosition[2]);
       joint.quaternion.copy(jointPoseQuaternion);
 
@@ -1506,7 +1720,7 @@ const buildRobotFromMjcf = (
 
       joint.userData.urdf = { kind: "joint", joint: urdfJoint };
 
-      if (useFramePair && framePairComparison) {
+      if (useFramePairFinal && framePairComparison) {
         link.position.copy(framePairComparison.childPoseInJoint.position);
         link.quaternion.copy(framePairComparison.childPoseInJoint.quaternion);
       } else if (forcePoseOnLink) {
@@ -1531,7 +1745,33 @@ const buildRobotFromMjcf = (
     attachBody(body, null, null, true);
   }
 
-  return { root: robotRoot, linkCount, jointCount };
+  const framePairDecisions = poseDecisionRecords.filter((item) => item.source === "frame_pair").length;
+  const mjcfDecisions = poseDecisionRecords.length - framePairDecisions;
+  const poseSummary: UsdJointPoseDecisionSummary = {
+    totalDecisions: poseDecisionRecords.length,
+    framePairDecisions,
+    mjcfDecisions,
+    fallbackCount: poseFallbackJoints.length,
+    fallbackJoints: [...poseFallbackJoints],
+    decisions: poseDecisionRecords,
+  };
+
+  if (debugTraceDetailed) {
+    logInfo("USD joint pose decision trace summary", {
+      scope: "usd",
+      data: {
+        traceId,
+        robotName,
+        policy: posePolicy,
+        totalDecisions: poseSummary.totalDecisions,
+        framePairDecisions: poseSummary.framePairDecisions,
+        mjcfDecisions: poseSummary.mjcfDecisions,
+        fallbackCount: poseSummary.fallbackCount,
+      },
+    });
+  }
+
+  return { root: robotRoot, linkCount, jointCount, poseSummary };
 };
 
 const buildUsdMeshGeometry = (mesh: NormalizedUsdMeshSceneMesh) => {
@@ -1629,6 +1869,34 @@ const sameTextureReference = (left: string | null | undefined, right: string | n
   typeof right === "string" &&
   left.trim().toLowerCase() === right.trim().toLowerCase();
 
+type UsdMaterialChannelKey = keyof NormalizedUsdMaterialChannelSources;
+
+const isExplicitMaterialChannel = (
+  sources: NormalizedUsdMaterialChannelSources | null | undefined,
+  channel: UsdMaterialChannelKey
+) => sources?.[channel] === "explicit";
+
+const hasMaterialChannelIntent = (
+  channel: UsdMaterialChannelKey,
+  textureUrl: string | null | undefined,
+  sources: NormalizedUsdMaterialChannelSources | null | undefined
+): boolean => {
+  if (isExplicitMaterialChannel(sources, channel)) return true;
+  if (channel === "baseColor") return true;
+  if (channel === "normal") return looksLikeNormalTexture(textureUrl);
+  if (channel === "metallic") return looksLikeMetallicTexture(textureUrl);
+  if (channel === "roughness") return looksLikeRoughnessTexture(textureUrl);
+  if (channel === "metallicRoughness") {
+    return looksLikeMetallicTexture(textureUrl) || looksLikeRoughnessTexture(textureUrl);
+  }
+  if (channel === "occlusion") return looksLikeOcclusionTexture(textureUrl);
+  if (channel === "emissive") return looksLikeEmissiveTexture(textureUrl);
+  if (channel === "opacity") return looksLikeOpacityTexture(textureUrl);
+  return false;
+};
+
+export const __testOnlyHasMaterialChannelIntent = hasMaterialChannelIntent;
+
 const getOrLoadUsdTexture = (url: string, colorSpace: UsdTextureColorSpace) => {
   const cacheKey = `${colorSpace}:${url}`;
   const cached = usdTextureCache.get(cacheKey);
@@ -1647,6 +1915,7 @@ const createUsdVisualMaterial = (
   options?: {
     textures?: ResolvedUsdMaterialTextures;
     materialName?: string | null;
+    materialChannelSources?: NormalizedUsdMaterialChannelSources | null;
     metallicFactor?: number | null;
     roughnessFactor?: number | null;
     emissiveFactor?: [number, number, number] | null;
@@ -1654,8 +1923,9 @@ const createUsdVisualMaterial = (
   }
 ) => {
   const colorRgba = rgba ?? DEFAULT_VISUAL_RGBA;
+  const channelSources = options?.materialChannelSources ?? null;
   const hasResolvedOpacityTexture = Boolean(options?.textures?.opacityUrl);
-  const hasOpacityTextureIntent = looksLikeOpacityTexture(options?.textures?.opacityUrl ?? null);
+  const hasOpacityTextureIntent = hasMaterialChannelIntent("opacity", options?.textures?.opacityUrl ?? null, channelSources);
   const hasTransparentMaterialName = looksLikeTransparentMaterialName(options?.materialName ?? null);
   const rawOpacityFactor = options?.opacityFactor;
   const normalizedOpacityFactor =
@@ -1674,13 +1944,13 @@ const createUsdVisualMaterial = (
   }
   const textures = options?.textures;
   const baseColorUrl = textures?.baseColorUrl ?? null;
-  const hasNormalTextureIntent = looksLikeNormalTexture(textures?.normalUrl ?? null);
+  const hasNormalTextureIntent = hasMaterialChannelIntent("normal", textures?.normalUrl ?? null, channelSources);
   const hasMetallicTextureIntent =
-    looksLikeMetallicTexture(textures?.metallicUrl ?? null) ||
-    looksLikeMetallicTexture(textures?.metallicRoughnessUrl ?? null);
+    hasMaterialChannelIntent("metallic", textures?.metallicUrl ?? null, channelSources) ||
+    hasMaterialChannelIntent("metallicRoughness", textures?.metallicRoughnessUrl ?? null, channelSources);
   const hasRoughnessTextureIntent =
-    looksLikeRoughnessTexture(textures?.roughnessUrl ?? null) ||
-    looksLikeRoughnessTexture(textures?.metallicRoughnessUrl ?? null);
+    hasMaterialChannelIntent("roughness", textures?.roughnessUrl ?? null, channelSources) ||
+    hasMaterialChannelIntent("metallicRoughness", textures?.metallicRoughnessUrl ?? null, channelSources);
   const hasUsableNormalTexture =
     Boolean(textures?.normalUrl) &&
     hasNormalTextureIntent &&
@@ -1738,13 +2008,13 @@ const createUsdVisualMaterial = (
     }
   }
   if (textures?.occlusionUrl) {
-    if (looksLikeOcclusionTexture(textures.occlusionUrl)) {
+    if (hasMaterialChannelIntent("occlusion", textures.occlusionUrl, channelSources)) {
       material.aoMap = getOrLoadUsdTexture(textures.occlusionUrl, "linear");
       material.aoMapIntensity = 0.42;
     }
   }
   const hasEmissiveFactor = maxColorComponent(options?.emissiveFactor) > 0.01;
-  const hasEmissiveMapIntent = looksLikeEmissiveTexture(textures?.emissiveUrl ?? null);
+  const hasEmissiveMapIntent = hasMaterialChannelIntent("emissive", textures?.emissiveUrl ?? null, channelSources);
   if (textures?.emissiveUrl && hasEmissiveMapIntent) {
     material.emissiveMap = getOrLoadUsdTexture(textures.emissiveUrl, "srgb");
   }
@@ -1792,6 +2062,7 @@ const createUsdVisualMesh = (
   const material = createUsdVisualMaterial(mesh.rgba, {
     textures: options?.materialTextures,
     materialName: mesh.materialName,
+    materialChannelSources: mesh.materialChannelSources,
     metallicFactor: mesh.metallicFactor,
     roughnessFactor: mesh.roughnessFactor,
     emissiveFactor: mesh.emissiveFactor,
@@ -1813,6 +2084,7 @@ const createUsdVisualMesh = (
     occlusionTexture: mesh.occlusionTexture,
     emissiveTexture: mesh.emissiveTexture,
     opacityTexture: mesh.opacityTexture,
+    materialChannelSources: mesh.materialChannelSources,
     textureUrls: options?.materialTextures ?? null,
     editable: !Object.values(options?.materialTextures ?? {}).some((value) => Boolean(value)),
   };
@@ -1884,6 +2156,7 @@ const createUsdVisualPrimitive = (
     createUsdVisualMaterial(primitive.rgba, {
       textures: options?.materialTextures,
       materialName: primitive.materialName,
+      materialChannelSources: primitive.materialChannelSources,
       metallicFactor: primitive.metallicFactor,
       roughnessFactor: primitive.roughnessFactor,
       emissiveFactor: primitive.emissiveFactor,
@@ -1905,6 +2178,7 @@ const createUsdVisualPrimitive = (
     occlusionTexture: primitive.occlusionTexture,
     emissiveTexture: primitive.emissiveTexture,
     opacityTexture: primitive.opacityTexture,
+    materialChannelSources: primitive.materialChannelSources,
     textureUrls: options?.materialTextures ?? null,
     editable: !Object.values(options?.materialTextures ?? {}).some((value) => Boolean(value)),
   };
@@ -2180,6 +2454,224 @@ const collectUsdLinkGroups = (root: THREE.Object3D, selfCollisionEnabled: boolea
   };
 };
 
+const augmentRobotHierarchyFromMeshSceneBodies = (
+  root: THREE.Object3D,
+  meshScene: NormalizedUsdMeshScene | null,
+  options?: {
+    selfCollisionEnabled?: boolean;
+    traceId?: string | null;
+    detailedTrace?: boolean;
+  }
+) => {
+  if (!meshScene || meshScene.bodies.length === 0) {
+    return { createdLinks: 0, createdJoints: 0, unresolvedBodies: 0 };
+  }
+
+  const selfCollisionEnabled = options?.selfCollisionEnabled === true;
+  const lookup = collectUsdLinkGroups(root, selfCollisionEnabled);
+  const bodyByToken = new Map(
+    meshScene.bodies
+      .map((body) => {
+        const token = normalizeBodyToken(body.name);
+        return token ? ([token, body] as const) : null;
+      })
+      .filter((entry): entry is readonly [string, NormalizedUsdMeshSceneBody] => Boolean(entry))
+  );
+
+  const usedLinkNames = new Set<string>();
+  const usedJointNames = new Set<string>();
+  root.traverse((node) => {
+    const name = String(node.name ?? "").trim();
+    if (name) usedLinkNames.add(name);
+    if (node.userData?.editorKind === "joint" && name) usedJointNames.add(name);
+  });
+
+  const tokenToEntry = new Map<string, UsdLinkRenderGroupEntry>();
+  const registerEntry = (entry: UsdLinkRenderGroupEntry) => {
+    const registerToken = (tokenValue: string | null | undefined) => {
+      const token = normalizeBodyToken(tokenValue);
+      if (!token || tokenToEntry.has(token)) return;
+      tokenToEntry.set(token, entry);
+    };
+    registerToken(entry.bodyToken);
+    registerToken(entry.link.name);
+    const urdfName = String((entry.link as THREE.Group & { urdfName?: string }).urdfName ?? "").trim();
+    if (urdfName) registerToken(urdfName);
+  };
+
+  for (const entry of lookup.entries) registerEntry(entry);
+
+  let createdLinks = 0;
+  let createdJoints = 0;
+  const pendingBodies = new Map(
+    Array.from(bodyByToken.entries()).filter(([token]) => !tokenToEntry.has(token))
+  );
+  const rootLevelEntries = lookup.entries.filter((entry) => entry.link.parent === root);
+  const standaloneAnchorEntry = rootLevelEntries.length === 1 ? rootLevelEntries[0] : null;
+
+  const synthesizeBodyLink = (input: {
+    bodyToken: string;
+    body: NormalizedUsdMeshSceneBody;
+    parentEntry: UsdLinkRenderGroupEntry;
+    expectedParentToken: string | null;
+    fallbackToAnchor: boolean;
+  }) => {
+    const resolvedLocalPose = resolveMeshSceneBodyLocalPose({
+      body: input.body,
+      expectedParentToken: input.expectedParentToken,
+      bodyByToken,
+    });
+    if (!resolvedLocalPose) return false;
+
+    const joint = new THREE.Group();
+    const jointFlags = joint as THREE.Group & { isURDFJoint?: boolean; urdfName?: string };
+    const jointName = claimName(`${input.parentEntry.link.name}_${input.bodyToken}_fixed`, usedJointNames, "Joint");
+    joint.name = jointName;
+    jointFlags.isURDFJoint = true;
+    jointFlags.urdfName = jointName;
+    joint.userData.editorKind = "joint";
+    joint.position.set(
+      resolvedLocalPose.localPose.position[0],
+      resolvedLocalPose.localPose.position[1],
+      resolvedLocalPose.localPose.position[2]
+    );
+    joint.quaternion.copy(resolvedLocalPose.localPose.quaternion);
+
+    const link = new THREE.Group();
+    const linkFlags = link as THREE.Group & { isURDFLink?: boolean; urdfName?: string };
+    const linkName = claimName(input.body.name || input.bodyToken, usedLinkNames, "Link");
+    link.name = linkName;
+    linkFlags.isURDFLink = true;
+    linkFlags.urdfName = linkName;
+    link.userData.editorKind = "link";
+    link.userData.usdBodyToken = input.bodyToken;
+    const bodyPath = normalizePathAliasToken(input.body.primPath);
+    if (bodyPath) link.userData.usdBodyPath = bodyPath;
+    link.position.set(0, 0, 0);
+    link.quaternion.identity();
+    link.scale.set(input.body.scale[0], input.body.scale[1], input.body.scale[2]);
+
+    const visual = new THREE.Group();
+    configureVisualGroup(visual, linkName);
+    clearGroupChildren(visual);
+    link.add(visual);
+
+    const collision = new THREE.Group();
+    configureCollisionGroup(collision, linkName, selfCollisionEnabled);
+    clearGroupChildren(collision);
+    link.add(collision);
+
+    const urdfLink: UrdfLink = {
+      name: linkName,
+      visuals: [],
+      collisions: [],
+    };
+    link.userData.urdf = { kind: "link", link: urdfLink };
+    const urdfJoint: UrdfJoint = {
+      name: jointName,
+      type: "fixed",
+      parent: input.parentEntry.link.name,
+      child: linkName,
+      origin: toPose(
+        resolvedLocalPose.localPose.position,
+        resolvedLocalPose.localPose.quaternion
+      ),
+      axis: [0, 0, 1],
+    };
+    joint.userData.urdf = { kind: "joint", joint: urdfJoint };
+
+    input.parentEntry.link.add(joint);
+    joint.add(link);
+
+    const newEntry: UsdLinkRenderGroupEntry = {
+      link,
+      visual,
+      collision,
+      preparedForUsd: true,
+      aliases: [],
+      bodyToken: input.bodyToken,
+      bodyPath,
+      sourcePrimPaths: new Set<string>(),
+    };
+    registerEntry(newEntry);
+    pendingBodies.delete(input.bodyToken);
+    createdLinks += 1;
+    createdJoints += 1;
+
+    if (options?.detailedTrace) {
+      logInfo("USD mesh-scene body link synthesized", {
+        scope: "usd",
+        data: {
+          traceId: options.traceId ?? null,
+          bodyToken: input.bodyToken,
+          payloadParentToken: normalizeBodyToken(input.body.parentBody),
+          expectedParentToken: input.expectedParentToken,
+          fallbackToAnchor: input.fallbackToAnchor,
+          parentLinkName: input.parentEntry.link.name,
+          linkName,
+          jointName,
+          localPoseSource: resolvedLocalPose.source,
+        },
+      });
+    }
+    return true;
+  };
+
+  while (pendingBodies.size > 0) {
+    let progressed = false;
+    for (const [bodyToken, body] of Array.from(pendingBodies.entries())) {
+      const parentToken = normalizeBodyToken(body.parentBody);
+      if (!parentToken) continue;
+      const parentEntry = tokenToEntry.get(parentToken);
+      if (!parentEntry) continue;
+      const synthesized = synthesizeBodyLink({
+        bodyToken,
+        body,
+        parentEntry,
+        expectedParentToken: parentToken,
+        fallbackToAnchor: false,
+      });
+      if (synthesized) progressed = true;
+    }
+    if (!progressed) break;
+  }
+
+  if (standaloneAnchorEntry && pendingBodies.size > 0) {
+    while (pendingBodies.size > 0) {
+      let progressed = false;
+      for (const [bodyToken, body] of Array.from(pendingBodies.entries())) {
+        const parentToken = normalizeBodyToken(body.parentBody);
+        let parentEntry = parentToken ? tokenToEntry.get(parentToken) ?? null : null;
+        let expectedParentToken = parentToken;
+
+        if (!parentEntry) {
+          const parentIsKnownOnlyInMeshScene = Boolean(parentToken && bodyByToken.has(parentToken));
+          if (parentIsKnownOnlyInMeshScene) continue;
+          parentEntry = standaloneAnchorEntry;
+          expectedParentToken =
+            standaloneAnchorEntry.bodyToken ?? normalizeBodyToken(standaloneAnchorEntry.link.name);
+        }
+
+        const synthesized = synthesizeBodyLink({
+          bodyToken,
+          body,
+          parentEntry,
+          expectedParentToken,
+          fallbackToAnchor: parentEntry === standaloneAnchorEntry && parentToken !== normalizeBodyToken(standaloneAnchorEntry.link.name),
+        });
+        if (synthesized) progressed = true;
+      }
+      if (!progressed) break;
+    }
+  }
+
+  return {
+    createdLinks,
+    createdJoints,
+    unresolvedBodies: pendingBodies.size,
+  };
+};
+
 const IDENTITY_QUAT = new THREE.Quaternion(0, 0, 0, 1);
 
 const hasLikelyCollapsedJointLayout = (root: THREE.Object3D) => {
@@ -2195,6 +2687,122 @@ const hasLikelyCollapsedJointLayout = (root: THREE.Object3D) => {
   });
   if (jointCount === 0) return false;
   return jointsWithPose / jointCount < 0.1;
+};
+
+const computeRelativePoseFromWorld = (
+  childPose: { position: [number, number, number]; quaternion: THREE.Quaternion },
+  parentPose: { position: [number, number, number]; quaternion: THREE.Quaternion }
+): { position: [number, number, number]; quaternion: THREE.Quaternion } => {
+  const childPos = new THREE.Vector3(childPose.position[0], childPose.position[1], childPose.position[2]);
+  const parentPos = new THREE.Vector3(parentPose.position[0], parentPose.position[1], parentPose.position[2]);
+  const parentInv = parentPose.quaternion.clone().invert();
+  const relPos = childPos.sub(parentPos).applyQuaternion(parentInv);
+  const relQuat = parentInv.multiply(childPose.quaternion.clone()).normalize();
+  return {
+    position: [relPos.x, relPos.y, relPos.z],
+    quaternion: relQuat,
+  };
+};
+
+const shouldTreatMeshScenePoseAsWorld = (input: {
+  payloadParentToken: string | null;
+  expectedParentToken: string | null;
+  position: [number, number, number];
+  quaternion: THREE.Quaternion;
+  bodyPoseByToken: Map<string, NormalizedUsdMeshSceneBody>;
+}): boolean => {
+  const payloadParentToken = normalizeBodyToken(input.payloadParentToken);
+  const expectedParentToken = normalizeBodyToken(input.expectedParentToken);
+  if (!payloadParentToken) return true;
+  if (expectedParentToken && payloadParentToken !== expectedParentToken) return true;
+  const parentBodyPose = input.bodyPoseByToken.get(payloadParentToken);
+  if (!parentBodyPose) return false;
+  const localMagnitude = Math.hypot(input.position[0], input.position[1], input.position[2]);
+  const payloadPosition = new THREE.Vector3(input.position[0], input.position[1], input.position[2]);
+  const parentPosition = new THREE.Vector3(
+    parentBodyPose.position[0],
+    parentBodyPose.position[1],
+    parentBodyPose.position[2]
+  );
+  const distanceToBodyWorld = payloadPosition.distanceTo(parentPosition);
+  const angleToBodyWorld = input.quaternion.angleTo(parentBodyPose.quaternion);
+  const positionLooksWorld = localMagnitude >= 0.2 && distanceToBodyWorld < 0.18 && angleToBodyWorld < 0.5;
+  const orientationLooksWorld = localMagnitude < 0.2 && distanceToBodyWorld < 0.25 && angleToBodyWorld < 0.25;
+  return positionLooksWorld || orientationLooksWorld;
+};
+
+const resolveMeshSceneBodyLocalPose = (input: {
+  body: NormalizedUsdMeshSceneBody;
+  expectedParentToken: string | null;
+  bodyByToken: Map<string, NormalizedUsdMeshSceneBody>;
+}): {
+  localPose: { position: [number, number, number]; quaternion: THREE.Quaternion };
+  source: "payload_local" | "world_rebased";
+  payloadParentToken: string | null;
+} | null => {
+  const expectedParentToken = normalizeBodyToken(input.expectedParentToken);
+  const payloadParentToken = normalizeBodyToken(input.body.parentBody);
+  const expectedParentBody = expectedParentToken ? input.bodyByToken.get(expectedParentToken) ?? null : null;
+
+  const useWorldFallback = shouldTreatMeshScenePoseAsWorld({
+    payloadParentToken,
+    expectedParentToken,
+    position: input.body.position,
+    quaternion: input.body.quaternion,
+    bodyPoseByToken: input.bodyByToken,
+  });
+
+  if (useWorldFallback && expectedParentBody) {
+    return {
+      localPose: computeRelativePoseFromWorld(
+        { position: input.body.position, quaternion: input.body.quaternion },
+        { position: expectedParentBody.position, quaternion: expectedParentBody.quaternion }
+      ),
+      source: "world_rebased",
+      payloadParentToken,
+    };
+  }
+
+  if (payloadParentToken) {
+    if (expectedParentToken && payloadParentToken !== expectedParentToken && expectedParentBody) {
+      return {
+        localPose: computeRelativePoseFromWorld(
+          { position: input.body.position, quaternion: input.body.quaternion },
+          { position: expectedParentBody.position, quaternion: expectedParentBody.quaternion }
+        ),
+        source: "world_rebased",
+        payloadParentToken,
+      };
+    }
+    return {
+      localPose: {
+        position: [input.body.position[0], input.body.position[1], input.body.position[2]],
+        quaternion: input.body.quaternion.clone(),
+      },
+      source: "payload_local",
+      payloadParentToken,
+    };
+  }
+
+  if (expectedParentBody) {
+    return {
+      localPose: computeRelativePoseFromWorld(
+        { position: input.body.position, quaternion: input.body.quaternion },
+        { position: expectedParentBody.position, quaternion: expectedParentBody.quaternion }
+      ),
+      source: "world_rebased",
+      payloadParentToken: null,
+    };
+  }
+
+  return {
+    localPose: {
+      position: [input.body.position[0], input.body.position[1], input.body.position[2]],
+      quaternion: input.body.quaternion.clone(),
+    },
+    source: "payload_local",
+    payloadParentToken,
+  };
 };
 
 const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: NormalizedUsdMeshScene | null) => {
@@ -2239,38 +2847,17 @@ const applyUsdBodyPosesToCollapsedLinks = (root: THREE.Object3D, meshScene: Norm
     return null;
   };
 
-  const computeRelativePose = (
-    child: NormalizedUsdMeshSceneBody,
-    parent: NormalizedUsdMeshSceneBody
-  ): { position: [number, number, number]; quaternion: THREE.Quaternion } => {
-    const childPos = new THREE.Vector3(child.position[0], child.position[1], child.position[2]);
-    const parentPos = new THREE.Vector3(parent.position[0], parent.position[1], parent.position[2]);
-    const parentInv = parent.quaternion.clone().invert();
-    const relPos = childPos.sub(parentPos).applyQuaternion(parentInv);
-    const relQuat = parentInv.multiply(child.quaternion.clone()).normalize();
-    return {
-      position: [relPos.x, relPos.y, relPos.z],
-      quaternion: relQuat,
-    };
-  };
-
   const resolveTargetLocalPose = (
     body: NormalizedUsdMeshSceneBody,
     parentToken: string | null
   ): { position: [number, number, number]; quaternion: THREE.Quaternion } => {
-    const payloadParentToken = normalizeBodyToken(body.parentBody);
-    if (payloadParentToken) {
-      // Converter payload is already local-to-parent when explicit parentBody is present.
-      return { position: body.position, quaternion: body.quaternion };
-    }
-    if (!parentToken) {
-      return { position: body.position, quaternion: body.quaternion };
-    }
-    const parentBody = bodyByName.get(parentToken);
-    if (!parentBody) {
-      return { position: body.position, quaternion: body.quaternion };
-    }
-    return computeRelativePose(body, parentBody);
+    const resolved = resolveMeshSceneBodyLocalPose({
+      body,
+      expectedParentToken: parentToken,
+      bodyByToken: bodyByName,
+    });
+    if (resolved) return resolved.localPose;
+    return { position: body.position, quaternion: body.quaternion };
   };
 
   const hasCollapsedLayout = hasLikelyCollapsedJointLayout(root);
@@ -2354,6 +2941,8 @@ const attachUsdMeshSceneToRoot = (
     resolveResource?: (resourcePath: string) => string | null;
     attachCollisionProxies?: boolean;
     replaceExisting?: boolean;
+    traceId?: string;
+    detailedTrace?: boolean;
   }
 ) => {
   if (!meshScene || (meshScene.meshes.length === 0 && meshScene.primitives.length === 0)) {
@@ -2366,8 +2955,20 @@ const attachUsdMeshSceneToRoot = (
       texturedMaterials: 0,
       referencedTextures: 0,
       unresolvedTextureBindings: 0,
+      unresolvedTextureBindingsByChannel: {
+        baseColor: 0,
+        normal: 0,
+        metallic: 0,
+        roughness: 0,
+        metallicRoughness: 0,
+        occlusion: 0,
+        emissive: 0,
+        opacity: 0,
+      },
       aliasCollisionCount: 0,
       parentPoseWorldFallbacks: 0,
+      bodyFrameCorrections: 0,
+      materialTraceEntries: [] as Array<Record<string, unknown>>,
     };
   }
 
@@ -2417,7 +3018,19 @@ const attachUsdMeshSceneToRoot = (
   let texturedMaterials = 0;
   let referencedTextures = 0;
   let unresolvedTextureBindings = 0;
+  const unresolvedTextureBindingsByChannel: Record<UsdMaterialChannelKey, number> = {
+    baseColor: 0,
+    normal: 0,
+    metallic: 0,
+    roughness: 0,
+    metallicRoughness: 0,
+    occlusion: 0,
+    emissive: 0,
+    opacity: 0,
+  };
   let parentPoseWorldFallbacks = 0;
+  let bodyFrameCorrections = 0;
+  const materialTraceEntries: Array<Record<string, unknown>> = [];
   const targetsWithMeshVisual = new Set<string>();
   const seenUsdItems = new Set<string>();
   const targetPrimaryMeshCount = new Map<string, number>();
@@ -2600,41 +3213,38 @@ const attachUsdMeshSceneToRoot = (
     position: [number, number, number];
     quaternion: THREE.Quaternion;
     scale: [number, number, number];
+    source: "payload_local" | "world_rebased";
   } => {
     const payloadParentToken = normalizeBodyToken(pose.parentBody);
+    const expectedParentToken = targetEntry?.bodyToken ?? null;
     if (!targetEntry || (prefersRobotTokenMatching && payloadParentToken)) {
       return {
         position: [pose.position[0], pose.position[1], pose.position[2]],
         quaternion: pose.quaternion.clone(),
         scale: [pose.scale[0], pose.scale[1], pose.scale[2]],
+        source: "payload_local",
       };
     }
 
-    const shouldTreatAsWorldPose = (() => {
-      if (!payloadParentToken) return true;
-      const parentBodyPose = bodyPoseByToken.get(payloadParentToken);
-      if (!parentBodyPose) return false;
-      const localMagnitude = Math.hypot(pose.position[0], pose.position[1], pose.position[2]);
-      if (localMagnitude < 0.2) return false;
-      const payloadPosition = new THREE.Vector3(pose.position[0], pose.position[1], pose.position[2]);
-      const parentPosition = new THREE.Vector3(
-        parentBodyPose.position[0],
-        parentBodyPose.position[1],
-        parentBodyPose.position[2]
-      );
-      const distanceToBodyWorld = payloadPosition.distanceTo(parentPosition);
-      const angleToBodyWorld = pose.quaternion.angleTo(parentBodyPose.quaternion);
-      return distanceToBodyWorld < 0.18 && angleToBodyWorld < 0.5;
-    })();
+    const shouldTreatAsWorldPose = shouldTreatMeshScenePoseAsWorld({
+      payloadParentToken,
+      expectedParentToken,
+      position: pose.position,
+      quaternion: pose.quaternion,
+      bodyPoseByToken,
+    });
 
     if (!shouldTreatAsWorldPose) {
       return {
         position: [pose.position[0], pose.position[1], pose.position[2]],
         quaternion: pose.quaternion.clone(),
         scale: [pose.scale[0], pose.scale[1], pose.scale[2]],
+        source: "payload_local",
       };
     }
-    if (payloadParentToken) parentPoseWorldFallbacks += 1;
+    if (payloadParentToken) {
+      parentPoseWorldFallbacks += 1;
+    }
 
     const parentObject = targetEntry.visual;
     parentObject.updateWorldMatrix(true, false);
@@ -2658,6 +3268,99 @@ const attachUsdMeshSceneToRoot = (
       position: [localPos.x, localPos.y, localPos.z],
       quaternion: localQuat,
       scale: [localScale.x, localScale.y, localScale.z],
+      source: "world_rebased",
+    };
+  };
+
+  const applyBodyFrameCorrectionToLocalPose = (input: {
+    localPose: {
+      position: [number, number, number];
+      quaternion: THREE.Quaternion;
+      scale: [number, number, number];
+      source: "payload_local" | "world_rebased";
+    };
+    parentBodyToken: string | null;
+    targetEntry: UsdLinkRenderGroupEntry | null;
+    primPath: string;
+    nodeName: string;
+    kind: "mesh" | "primitive";
+  }) => {
+    if (!input.targetEntry) return input.localPose;
+    if (input.localPose.source !== "payload_local") return input.localPose;
+    const parentBodyToken = normalizeBodyToken(input.parentBodyToken);
+    if (!parentBodyToken) return input.localPose;
+    const parentBodyPose = bodyPoseByToken.get(parentBodyToken);
+    if (!parentBodyPose) return input.localPose;
+    if (normalizeBodyToken(parentBodyPose.parentBody)) return input.localPose;
+
+    input.targetEntry.link.updateWorldMatrix(true, false);
+    const linkWorld = input.targetEntry.link.matrixWorld;
+    const linkWorldInv = new THREE.Matrix4().copy(linkWorld).invert();
+    const bodyWorld = new THREE.Matrix4().compose(
+      new THREE.Vector3(parentBodyPose.position[0], parentBodyPose.position[1], parentBodyPose.position[2]),
+      parentBodyPose.quaternion.clone(),
+      new THREE.Vector3(parentBodyPose.scale[0], parentBodyPose.scale[1], parentBodyPose.scale[2])
+    );
+    const correction = new THREE.Matrix4().multiplyMatrices(linkWorldInv, bodyWorld);
+    const correctionPos = new THREE.Vector3();
+    const correctionQuat = new THREE.Quaternion();
+    const correctionScale = new THREE.Vector3();
+    correction.decompose(correctionPos, correctionQuat, correctionScale);
+    if (correctionQuat.lengthSq() <= 1e-10) correctionQuat.identity();
+    else correctionQuat.normalize();
+    const correctionPositionMagnitude = correctionPos.length();
+    const correctionRotationError = correctionQuat.angleTo(IDENTITY_QUAT);
+    const correctionScaleError = Math.max(
+      Math.abs(correctionScale.x - 1),
+      Math.abs(correctionScale.y - 1),
+      Math.abs(correctionScale.z - 1)
+    );
+    const needsCorrection =
+      correctionPositionMagnitude > 1e-4 ||
+      correctionRotationError > 1e-3 ||
+      correctionScaleError > 1e-4;
+    if (!needsCorrection) return input.localPose;
+
+    const localMatrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(
+        input.localPose.position[0],
+        input.localPose.position[1],
+        input.localPose.position[2]
+      ),
+      input.localPose.quaternion.clone(),
+      new THREE.Vector3(input.localPose.scale[0], input.localPose.scale[1], input.localPose.scale[2])
+    );
+    const correctedLocal = new THREE.Matrix4().multiplyMatrices(correction, localMatrix);
+    const correctedPos = new THREE.Vector3();
+    const correctedQuat = new THREE.Quaternion();
+    const correctedScale = new THREE.Vector3();
+    correctedLocal.decompose(correctedPos, correctedQuat, correctedScale);
+    if (correctedQuat.lengthSq() <= 1e-10) correctedQuat.identity();
+    else correctedQuat.normalize();
+
+    bodyFrameCorrections += 1;
+    if (options?.detailedTrace) {
+      logInfo("USD mesh local pose corrected from body frame to link frame", {
+        scope: "usd",
+        data: {
+          traceId: options.traceId ?? null,
+          kind: input.kind,
+          nodeName: input.nodeName,
+          primPath: input.primPath,
+          parentBodyToken,
+          targetLinkName: input.targetEntry.link.name,
+          correctionPositionMagnitude,
+          correctionRotationErrorRad: correctionRotationError,
+          correctionScaleError,
+        },
+      });
+    }
+
+    return {
+      position: [correctedPos.x, correctedPos.y, correctedPos.z] as [number, number, number],
+      quaternion: correctedQuat,
+      scale: [correctedScale.x, correctedScale.y, correctedScale.z] as [number, number, number],
+      source: "world_rebased" as const,
     };
   };
 
@@ -2728,6 +3431,15 @@ const attachUsdMeshSceneToRoot = (
       obj.quaternion.z,
     ])}|${numericSignature(obj.scale)}`;
 
+  const accountTextureBinding = (channel: UsdMaterialChannelKey, reference: string | null, resolvedUrl: string | null) => {
+    if (!reference) return;
+    referencedTextures += 1;
+    if (!resolvedUrl) {
+      unresolvedTextureBindings += 1;
+      unresolvedTextureBindingsByChannel[channel] += 1;
+    }
+  };
+
   for (const mesh of meshScene.meshes) {
     const targetEntry = resolveTargetEntry({
       parentBody: mesh.parentBody,
@@ -2756,17 +3468,28 @@ const attachUsdMeshSceneToRoot = (
       },
       options?.resolveResource
     );
-    const textureReferences = [
-      mesh.baseColorTexture,
-      mesh.normalTexture,
-      mesh.metallicTexture,
-      mesh.roughnessTexture,
-      mesh.metallicRoughnessTexture,
-      mesh.occlusionTexture,
-      mesh.emissiveTexture,
-      mesh.opacityTexture,
-    ].filter((value): value is string => Boolean(value));
-    const resolvedTextureCount = Object.values(materialTextures).filter((value) => Boolean(value)).length;
+    const textureReferencesByChannel: Record<UsdMaterialChannelKey, string | null> = {
+      baseColor: mesh.baseColorTexture,
+      normal: mesh.normalTexture,
+      metallic: mesh.metallicTexture,
+      roughness: mesh.roughnessTexture,
+      metallicRoughness: mesh.metallicRoughnessTexture,
+      occlusion: mesh.occlusionTexture,
+      emissive: mesh.emissiveTexture,
+      opacity: mesh.opacityTexture,
+    };
+    const resolvedTextureByChannel: Record<UsdMaterialChannelKey, string | null> = {
+      baseColor: materialTextures.baseColorUrl,
+      normal: materialTextures.normalUrl,
+      metallic: materialTextures.metallicUrl,
+      roughness: materialTextures.roughnessUrl,
+      metallicRoughness: materialTextures.metallicRoughnessUrl,
+      occlusion: materialTextures.occlusionUrl,
+      emissive: materialTextures.emissiveUrl,
+      opacity: materialTextures.opacityUrl,
+    };
+    const textureReferences = Object.values(textureReferencesByChannel).filter((value): value is string => Boolean(value));
+    const resolvedTextureCount = Object.values(resolvedTextureByChannel).filter((value) => Boolean(value)).length;
     const hasMaterialBinding = Boolean(
       mesh.materialName ||
         mesh.materialSource ||
@@ -2778,10 +3501,23 @@ const attachUsdMeshSceneToRoot = (
         mesh.opacityFactor !== null
     );
     if (hasMaterialBinding) materialsBound += 1;
-    referencedTextures += textureReferences.length;
+    (Object.keys(textureReferencesByChannel) as UsdMaterialChannelKey[]).forEach((channel) => {
+      accountTextureBinding(channel, textureReferencesByChannel[channel], resolvedTextureByChannel[channel]);
+    });
     if (resolvedTextureCount > 0) texturedMaterials += 1;
-    unresolvedTextureBindings += Math.max(0, textureReferences.length - resolvedTextureCount);
-    const localPose = rebaseWorldPoseToTargetLocal(
+    if (options?.detailedTrace) {
+      materialTraceEntries.push({
+        traceId: options.traceId ?? null,
+        primPath: mesh.primPath,
+        nodeName: mesh.name,
+        kind: "mesh",
+        materialName: mesh.materialName,
+        channelSources: mesh.materialChannelSources,
+        referencedByChannel: textureReferencesByChannel,
+        resolvedByChannel: resolvedTextureByChannel,
+      });
+    }
+    const rebasedLocalPose = rebaseWorldPoseToTargetLocal(
       {
         position: mesh.position,
         quaternion: mesh.quaternion,
@@ -2791,6 +3527,14 @@ const attachUsdMeshSceneToRoot = (
       },
       targetEntry
     );
+    const localPose = applyBodyFrameCorrectionToLocalPose({
+      localPose: rebasedLocalPose,
+      parentBodyToken: mesh.parentBody,
+      targetEntry,
+      primPath: mesh.primPath,
+      nodeName: mesh.name,
+      kind: "mesh",
+    });
     const visual = createUsdVisualMesh(
       {
         ...mesh,
@@ -2836,17 +3580,28 @@ const attachUsdMeshSceneToRoot = (
       },
       options?.resolveResource
     );
-    const textureReferences = [
-      primitive.baseColorTexture,
-      primitive.normalTexture,
-      primitive.metallicTexture,
-      primitive.roughnessTexture,
-      primitive.metallicRoughnessTexture,
-      primitive.occlusionTexture,
-      primitive.emissiveTexture,
-      primitive.opacityTexture,
-    ].filter((value): value is string => Boolean(value));
-    const resolvedTextureCount = Object.values(materialTextures).filter((value) => Boolean(value)).length;
+    const textureReferencesByChannel: Record<UsdMaterialChannelKey, string | null> = {
+      baseColor: primitive.baseColorTexture,
+      normal: primitive.normalTexture,
+      metallic: primitive.metallicTexture,
+      roughness: primitive.roughnessTexture,
+      metallicRoughness: primitive.metallicRoughnessTexture,
+      occlusion: primitive.occlusionTexture,
+      emissive: primitive.emissiveTexture,
+      opacity: primitive.opacityTexture,
+    };
+    const resolvedTextureByChannel: Record<UsdMaterialChannelKey, string | null> = {
+      baseColor: materialTextures.baseColorUrl,
+      normal: materialTextures.normalUrl,
+      metallic: materialTextures.metallicUrl,
+      roughness: materialTextures.roughnessUrl,
+      metallicRoughness: materialTextures.metallicRoughnessUrl,
+      occlusion: materialTextures.occlusionUrl,
+      emissive: materialTextures.emissiveUrl,
+      opacity: materialTextures.opacityUrl,
+    };
+    const textureReferences = Object.values(textureReferencesByChannel).filter((value): value is string => Boolean(value));
+    const resolvedTextureCount = Object.values(resolvedTextureByChannel).filter((value) => Boolean(value)).length;
     const hasMaterialBinding = Boolean(
       primitive.materialName ||
         primitive.materialSource ||
@@ -2858,10 +3613,23 @@ const attachUsdMeshSceneToRoot = (
         primitive.opacityFactor !== null
     );
     if (hasMaterialBinding) materialsBound += 1;
-    referencedTextures += textureReferences.length;
+    (Object.keys(textureReferencesByChannel) as UsdMaterialChannelKey[]).forEach((channel) => {
+      accountTextureBinding(channel, textureReferencesByChannel[channel], resolvedTextureByChannel[channel]);
+    });
     if (resolvedTextureCount > 0) texturedMaterials += 1;
-    unresolvedTextureBindings += Math.max(0, textureReferences.length - resolvedTextureCount);
-    const localPose = rebaseWorldPoseToTargetLocal(
+    if (options?.detailedTrace) {
+      materialTraceEntries.push({
+        traceId: options.traceId ?? null,
+        primPath: primitive.primPath,
+        nodeName: primitive.name,
+        kind: "primitive",
+        materialName: primitive.materialName,
+        channelSources: primitive.materialChannelSources,
+        referencedByChannel: textureReferencesByChannel,
+        resolvedByChannel: resolvedTextureByChannel,
+      });
+    }
+    const rebasedLocalPose = rebaseWorldPoseToTargetLocal(
       {
         position: primitive.position,
         quaternion: primitive.quaternion,
@@ -2871,6 +3639,14 @@ const attachUsdMeshSceneToRoot = (
       },
       targetEntry
     );
+    const localPose = applyBodyFrameCorrectionToLocalPose({
+      localPose: rebasedLocalPose,
+      parentBodyToken: primitive.parentBody,
+      targetEntry,
+      primPath: primitive.primPath,
+      nodeName: primitive.name,
+      kind: "primitive",
+    });
     const visualPrimitive = createUsdVisualPrimitive(
       {
         ...primitive,
@@ -2905,9 +3681,22 @@ const attachUsdMeshSceneToRoot = (
     texturedMaterials,
     referencedTextures,
     unresolvedTextureBindings,
+    unresolvedTextureBindingsByChannel,
     aliasCollisionCount: links.aliasCollisionCount,
     parentPoseWorldFallbacks,
+    bodyFrameCorrections,
+    materialTraceCount: materialTraceEntries.length,
   };
+
+  if (options?.detailedTrace && materialTraceEntries.length > 0) {
+    logInfo("USD material binding trace", {
+      scope: "usd",
+      data: {
+        traceId: options.traceId ?? null,
+        entries: materialTraceEntries,
+      },
+    });
+  }
 
   return {
     attachedMeshes,
@@ -2918,8 +3707,11 @@ const attachUsdMeshSceneToRoot = (
     texturedMaterials,
     referencedTextures,
     unresolvedTextureBindings,
+    unresolvedTextureBindingsByChannel,
     aliasCollisionCount: links.aliasCollisionCount,
     parentPoseWorldFallbacks,
+    bodyFrameCorrections,
+    materialTraceEntries,
   };
 };
 
@@ -3360,6 +4152,32 @@ const normalizeTextureAssetPath = (value: string | null): string | null => {
   return normalized;
 };
 
+const parseMaterialChannelSourceToken = (
+  value: unknown
+): "explicit" | "generic_fallback" | null => {
+  const token = String(value ?? "").trim().toLowerCase();
+  if (token === "explicit") return "explicit";
+  if (token === "generic_fallback" || token === "generic") return "generic_fallback";
+  return null;
+};
+
+const parseMaterialChannelSources = (value: unknown): NormalizedUsdMaterialChannelSources | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const parsed: NormalizedUsdMaterialChannelSources = {
+    baseColor: parseMaterialChannelSourceToken(raw.baseColor),
+    normal: parseMaterialChannelSourceToken(raw.normal),
+    metallic: parseMaterialChannelSourceToken(raw.metallic),
+    roughness: parseMaterialChannelSourceToken(raw.roughness),
+    metallicRoughness: parseMaterialChannelSourceToken(raw.metallicRoughness),
+    occlusion: parseMaterialChannelSourceToken(raw.occlusion),
+    emissive: parseMaterialChannelSourceToken(raw.emissive),
+    opacity: parseMaterialChannelSourceToken(raw.opacity),
+  };
+  const hasAny = Object.values(parsed).some((item) => item !== null);
+  return hasAny ? parsed : null;
+};
+
 const parsePrimitiveKind = (value: unknown): NormalizedUsdMeshScenePrimitiveKind | null => {
   const token = String(value ?? "").trim().toLowerCase();
   if (token === "sphere" || token === "capsule" || token === "cylinder" || token === "cone" || token === "cube") {
@@ -3511,6 +4329,7 @@ const normalizeUsdMeshScene = (
       roughnessFactor: parseUnitNumberOrNull(item?.roughnessFactor),
       emissiveFactor: parseColorTriplet(item?.emissiveFactor),
       opacityFactor: parseUnitNumberOrNull(item?.opacityFactor),
+      materialChannelSources: parseMaterialChannelSources(item?.materialChannelSources),
     });
   }
 
@@ -3576,6 +4395,7 @@ const normalizeUsdMeshScene = (
       roughnessFactor: parseUnitNumberOrNull(item?.roughnessFactor),
       emissiveFactor: parseColorTriplet(item?.emissiveFactor),
       opacityFactor: parseUnitNumberOrNull(item?.opacityFactor),
+      materialChannelSources: parseMaterialChannelSources(item?.materialChannelSources),
     });
   }
 
@@ -4347,12 +5167,24 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     converterAssetId,
     assetsByKey,
     bundleHintPaths,
+    variantImportHints,
     sceneRole,
   } = params;
   const importSceneRole = sceneRole === "scene_asset" ? "scene_asset" : "robot";
   const displayName = usdName ?? (basename(usdKey) || usdKey);
+  const debugTrace = resolveUsdImportDebugTrace(importOptions);
+  const debugTraceDetailed = debugTrace === "detailed";
+  const traceId = createUsdImportTraceId(usdKey);
 
-  logInfo(`USD load: ${usdKey}`, { scope: "usd" });
+  logInfo(`USD load: ${usdKey}`, {
+    scope: "usd",
+    data: {
+      traceId,
+      debugTrace,
+      posePolicy: variantImportHints?.posePolicy ?? "auto",
+      referenceUsdKey: variantImportHints?.referenceUsdKey ?? null,
+    },
+  });
 
   let root: THREE.Object3D | null = null;
   let resolvedConverterAssetId = converterAssetId ?? null;
@@ -4365,6 +5197,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   let converterDiagnostics = normalizeUsdConverterDiagnostics(null);
   const normalizedUsdKey = String(usdKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
   const importWarnings: UsdImportWarning[] = [];
+  let jointPoseSummary: UsdJointPoseDecisionSummary | null = null;
 
   if (usdConverterEnabled) {
     if (!resolvedConverterAssetId) {
@@ -4515,7 +5348,39 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
           });
         }
         detectedFloatingBase = parsed.bodies.some((body) => body.joints.some((joint) => joint.type === "free"));
-        const builtFromMjcf = buildRobotFromMjcf(parsed, displayName, { introspection });
+        const builtFromMjcf = buildRobotFromMjcf(parsed, displayName, {
+          introspection,
+          meshScene,
+          posePolicy: variantImportHints?.posePolicy ?? "auto",
+          traceId,
+          debugTraceDetailed,
+        });
+        const builtJointPoseSummary = builtFromMjcf.poseSummary;
+        jointPoseSummary = builtJointPoseSummary;
+        logInfo("USD joint pose selection summary", {
+          scope: "usd",
+          data: {
+            traceId,
+            usdKey,
+            posePolicy: variantImportHints?.posePolicy ?? "auto",
+            totalJoints: builtJointPoseSummary.totalDecisions,
+            framePairJoints: builtJointPoseSummary.framePairDecisions,
+            mjcfJoints: builtJointPoseSummary.mjcfDecisions,
+            fallbackJoints: builtJointPoseSummary.fallbackCount,
+          },
+        });
+        if (builtJointPoseSummary.fallbackCount > 0) {
+          importWarnings.push({
+            code: "USD_IMPORT_JOINT_POSE_FALLBACK",
+            message: "Some joints switched from USD frame-pair to MJCF local pose based on policy/evidence.",
+            context: {
+              traceId,
+              posePolicy: variantImportHints?.posePolicy ?? "auto",
+              fallbackCount: builtJointPoseSummary.fallbackCount,
+              fallbackJoints: builtJointPoseSummary.fallbackJoints,
+            },
+          });
+        }
         const introspectionBodyCount = introspection
           ? new Set(
               introspection.joints
@@ -4703,6 +5568,28 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   }
 
   attachUsdIntrospectionMetadata(root, introspection);
+  const hierarchyAugment =
+    importSceneRole === "robot"
+      ? augmentRobotHierarchyFromMeshSceneBodies(root, meshScene, {
+          selfCollisionEnabled: importOptions?.selfCollision === true,
+          traceId,
+          detailedTrace: debugTraceDetailed,
+        })
+      : { createdLinks: 0, createdJoints: 0, unresolvedBodies: 0 };
+  if (hierarchyAugment.createdLinks > 0 || hierarchyAugment.unresolvedBodies > 0) {
+    const logFn = hierarchyAugment.unresolvedBodies > 0 ? logWarn : logInfo;
+    logFn("USD mesh-scene hierarchy augmentation summary", {
+      scope: "usd",
+      data: {
+        traceId,
+        usdKey,
+        converterAssetId: resolvedConverterAssetId,
+        createdLinks: hierarchyAugment.createdLinks,
+        createdJoints: hierarchyAugment.createdJoints,
+        unresolvedBodies: hierarchyAugment.unresolvedBodies,
+      },
+    });
+  }
   const bodyPosesApplied = applyUsdBodyPosesToCollapsedLinks(root, meshScene);
   let mjcfBodiesPatchedFromMeshScene = 0;
   if (bodyPosesApplied > 0) {
@@ -4751,6 +5638,8 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     resolveResource,
     attachCollisionProxies: useVisualCollisionSync,
     replaceExisting: shouldReplaceExistingVisuals,
+    traceId,
+    detailedTrace: debugTraceDetailed,
   });
   if (meshScene && meshScene.meshes.length > 0 && meshAttach.attachedMeshes === 0) {
     importWarnings.push({
@@ -4785,13 +5674,14 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       },
     });
   }
-  if (meshAttach.parentPoseWorldFallbacks > 0) {
+  if (meshAttach.parentPoseWorldFallbacks > 0 || meshAttach.bodyFrameCorrections > 0) {
     importWarnings.push({
       code: "USD_IMPORT_FRAME_MISMATCH_FALLBACK",
-      message: "Detected likely world-space body-relative mesh poses; applied compatibility rebasing to local link frames.",
+      message: "Detected frame/pose mismatch in mesh attachment; applied compatibility rebasing to local link frames.",
       context: {
         usdKey,
         parentPoseWorldFallbacks: meshAttach.parentPoseWorldFallbacks,
+        bodyFrameCorrections: meshAttach.bodyFrameCorrections,
       },
     });
   }
@@ -4803,6 +5693,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         usdKey,
         unresolvedTextureBindings: meshAttach.unresolvedTextureBindings,
         referencedTextures: meshAttach.referencedTextures,
+        unresolvedTextureBindingsByChannel: meshAttach.unresolvedTextureBindingsByChannel,
       },
     });
   }
@@ -4810,6 +5701,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     logInfo("USD mesh scene attached", {
       scope: "usd",
       data: {
+        traceId,
         usdKey,
         converterAssetId: resolvedConverterAssetId,
         attachedMeshes: meshAttach.attachedMeshes,
@@ -4821,7 +5713,10 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         materialsBound: Number(root.userData?.usdMeshScene?.materialsBound ?? 0),
         texturedMaterials: Number(root.userData?.usdMeshScene?.texturedMaterials ?? 0),
         unresolvedTextureBindings: Number(root.userData?.usdMeshScene?.unresolvedTextureBindings ?? 0),
+        unresolvedTextureBindingsByChannel: root.userData?.usdMeshScene?.unresolvedTextureBindingsByChannel ?? null,
         aliasCollisionCount: Number(root.userData?.usdMeshScene?.aliasCollisionCount ?? 0),
+        parentPoseWorldFallbacks: Number(root.userData?.usdMeshScene?.parentPoseWorldFallbacks ?? 0),
+        bodyFrameCorrections: Number(root.userData?.usdMeshScene?.bodyFrameCorrections ?? 0),
       },
     });
   }
@@ -4833,6 +5728,40 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       ])
     ).values()
   );
+  const usdImportDebug = {
+    traceId,
+    debugTrace,
+    posePolicy: variantImportHints?.posePolicy ?? "auto",
+    referenceUsdKey: variantImportHints?.referenceUsdKey ?? null,
+    hierarchySummary: {
+      createdLinks: hierarchyAugment.createdLinks,
+      createdJoints: hierarchyAugment.createdJoints,
+      unresolvedBodies: hierarchyAugment.unresolvedBodies,
+    },
+    jointPoseSummary: jointPoseSummary
+      ? {
+          totalDecisions: jointPoseSummary.totalDecisions,
+          framePairDecisions: jointPoseSummary.framePairDecisions,
+          mjcfDecisions: jointPoseSummary.mjcfDecisions,
+          fallbackCount: jointPoseSummary.fallbackCount,
+          fallbackJoints: jointPoseSummary.fallbackJoints,
+        }
+      : null,
+    materialSummary: {
+      materialsBound: meshAttach.materialsBound,
+      texturedMaterials: meshAttach.texturedMaterials,
+      referencedTextures: meshAttach.referencedTextures,
+      unresolvedTextureBindings: meshAttach.unresolvedTextureBindings,
+      unresolvedTextureBindingsByChannel: meshAttach.unresolvedTextureBindingsByChannel,
+    },
+    ...(debugTraceDetailed
+      ? {
+          jointPoseDetails: jointPoseSummary?.decisions ?? [],
+          materialTraceEntries: meshAttach.materialTraceEntries,
+        }
+      : {}),
+  };
+  root.userData.usdImportDebug = usdImportDebug;
 
   if (importSceneRole === "scene_asset") {
     const sceneAssetRole = inferSceneAssetSourceRole(usdKey);
@@ -4876,6 +5805,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
     sceneAssetRoot.userData.usdWorkspaceKey = usdKey;
     sceneAssetRoot.userData.usdImportWarnings = uniqueImportWarnings;
     sceneAssetRoot.userData.usdConverterDiagnostics = converterDiagnostics;
+    sceneAssetRoot.userData.usdImportDebug = usdImportDebug;
     sceneAssetRoot.userData.sceneAssetSource = {
       kind: "usd",
       role: sceneAssetRole,
@@ -4966,6 +5896,7 @@ export type USDImportDeps = {
   assets: Record<string, UsdWorkspaceAssetEntry>;
   importOptions?: USDLoaderParams["importOptions"];
   bundleHintPaths?: string[];
+  variantImportHints?: USDLoaderParams["variantImportHints"];
   rootName?: string;
   sceneRole?: USDLoaderParams["sceneRole"];
   frameOnAdd?: boolean;
@@ -4973,7 +5904,17 @@ export type USDImportDeps = {
 };
 
 export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
-  const { usdKey, assets, importOptions, bundleHintPaths, rootName, sceneRole, frameOnAdd, skipPostLoadHook } = deps;
+  const {
+    usdKey,
+    assets,
+    importOptions,
+    bundleHintPaths,
+    variantImportHints,
+    rootName,
+    sceneRole,
+    frameOnAdd,
+    skipPostLoadHook,
+  } = deps;
 
   if (!usdKey) {
     logWarn("USD load requested but no USD selected.", { scope: "usd" });
@@ -5003,6 +5944,7 @@ export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
       assetsByKey: assets,
       importOptions,
       bundleHintPaths,
+      variantImportHints,
     } satisfies USDLoaderParams,
     {
       name: rootName?.trim() || undefined,

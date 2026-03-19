@@ -84,8 +84,15 @@ export type LibrarySampleUsdVariant = {
   description?: string;
   defaultEnvironmentId?: string;
   trainingDefaults?: LibrarySampleTrainingDefaults;
+  importHints?: LibrarySampleUsdVariantImportHints;
   hidden?: boolean;
   preview?: LibraryCardPreview;
+};
+
+export type LibrarySampleUsdVariantImportHints = {
+  referenceVariantId?: string;
+  extraBundleHintPaths?: string[];
+  posePolicy?: "auto" | "prefer_frame_pair" | "prefer_mjcf";
 };
 
 export type LibrarySampleEnvironmentAction =
@@ -372,6 +379,25 @@ function cloneVariant(value: unknown): LibrarySampleUsdVariant | null {
     ...(asOptionalText(record.description) ? { description: asText(record.description) } : {}),
     ...(asOptionalText(record.defaultEnvironmentId) ? { defaultEnvironmentId: asText(record.defaultEnvironmentId) } : {}),
     ...(cloneTrainingDefaults(record.trainingDefaults) ? { trainingDefaults: cloneTrainingDefaults(record.trainingDefaults) } : {}),
+    ...(Object.keys(asRecord(record.importHints)).length > 0
+      ? {
+          importHints: {
+            ...(asOptionalText(asRecord(record.importHints).referenceVariantId)
+              ? { referenceVariantId: asText(asRecord(record.importHints).referenceVariantId) }
+              : {}),
+            ...(asStringArray(asRecord(record.importHints).extraBundleHintPaths).length > 0
+              ? { extraBundleHintPaths: asStringArray(asRecord(record.importHints).extraBundleHintPaths) }
+              : {}),
+            ...(asText(asRecord(record.importHints).posePolicy) === "prefer_frame_pair"
+              ? { posePolicy: "prefer_frame_pair" as const }
+              : asText(asRecord(record.importHints).posePolicy) === "prefer_mjcf"
+                ? { posePolicy: "prefer_mjcf" as const }
+                : asText(asRecord(record.importHints).posePolicy) === "auto"
+                  ? { posePolicy: "auto" as const }
+                  : {}),
+          },
+        }
+      : {}),
     ...(asBoolean(record.hidden) ? { hidden: true } : {}),
     ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
   };

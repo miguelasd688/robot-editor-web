@@ -68,6 +68,39 @@ const resolveReferenceBundlePath = (basePath: string, reference: string): string
   return normalizeBundlePath(baseDir ? `${baseDir}/${normalizedRef}` : normalizedRef);
 };
 
+const deriveLibrarySampleRoot = (entryPath: string): string | null => {
+  const normalized = normalizeBundlePath(entryPath);
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length >= 4 && parts[0] === "library") {
+    return `${parts[0]}/${parts[1]}/${parts[2]}`;
+  }
+  return null;
+};
+
+export const __testOnlyResolveBundleHintCandidates = (
+  entryPath: string,
+  hintPath: string
+): string[] => {
+  const normalizedEntry = normalizeBundlePath(entryPath);
+  const hintToken = String(hintPath ?? "").trim();
+  if (!normalizedEntry || !hintToken) return [];
+  const normalizedHint = normalizeBundlePath(hintToken);
+  const sampleRoot = deriveLibrarySampleRoot(normalizedEntry);
+  const out = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    const normalized = normalizeBundlePath(value ?? "");
+    if (normalized) out.add(normalized);
+  };
+  add(normalizedHint);
+  add(resolveReferenceBundlePath(normalizedEntry, hintToken));
+  if (sampleRoot && normalizedHint && !normalizedHint.startsWith("library/")) {
+    add(`${sampleRoot}/${normalizedHint}`);
+  }
+  if (sampleRoot) add(resolveReferenceBundlePath(`${sampleRoot}/entry.usd`, hintToken));
+  return Array.from(out);
+};
+
 const extractPrintableTokens = (bytes: Uint8Array): string[] => {
   const out: string[] = [];
   let start = -1;
@@ -247,11 +280,12 @@ export async function collectUsdBundleFiles(params: CollectUsdBundleFilesParams)
         .map((rawPath) => String(rawPath ?? "").trim())
         .filter((rawPath) => rawPath.length > 0)
         .map((rawPath) => {
-          const relativeCandidate = normalizeBundlePath(resolveReferenceBundlePath(entryPath, rawPath) ?? "");
-          if (relativeCandidate && keyToAsset.has(relativeCandidate)) return relativeCandidate;
-          return normalizeBundlePath(rawPath);
+          const candidates = __testOnlyResolveBundleHintCandidates(entryPath, rawPath);
+          const resolved = candidates.find((candidate) => keyToAsset.has(candidate));
+          if (resolved) return resolved;
+          return candidates[0] ?? null;
         })
-        .filter((item): item is string => Boolean(item))
+        .filter((item): item is string => Boolean(item && item.length > 0))
     : [];
 
   const missingHints = normalizedHintPaths.filter((path) => !filesByPath.has(path));
