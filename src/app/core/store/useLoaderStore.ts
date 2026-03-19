@@ -24,7 +24,7 @@ type LoaderState = {
   load: <TParams>(
     type: LoaderType,
     params: TParams,
-    opts?: { name?: string; frame?: boolean }
+    opts?: { name?: string; frame?: boolean; skipPostLoadHook?: boolean }
   ) => Promise<{ rootId: string } | null>;
   remove: (rootId: string) => void;
   clear: () => void;
@@ -37,7 +37,7 @@ async function loadWithViewer<TParams>(
   viewer: Viewer | null,
   type: LoaderType,
   params: TParams,
-  opts?: { name?: string; frame?: boolean }
+  opts?: { name?: string; frame?: boolean; skipPostLoadHook?: boolean }
 ) {
   if (!viewer) {
     alert("Viewport not ready (viewer is not mounted). Open the Viewport tab first.");
@@ -66,7 +66,7 @@ async function loadWithViewer<TParams>(
 
     // Run format-specific post-load hook (registered via registerPostLoadHook)
     const hook = postLoadHooks[type];
-    if (hook) await hook({ viewer });
+    if (!opts?.skipPostLoadHook && hook) await hook({ viewer });
 
     logInfo(`Loader: ${type} completed`, { scope: "loader", data: { rootId } });
     return { rootId };

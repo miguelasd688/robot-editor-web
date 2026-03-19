@@ -379,7 +379,7 @@ export class Viewer {
     return rootId;
   }
 
-  removeFromUserScene(rootId: string) {
+  removeFromUserScene(rootId: string, options?: { dispose?: boolean }) {
     if (!this.userRoot) return;
     const root = this.userRoots.get(rootId);
     if (!root) return;
@@ -389,7 +389,7 @@ export class Viewer {
 
     // limpia registro
     unregisterHierarchy(this.objects, root, getDocId);
-    disposeObject3D(root);
+    if (options?.dispose !== false) disposeObject3D(root);
 
     // si estaba seleccionado, deselecciona
     const selectedId = this.selection.getSelectedId();
@@ -410,12 +410,47 @@ export class Viewer {
     if (options?.frame) this.frameObject(obj);
   }
 
-  clearUserScene() {
+  clearUserScene(options?: { dispose?: boolean }) {
     if (!this.userRoot) return;
 
     // clonar la lista porque al remover cambia children
     const roots = [...this.userRoot.children];
-    for (const r of roots) this.removeFromUserScene(getDocId(r));
+    for (const r of roots) this.removeFromUserScene(getDocId(r), options);
+  }
+
+  detachUserRoots(): THREE.Object3D[] {
+    if (!this.userRoot) return [];
+    const roots = [...this.userRoot.children];
+    for (const root of roots) {
+      const rootId = getDocId(root);
+      root.removeFromParent();
+      this.userRoots.delete(rootId);
+      unregisterHierarchy(this.objects, root, getDocId);
+    }
+    const selectedId = this.selection.getSelectedId();
+    if (selectedId && !this.objects.has(selectedId)) {
+      this.setSelected(null);
+      this.events.onPick?.(null);
+    }
+    return roots;
+  }
+
+  restoreDetachedUserRoots(roots: THREE.Object3D[]) {
+    if (!this.userRoot) return;
+    for (const root of roots) {
+      markSceneNode(root);
+      this.applyViewportShading(root);
+      this.userRoot.add(root);
+      registerHierarchy(this.objects, root, getDocId);
+      this.userRoots.set(getDocId(root), root);
+    }
+  }
+
+  disposeDetachedUserRoots(roots: THREE.Object3D[]) {
+    for (const root of roots) {
+      root.removeFromParent();
+      disposeObject3D(root);
+    }
   }
 
   getSceneSnapshot(): SceneSnapshot {
@@ -1688,10 +1723,14 @@ export class Viewer {
     const geometry = mesh.geometry as THREE.BufferGeometry;
 
     const existing = mesh.userData[FLOOR_REFLECTOR_KEY] as Reflector | undefined;
-    if (existing?.parent === mesh && existing.userData?.sourceGeometry === geometry.uuid) return;
-    if (existing) {
-      existing.removeFromParent();
-      if (typeof (existing as any).dispose === "function") (existing as any).dispose();
+    const existingReflector =
+      existing && typeof (existing as { removeFromParent?: unknown }).removeFromParent === "function" ? existing : null;
+    if (existingReflector?.parent === mesh && existingReflector.userData?.sourceGeometry === geometry.uuid) return;
+    if (existingReflector) {
+      existingReflector.removeFromParent();
+      if (typeof (existingReflector as any).dispose === "function") (existingReflector as any).dispose();
+      delete mesh.userData[FLOOR_REFLECTOR_KEY];
+    } else if (existing) {
       delete mesh.userData[FLOOR_REFLECTOR_KEY];
     }
 
@@ -1735,10 +1774,14 @@ export class Viewer {
     const geometry = mesh.geometry as THREE.BufferGeometry;
 
     const existing = mesh.userData[FLOOR_SHADOW_CATCHER_KEY] as THREE.Mesh | undefined;
-    if (existing?.parent === mesh && existing.userData?.sourceGeometry === geometry.uuid) return;
-    if (existing) {
-      existing.removeFromParent();
-      disposeObject3D(existing);
+    const existingShadowCatcher =
+      existing && typeof (existing as { removeFromParent?: unknown }).removeFromParent === "function" ? existing : null;
+    if (existingShadowCatcher?.parent === mesh && existingShadowCatcher.userData?.sourceGeometry === geometry.uuid) return;
+    if (existingShadowCatcher) {
+      existingShadowCatcher.removeFromParent();
+      disposeObject3D(existingShadowCatcher);
+      delete mesh.userData[FLOOR_SHADOW_CATCHER_KEY];
+    } else if (existing) {
       delete mesh.userData[FLOOR_SHADOW_CATCHER_KEY];
     }
 

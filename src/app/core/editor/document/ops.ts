@@ -45,6 +45,20 @@ function resolveUniqueName(doc: ProjectDoc, baseName: string, exceptId?: DocId):
 const isAllowedLinkParentKind = (kind: SceneNode["kind"] | null | undefined) =>
   kind === "robot" || kind === "joint";
 
+const isSceneAssetGroupNode = (node: SceneNode | undefined): boolean => {
+  if (!node || node.kind !== "group") return false;
+  const sceneAssetSource = node.components?.sceneAssetSource;
+  if (sceneAssetSource && typeof sceneAssetSource === "object") return true;
+  return false;
+};
+
+const isAllowedLinkParentNode = (node: SceneNode | undefined): boolean => {
+  if (!node) return false;
+  if (isAllowedLinkParentKind(node.kind)) return true;
+  if (node.kind === "group" && isSceneAssetGroupNode(node)) return true;
+  return false;
+};
+
 const isFixedContainerKind = (kind: SceneNode["kind"]) => kind === "visual" || kind === "collision";
 
 const canonicalNameForKind = (kind: SceneNode["kind"], fallback: string) => {
@@ -67,9 +81,9 @@ function sanitizeParentForKind(
 ): DocId | null {
   if (kind === "robot") return null;
   if (kind !== "link" || !parentId) return parentId;
-  const parentKind = nodes[parentId]?.kind;
-  if (!parentKind) return parentId;
-  return isAllowedLinkParentKind(parentKind) ? parentId : null;
+  const parentNode = nodes[parentId];
+  if (!parentNode) return parentId;
+  return isAllowedLinkParentNode(parentNode) ? parentId : null;
 }
 
 function resolveNearestAllowedLinkParentId(doc: ProjectDoc, startId: DocId | null): DocId | null {
@@ -77,7 +91,7 @@ function resolveNearestAllowedLinkParentId(doc: ProjectDoc, startId: DocId | nul
   while (cur) {
     const node = doc.scene.nodes[cur];
     if (!node) return null;
-    if (isAllowedLinkParentKind(node.kind)) return node.id;
+    if (isAllowedLinkParentNode(node)) return node.id;
     cur = node.parentId ?? null;
   }
   return null;
@@ -319,7 +333,7 @@ export function setNodeParent(doc: ProjectDoc, id: DocId, parentId: DocId | null
   if (nextParentId === id) return doc;
   if (nextParentId === node.parentId) return doc;
   if (node.kind === "robot" && nextParentId !== null) return doc;
-  if (node.kind === "link" && nextParentId && !isAllowedLinkParentKind(doc.scene.nodes[nextParentId]?.kind ?? null)) {
+  if (node.kind === "link" && nextParentId && !isAllowedLinkParentNode(doc.scene.nodes[nextParentId])) {
     return doc;
   }
   if (nextParentId) {
@@ -471,7 +485,7 @@ export function addNodes(
     const parentId = node.parentId;
     if (parentId && nodesCopy[parentId]) {
       const parent = nodesCopy[parentId];
-      if (node.kind === "link" && !isAllowedLinkParentKind(parent.kind)) {
+      if (node.kind === "link" && !isAllowedLinkParentNode(parent)) {
         nodesCopy[node.id] = { ...node, parentId: null };
         if (!roots.includes(node.id)) roots.push(node.id);
         continue;

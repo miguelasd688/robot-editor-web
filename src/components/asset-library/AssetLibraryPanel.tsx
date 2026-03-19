@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { addSceneAsset } from "../../app/core/editor/actions/sceneAssetActions";
 import { setNodeTransformCommand } from "../../app/core/editor/commands/sceneCommands";
 import { editorEngine } from "../../app/core/editor/engineSingleton";
@@ -21,14 +21,15 @@ import {
 } from "./browserDragDrop";
 import {
   MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
+  MANAGED_ROUGH_FLOOR_WORKSPACE_KEY,
+  ensureLibraryCatalogLoaded,
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
   getLibrarySampleById,
   hasLibrarySampleEnvironment,
-  LIBRARY_SAMPLES,
-  listLibrarySampleEnvironmentWorkspaceKeys,
-  listLibrarySampleUsdWorkspaceKeys,
-  resolveDefaultSampleEnvironmentWorkspaceKey,
+  resolveDefaultSampleEnvironmentId,
+  type LibrarySample,
+  useLibraryCatalogStore,
 } from "./librarySamples";
 import {
   ensureLibraryAssetPackItemImported,
@@ -118,220 +119,191 @@ const createWorkspaceFile = (blob: Blob, workspaceKey: string) => {
   return file;
 };
 
-const LIBRARY_SAMPLE_ITEMS: BrowserItem[] = LIBRARY_SAMPLES.map((sample) => ({
-  id: `robot-sample-${sample.id}`,
-  label: sample.label,
-  pathName: sample.label.replace(/\s+/g, ""),
-  description: sample.description,
-  icon: sample.icon ?? (sample.kind === "usd" ? "🔷" : "🧪"),
-  badge: sample.badge ?? sample.kind.toUpperCase(),
-  envBadge: hasLibrarySampleEnvironment(sample),
-  sampleId: sample.id,
-  importLabel: sample.importLabel ?? "Load sample",
-  preview: {
-    ...sample.preview,
-    imageUrl: sample.preview.imageUrl ?? getBrowserItemPreviewImage(`robot-sample-${sample.id}`),
-  },
-}));
+function buildSampleBrowserItem(sample: LibrarySample): BrowserItem {
+  return {
+    id: `robot-sample-${sample.id}`,
+    label: sample.label,
+    pathName: sample.label.replace(/\s+/g, ""),
+    description: sample.description,
+    icon: sample.icon ?? (sample.kind === "usd" ? "🔷" : "🧪"),
+    badge: sample.badge ?? sample.kind.toUpperCase(),
+    envBadge: hasLibrarySampleEnvironment(sample),
+    sampleId: sample.id,
+    importLabel: sample.importLabel ?? "Load sample",
+    preview: sample.preview,
+  };
+}
 
-const UR10_LINK_PACK_ITEMS: BrowserItem[] = listLinkLibraryAssetPackItems("ur10").map((item) => ({
-  id: `link-pack-${item.id}`,
-  label: item.label,
-  pathName: item.label.replace(/\s+/g, ""),
-  description: item.description,
-  icon: "🧩",
-  badge: "USD",
-  assetPackItemId: item.id,
-  importLabel: "Import asset",
-  preview: {
-    top: "rgba(116, 138, 157, 0.56)",
-    bottom: "rgba(46, 57, 73, 0.9)",
-    caption: "UR10 LINK",
-    imageUrl: getBrowserItemPreviewImage(`link-pack-${item.id}`),
-  },
-}));
-
-const UR10_LINK_PACK_PRESET_ITEMS: BrowserItem[] = listLinkLibraryAssetPackPresets("ur10").map((preset) => ({
-  id: `link-pack-preset-${preset.id}`,
-  label: preset.label,
-  pathName: preset.label.replace(/\s+/g, ""),
-  description: preset.description,
-  icon: "📦",
-  badge: "PRESET",
-  assetPackPresetId: preset.id,
-  importLabel: "Import preset",
-  preview: {
-    top: "rgba(132, 152, 104, 0.56)",
-    bottom: "rgba(51, 66, 40, 0.9)",
-    caption: "SCENE",
-    imageUrl: getBrowserItemPreviewImage(`link-pack-preset-${preset.id}`),
-  },
-}));
-
-const LIBRARY_SECTIONS: BrowserSection[] = [
-  {
-    id: "floors",
-    title: "Floors",
-    items: [
-      {
-        id: "floor-default",
-        label: "Default Floor",
-        pathName: "DefaultFloor",
-        description: "Adds the existing 6m floor plane.",
-        icon: "▦",
-        assetId: "floor",
-        preview: {
-          top: "rgba(78, 117, 151, 0.55)",
-          bottom: "rgba(32, 47, 64, 0.88)",
-          caption: "PLANE",
-          imageUrl: getBrowserItemPreviewImage("floor-default"),
+function buildLibrarySections(input: {
+  samples: LibrarySample[];
+  ur10LinkItems: BrowserItem[];
+  ur10PresetItems: BrowserItem[];
+}): BrowserSection[] {
+  return [
+    {
+      id: "floors",
+      title: "Floors",
+      items: [
+        {
+          id: "floor-default",
+          label: "Default Floor",
+          pathName: "DefaultFloor",
+          description: "Adds the existing 6m floor plane.",
+          icon: "▦",
+          assetId: "floor",
+          preview: {
+            top: "rgba(78, 117, 151, 0.55)",
+            bottom: "rgba(32, 47, 64, 0.88)",
+            caption: "PLANE",
+            imageUrl: getBrowserItemPreviewImage("floor-default"),
+          },
         },
-      },
-      {
-        id: "floor-rough",
-        label: "Rough Floor",
-        pathName: "RoughFloor",
-        description: "Adds a rough floor profile for locomotion previews.",
-        icon: "▨",
-        assetId: "floor:rough",
-        preview: {
-          top: "rgba(121, 146, 98, 0.55)",
-          bottom: "rgba(51, 68, 39, 0.88)",
-          caption: "ROUGH",
-          imageUrl: getBrowserItemPreviewImage("floor-rough"),
+        {
+          id: "floor-rough",
+          label: "Rough Floor",
+          pathName: "RoughFloor",
+          description: "Adds a rough floor profile for locomotion previews.",
+          icon: "▨",
+          assetId: "floor:rough",
+          preview: {
+            top: "rgba(121, 146, 98, 0.55)",
+            bottom: "rgba(51, 68, 39, 0.88)",
+            caption: "ROUGH",
+            imageUrl: getBrowserItemPreviewImage("floor-rough"),
+          },
         },
-      },
-    ],
-  },
-  {
-    id: "robots",
-    title: "Robots",
-    items: [
-      {
-        id: "robot-new",
-        label: "New Robot",
-        pathName: "NewRobot",
-        description: "Creates a robot root in the current scene.",
-        icon: "🤖",
-        assetId: "robot",
-        preview: {
-          top: "rgba(118, 130, 166, 0.56)",
-          bottom: "rgba(40, 44, 67, 0.9)",
-          caption: "ROBOT",
+      ],
+    },
+    {
+      id: "robots",
+      title: "Robots",
+      items: [
+        {
+          id: "robot-new",
+          label: "New Robot",
+          pathName: "NewRobot",
+          description: "Creates a robot root in the current scene.",
+          icon: "🤖",
+          assetId: "robot",
+          preview: {
+            top: "rgba(118, 130, 166, 0.56)",
+            bottom: "rgba(40, 44, 67, 0.9)",
+            caption: "ROBOT",
+          },
         },
-      },
-      ...LIBRARY_SAMPLE_ITEMS,
-    ],
-  },
-  {
-    id: "links",
-    title: "Links",
-    items: [
-      {
-        id: "link-empty",
-        label: "Empty Link",
-        pathName: "EmptyLink",
-        description: "Creates a link container with visual and collision nodes.",
-        icon: "🔗",
-        assetId: "link",
-        preview: {
-          top: "rgba(137, 117, 180, 0.56)",
-          bottom: "rgba(62, 46, 92, 0.9)",
-          caption: "LINK",
+        ...input.samples.map(buildSampleBrowserItem),
+      ],
+    },
+    {
+      id: "links",
+      title: "Links",
+      items: [
+        {
+          id: "link-empty",
+          label: "Empty Link",
+          pathName: "EmptyLink",
+          description: "Creates a link container with visual and collision nodes.",
+          icon: "🔗",
+          assetId: "link",
+          preview: {
+            top: "rgba(137, 117, 180, 0.56)",
+            bottom: "rgba(62, 46, 92, 0.9)",
+            caption: "LINK",
+          },
         },
-      },
-      {
-        id: "link-cube",
-        label: "Cube Link",
-        pathName: "CubeLink",
-        description: "Link with a cube primitive.",
-        icon: "⬛",
-        assetId: "mesh:cube",
-        preview: {
-          top: "rgba(120, 125, 134, 0.56)",
-          bottom: "rgba(56, 61, 70, 0.92)",
-          caption: "CUBE",
-          imageUrl: getBrowserItemPreviewImage("link-cube"),
+        {
+          id: "link-cube",
+          label: "Cube Link",
+          pathName: "CubeLink",
+          description: "Link with a cube primitive.",
+          icon: "⬛",
+          assetId: "mesh:cube",
+          preview: {
+            top: "rgba(120, 125, 134, 0.56)",
+            bottom: "rgba(56, 61, 70, 0.92)",
+            caption: "CUBE",
+            imageUrl: getBrowserItemPreviewImage("link-cube"),
+          },
         },
-      },
-      {
-        id: "link-sphere",
-        label: "Sphere Link",
-        pathName: "SphereLink",
-        description: "Link with a sphere primitive.",
-        icon: "⚪",
-        assetId: "mesh:sphere",
-        preview: {
-          top: "rgba(133, 159, 170, 0.6)",
-          bottom: "rgba(53, 65, 73, 0.93)",
-          caption: "SPHERE",
-          imageUrl: getBrowserItemPreviewImage("link-sphere"),
+        {
+          id: "link-sphere",
+          label: "Sphere Link",
+          pathName: "SphereLink",
+          description: "Link with a sphere primitive.",
+          icon: "⚪",
+          assetId: "mesh:sphere",
+          preview: {
+            top: "rgba(133, 159, 170, 0.6)",
+            bottom: "rgba(53, 65, 73, 0.93)",
+            caption: "SPHERE",
+            imageUrl: getBrowserItemPreviewImage("link-sphere"),
+          },
         },
-      },
-      {
-        id: "link-cylinder",
-        label: "Cylinder Link",
-        pathName: "CylinderLink",
-        description: "Link with a cylinder primitive.",
-        icon: "🥫",
-        assetId: "mesh:cylinder",
-        preview: {
-          top: "rgba(171, 131, 107, 0.58)",
-          bottom: "rgba(83, 59, 46, 0.92)",
-          caption: "CYLINDER",
-          imageUrl: getBrowserItemPreviewImage("link-cylinder"),
+        {
+          id: "link-cylinder",
+          label: "Cylinder Link",
+          pathName: "CylinderLink",
+          description: "Link with a cylinder primitive.",
+          icon: "🥫",
+          assetId: "mesh:cylinder",
+          preview: {
+            top: "rgba(171, 131, 107, 0.58)",
+            bottom: "rgba(83, 59, 46, 0.92)",
+            caption: "CYLINDER",
+            imageUrl: getBrowserItemPreviewImage("link-cylinder"),
+          },
         },
-      },
-      ...UR10_LINK_PACK_ITEMS,
-      ...UR10_LINK_PACK_PRESET_ITEMS,
-    ],
-  },
-  {
-    id: "joints",
-    title: "Joints",
-    items: [
-      {
-        id: "joint-free",
-        label: "Free Joint",
-        pathName: "FreeJoint",
-        description: "Joint without actuator (passive).",
-        icon: "🧷",
-        assetId: "joint:free",
-        preview: {
-          top: "rgba(104, 132, 181, 0.56)",
-          bottom: "rgba(40, 53, 87, 0.9)",
-          caption: "PASSIVE",
+        ...input.ur10LinkItems,
+        ...input.ur10PresetItems,
+      ],
+    },
+    {
+      id: "joints",
+      title: "Joints",
+      items: [
+        {
+          id: "joint-free",
+          label: "Free Joint",
+          pathName: "FreeJoint",
+          description: "Joint without actuator (passive).",
+          icon: "🧷",
+          assetId: "joint:free",
+          preview: {
+            top: "rgba(104, 132, 181, 0.56)",
+            bottom: "rgba(40, 53, 87, 0.9)",
+            caption: "PASSIVE",
+          },
         },
-      },
-      {
-        id: "joint-actuator",
-        label: "Actuator",
-        pathName: "Actuator",
-        description: "Joint with actuator enabled by default.",
-        icon: "🎛️",
-        assetId: "joint:actuator",
-        preview: {
-          top: "rgba(165, 122, 178, 0.58)",
-          bottom: "rgba(72, 40, 90, 0.92)",
-          caption: "ACTIVE",
+        {
+          id: "joint-actuator",
+          label: "Actuator",
+          pathName: "Actuator",
+          description: "Joint with actuator enabled by default.",
+          icon: "🎛️",
+          assetId: "joint:actuator",
+          preview: {
+            top: "rgba(165, 122, 178, 0.58)",
+            bottom: "rgba(72, 40, 90, 0.92)",
+            caption: "ACTIVE",
+          },
         },
-      },
-      {
-        id: "joint-muscle",
-        label: "Muscle Joint",
-        pathName: "MuscleJoint",
-        description: "Joint using tendon+muscle actuator mode.",
-        icon: "🫀",
-        assetId: "joint:muscle",
-        preview: {
-          top: "rgba(148, 146, 126, 0.58)",
-          bottom: "rgba(70, 67, 52, 0.92)",
-          caption: "MUSCLE",
+        {
+          id: "joint-muscle",
+          label: "Muscle Joint",
+          pathName: "MuscleJoint",
+          description: "Joint using tendon+muscle actuator mode.",
+          icon: "🫀",
+          assetId: "joint:muscle",
+          preview: {
+            top: "rgba(148, 146, 126, 0.58)",
+            bottom: "rgba(70, 67, 52, 0.92)",
+            caption: "MUSCLE",
+          },
         },
-      },
-    ],
-  },
-];
+      ],
+    },
+  ];
+}
 
 function isMeshAssetId(assetId: SceneAssetId) {
   return assetId.startsWith("mesh:");
@@ -441,16 +413,68 @@ export default function AssetLibraryPanel() {
   const libraryItemPreviews = useBrowserPreviewStore((s) => s.libraryItemPreviews);
   const touchLibraryItemPreview = useBrowserPreviewStore((s) => s.touchLibraryItem);
   const enqueueLibraryItemCapture = useBrowserPreviewStore((s) => s.enqueueLibraryItemCapture);
+  const librarySamples = useLibraryCatalogStore((s) => s.samples);
 
   const spawnIndex = useRef(0);
   const normalizedQuery = query.trim().toLowerCase();
+  const ur10LinkItems = useMemo(
+    () =>
+      listLinkLibraryAssetPackItems("ur10").map((item) => ({
+        id: `link-pack-${item.id}`,
+        label: item.label,
+        pathName: item.label.replace(/\s+/g, ""),
+        description: item.description,
+        icon: "🧩",
+        badge: "USD",
+        assetPackItemId: item.id,
+        importLabel: "Import asset",
+        preview: item.preview ?? {
+          top: "rgba(116, 138, 157, 0.56)",
+          bottom: "rgba(46, 57, 73, 0.9)",
+          caption: "LINK",
+        },
+      })),
+    [librarySamples]
+  );
+  const ur10PresetItems = useMemo(
+    () =>
+      listLinkLibraryAssetPackPresets("ur10").map((preset) => ({
+        id: `link-pack-preset-${preset.id}`,
+        label: preset.label,
+        pathName: preset.label.replace(/\s+/g, ""),
+        description: preset.description,
+        icon: "📦",
+        badge: "PRESET",
+        assetPackPresetId: preset.id,
+        importLabel: "Import preset",
+        preview: preset.preview ?? {
+          top: "rgba(132, 152, 104, 0.56)",
+          bottom: "rgba(51, 66, 40, 0.9)",
+          caption: "SCENE",
+        },
+      })),
+    [librarySamples]
+  );
+  const librarySections = useMemo(
+    () => buildLibrarySections({ samples: librarySamples, ur10LinkItems, ur10PresetItems }),
+    [librarySamples, ur10LinkItems, ur10PresetItems]
+  );
+
+  useEffect(() => {
+    void ensureLibraryCatalogLoaded().catch((error) => {
+      logWarn("Asset Library failed to load generated library index.", {
+        scope: "assets",
+        data: { error: String((error as Error)?.message ?? error) },
+      });
+    });
+  }, []);
 
   const activeSection = useMemo(
     () =>
       activeDirectory === "root" || activeDirectory === "workspace"
         ? null
-        : LIBRARY_SECTIONS.find((section) => section.id === activeDirectory) ?? null,
-    [activeDirectory]
+        : librarySections.find((section) => section.id === activeDirectory) ?? null,
+    [activeDirectory, librarySections]
   );
 
   const visibleItems = useMemo(() => {
@@ -592,7 +616,7 @@ export default function AssetLibraryPanel() {
         assetId === "floor"
           ? [MANAGED_FLAT_FLOOR_WORKSPACE_KEY]
           : assetId === "floor:rough"
-            ? []
+            ? [MANAGED_ROUGH_FLOOR_WORKSPACE_KEY]
             : [];
       if (managedWorkspaceKeys.length === 0) return false;
 
@@ -665,14 +689,14 @@ export default function AssetLibraryPanel() {
     [importManagedTerrainAssetIfAvailable]
   );
 
-  const openFileInEditor = (path: string) => {
+  const openFileInEditor = useCallback((path: string) => {
     setActiveFile(path);
     const existing = isOpen("editor");
     const dock = existing?.dock ?? "main";
     openPanel(dock, "editor");
-  };
+  }, [isOpen, openPanel, setActiveFile]);
 
-  const importWorkspaceFile = (path: string) => {
+  const importWorkspaceFile = useCallback(async (path: string) => {
     if (isUrdfLikePath(path)) {
       setURDF(path);
       requestUrdfImport({
@@ -683,31 +707,27 @@ export default function AssetLibraryPanel() {
       return;
     }
     if (isUsdPath(path)) {
+      await ensureLibraryCatalogLoaded().catch(() => null);
       const store = useAssetStore.getState();
       store.setUSD(path);
       const sample = findLibrarySampleByWorkspaceKey(path);
-      const sampleVariantKeys = sample
-        ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]))
-        : [];
-      const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(path)];
-      const terrainUsdKeys = sample ? listLibrarySampleEnvironmentWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key])) : [];
       requestUsdImport({
         usdKey: path,
         source: "browser",
+        librarySampleId: sample?.id ?? null,
         optionOverrides: sample?.defaultImportOptions?.usd,
         bundleHintPaths: sample?.files,
-        variantUsdKeys,
-        terrainUsdKeys,
-        selectedTerrainUsdKey: sample ? resolveDefaultSampleEnvironmentWorkspaceKey(sample, path) : terrainUsdKeys[0] ?? null,
+        selectedEnvironmentId: sample ? resolveDefaultSampleEnvironmentId(sample, path) : null,
       });
       logInfo("Browser import request: Workspace USD", { scope: "assets", data: { usdKey: path } });
       return;
     }
     openFileInEditor(path);
-  };
+  }, [openFileInEditor, requestUrdfImport, requestUsdImport, setURDF]);
 
   const importLibrarySample = useCallback(
     async (sampleId: string) => {
+      await ensureLibraryCatalogLoaded().catch(() => null);
       const sample = getLibrarySampleById(sampleId);
       if (!sample) return false;
 
@@ -734,16 +754,13 @@ export default function AssetLibraryPanel() {
       }
 
       store.setUSD(sampleKey);
-      const variantUsdKeys = listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]));
-      const terrainUsdKeys = listLibrarySampleEnvironmentWorkspaceKeys(sample).filter((key) => Boolean(store.assets[key]));
       requestUsdImport({
         usdKey: sampleKey,
         source: "browser",
+        librarySampleId: sample.id,
         optionOverrides: sample.defaultImportOptions?.usd,
         bundleHintPaths: sample.files,
-        variantUsdKeys,
-        terrainUsdKeys,
-        selectedTerrainUsdKey: resolveDefaultSampleEnvironmentWorkspaceKey(sample, sampleKey),
+        selectedEnvironmentId: resolveDefaultSampleEnvironmentId(sample, sampleKey),
       });
       logInfo(`Browser import request: Library sample ${sample.id} (USD)`, {
         scope: "assets",
@@ -879,7 +896,7 @@ export default function AssetLibraryPanel() {
       openWorkspaceDirectory(entry.path);
       return;
     }
-    importWorkspaceFile(entry.path);
+    void importWorkspaceFile(entry.path);
   };
 
   const onImportSelected = () => {

@@ -1,8 +1,8 @@
+import { create } from "zustand";
 import type { AssetEntry } from "../../app/core/assets/assetRegistryTypes";
 import type { SceneAssetId } from "../../app/core/scene/sceneAssets";
 import type { UrdfImportOptions } from "../../app/core/urdf/urdfImportOptions";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
-import { getLibrarySamplePreviewImage } from "./browserPreviewCatalog";
 
 export type LibrarySampleKind = "urdf" | "usd";
 
@@ -27,16 +27,100 @@ export type LibrarySampleDataContract = {
   metadata?: Record<string, unknown>;
 };
 
+export type LibraryCardPreview = {
+  top: string;
+  bottom: string;
+  caption: string;
+  imageUrl?: string;
+};
+
+export type LibraryAssetPackItemTransform = {
+  position?: { x: number; y: number; z: number };
+  rotationDeg?: { x: number; y: number; z: number };
+  scale?: { x: number; y: number; z: number };
+};
+
+export type LibraryAssetPackItemDefinition = {
+  id: string;
+  modelId: string;
+  section: "links";
+  label: string;
+  description: string;
+  entry: string;
+  files: string[];
+  rootName?: string;
+  sceneRole: "scene_asset" | "terrain";
+  preview?: LibraryCardPreview;
+};
+
+export type LibraryAssetPackItem = LibraryAssetPackItemDefinition & {
+  sampleId: string;
+};
+
+export type LibraryAssetPackPresetPlacement = {
+  itemId: string;
+  transform: LibraryAssetPackItemTransform;
+};
+
+export type LibraryAssetPackPresetDefinition = {
+  id: string;
+  modelId: string;
+  label: string;
+  description: string;
+  section: "links";
+  placements: LibraryAssetPackPresetPlacement[];
+  preview?: LibraryCardPreview;
+};
+
+export type LibraryAssetPackPreset = LibraryAssetPackPresetDefinition & {
+  sampleId: string;
+};
+
 export type LibrarySampleUsdVariant = {
   id: string;
   label: string;
   entry: string;
   description?: string;
-  bundleHintPaths?: string[];
+  defaultEnvironmentId?: string;
   trainingDefaults?: LibrarySampleTrainingDefaults;
+  hidden?: boolean;
+  preview?: LibraryCardPreview;
 };
 
-export type LibrarySampleTerrainOption = "none" | "flat" | "rough" | "full_scene";
+export type LibrarySampleEnvironmentAction =
+  | {
+      kind: "usd_bundle";
+      entry: string;
+      files?: string[];
+      sceneRole?: "scene_asset" | "terrain";
+      rootName?: string;
+    }
+  | {
+      kind: "generated_scene_asset";
+      sceneAssetId: SceneAssetId;
+      label?: string;
+    }
+  | {
+      kind: "asset_pack_item";
+      itemId: string;
+      transform?: LibraryAssetPackItemTransform;
+    }
+  | {
+      kind: "asset_pack_preset";
+      presetId: string;
+    };
+
+export type LibrarySampleEnvironment = {
+  id: string;
+  label: string;
+  description?: string;
+  hint?: string;
+  hidden?: boolean;
+  replaceFullScene?: boolean;
+  trainingDefaults?: LibrarySampleTrainingDefaults;
+  preview?: LibraryCardPreview;
+  imports: LibrarySampleEnvironmentAction[];
+};
 
 export type LibrarySample = {
   id: string;
@@ -44,568 +128,573 @@ export type LibrarySample = {
   description: string;
   kind: LibrarySampleKind;
   entry: string;
-  /** For USD samples include entry + all referenced dependencies (layers/textures/meshes). */
   files: string[];
-  /**
-   * Optional compatibility keys used by older imports before the /public/library contract.
-   * If found in workspace, the sample is considered already imported.
-   */
+  bundlePath?: string;
   legacyKeys?: string[];
   badge?: string;
   importLabel?: string;
   icon?: string;
-  preview: {
-    top: string;
-    bottom: string;
-    caption: string;
-    imageUrl?: string;
-  };
+  preview: LibraryCardPreview;
   defaultImportOptions?: {
     urdf?: Partial<UrdfImportOptions>;
     usd?: Partial<UsdImportOptions>;
   };
-  /** Optional alternate USD entries (modes/variants) for the same sample package. */
   usdVariants?: LibrarySampleUsdVariant[];
-  /** Optional model-specific terrain options shown in the USD import dialog. */
-  terrainOptions?: LibrarySampleTerrainOption[];
-  /**
-   * Optional environment bundle entries for full-scene import.
-   * Entries may be sample-relative (e.g. `terrain/foo.usda`) or absolute workspace keys
-   * under `library/` (e.g. `library/floors/flat_floor.usda`).
-   */
-  environmentUsdEntries?: string[];
-  /**
-   * Optional generated scene asset used for full-scene import when no dedicated environment USD
-   * bundle should be loaded.
-   */
-  fullSceneSceneAssetId?: SceneAssetId;
+  environments?: LibrarySampleEnvironment[];
   trainingDefaults?: LibrarySampleTrainingDefaults;
-  /** Optional extensible contract for sample-related training/model/policy artifacts. */
   sampleData?: LibrarySampleDataContract;
+  assetPack?: {
+    items?: LibraryAssetPackItemDefinition[];
+    presets?: LibraryAssetPackPresetDefinition[];
+  };
+};
+
+export type LibraryCatalogIndex = {
+  schemaVersion: string;
+  samples: LibrarySample[];
+};
+
+type LibraryCatalogStatus = "idle" | "loading" | "ready" | "error";
+
+type LibraryCatalogState = {
+  status: LibraryCatalogStatus;
+  schemaVersion: string;
+  samples: LibrarySample[];
+  error: string | null;
+  setLoading: () => void;
+  setReady: (catalog: LibraryCatalogIndex) => void;
+  setError: (message: string) => void;
 };
 
 export const LIBRARY_ROOT = "library";
 export const MANAGED_FLAT_FLOOR_WORKSPACE_KEY = "library/floors/flat_floor.usda";
-const SAMPLE_TERRAIN_SCENE_ASSET_PREFIX = "__sample_scene_asset__:";
-// Library sample files are served from: /public/library/<sampleId>/<entry and dependencies>
+export const MANAGED_ROUGH_FLOOR_WORKSPACE_KEY = "library/anymal_c/terrain/rough_generator_exact_5x5.usda";
 
-export const LIBRARY_SAMPLES: LibrarySample[] = [
-  {
-    id: "cartpole",
-    label: "Cartpole Sample",
-    description: "Cartpole URDF with simple material colors.",
-    kind: "urdf",
-    entry: "Cartpole_robot.urdf",
-    files: ["Cartpole_robot.urdf"],
-    legacyKeys: ["samples/cartpole/Cartpole_robot.urdf"],
-    badge: "URDF",
-    importLabel: "Load sample",
-    icon: "🧪",
-    preview: {
-      top: "rgba(101, 148, 117, 0.55)",
-      bottom: "rgba(38, 74, 57, 0.9)",
-      caption: "CARTPOLE",
-      imageUrl: getLibrarySamplePreviewImage("cartpole"),
-    },
-    defaultImportOptions: {
-      urdf: { floatingBase: false },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.cartpole.manager.v1",
-      recipeId: "isaaclab.cartpole.manager.v1",
-      taskTemplate: "cartpole_manager",
-      task: "Isaac-Cartpole-v0",
-    },
-  },
-  {
-    id: "ant",
-    label: "Ant Sample",
-    description: "Isaac Lab Ant USD sample.",
-    kind: "usd",
-    entry: "ant.usd",
-    files: [
-      "ant-LICENSE.txt",
-      "ant.usd",
-      "ant_colored.usd",
-      "ant_instanceable.usd",
-      "configuration/ant_colored_robot_schema.usd",
-      "configuration/ant_instanceable_robot_schema.usd",
-      "configuration/ant_robot_schema.usd",
-      MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
-    ],
-    badge: "USD",
-    importLabel: "Load sample",
-    icon: "🐜",
-    preview: {
-      top: "rgba(109, 139, 179, 0.55)",
-      bottom: "rgba(43, 58, 83, 0.92)",
-      caption: "ANT",
-      imageUrl: getLibrarySamplePreviewImage("ant"),
-    },
-    defaultImportOptions: {
-      usd: {
-        floatingBase: true,
-        selfCollision: false,
-      },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.ant.manager.v1",
-      recipeId: "isaaclab.ant.manager.v1",
-      taskTemplate: "ant_manager",
-      task: "Isaac-Ant-v0",
-    },
-    terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
-    usdVariants: [
-      {
-        id: "standard",
-        label: "Standard (default)",
-        entry: "ant.usd",
-      },
-      {
-        id: "colored",
-        label: "Colored",
-        entry: "ant_colored.usd",
-      },
-    ],
-  },
-  {
-    id: "humanoid",
-    label: "Humanoid Sample",
-    description: "Isaac Lab Humanoid USD sample.",
-    kind: "usd",
-    entry: "humanoid.usd",
-    files: [
-      "humanoid-LICENSE.txt",
-      "humanoid.usd",
-      "humanoid_instanceable.usd",
-      "configuration/humanoid_instanceable_robot_schema.usd",
-      "configuration/humanoid_robot_schema.usd",
-      MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
-    ],
-    badge: "USD",
-    importLabel: "Load sample",
-    icon: "🧍",
-    preview: {
-      top: "rgba(159, 126, 109, 0.56)",
-      bottom: "rgba(84, 56, 43, 0.92)",
-      caption: "HUMANOID",
-      imageUrl: getLibrarySamplePreviewImage("humanoid"),
-    },
-    defaultImportOptions: {
-      usd: {
-        floatingBase: true,
-        selfCollision: false,
-      },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.humanoid.manager.v1",
-      recipeId: "isaaclab.humanoid.manager.v1",
-      taskTemplate: "humanoid_manager",
-      task: "Isaac-Humanoid-v0",
-    },
-    terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
-  },
-  {
-    id: "anymal_c",
-    label: "Anymal-C Sample",
-    description: "Isaac Lab ANYmal-C USD sample.",
-    kind: "usd",
-    entry: "anymal_c.usd",
-    files: [
-      "Props/instanceable_meshes.usd",
-      "Props/materials/base.jpg",
-      "Props/materials/battery.jpg",
-      "Props/materials/bottom_shell.jpg",
-      "Props/materials/depth_camera.jpg",
-      "Props/materials/drive.jpg",
-      "Props/materials/face.jpg",
-      "Props/materials/foot.jpg",
-      "Props/materials/handle.jpg",
-      "Props/materials/hatch.jpg",
-      "Props/materials/hip.jpg",
-      "Props/materials/lidar.jpg",
-      "Props/materials/lidar_cage.jpg",
-      "Props/materials/remote.jpg",
-      "Props/materials/shank.jpg",
-      "Props/materials/thigh.jpg",
-      "Props/materials/top_shell.jpg",
-      "Props/materials/wide_angle_camera.jpg",
-      "anymal_c.usd",
-      "configuration/anymal_c_robot_schema.usd",
-      "legacy/anymal.usd",
-      "legacy/anymal_base.usd",
-      "legacy/anymal_c-LICENSE.txt",
-      "legacy/anymal_instanceable.usd",
-      "legacy/materials/base.jpg",
-      "legacy/materials/battery.jpg",
-      "legacy/materials/bottom_shell.jpg",
-      "legacy/materials/depth_camera.jpg",
-      "legacy/materials/drive.jpg",
-      "legacy/materials/face.jpg",
-      "legacy/materials/foot.jpg",
-      "legacy/materials/handle.jpg",
-      "legacy/materials/hatch.jpg",
-      "legacy/materials/hip.jpg",
-      "legacy/materials/lidar.jpg",
-      "legacy/materials/lidar_cage.jpg",
-      "legacy/materials/remote.jpg",
-      "legacy/materials/shank.jpg",
-      "legacy/materials/thigh.jpg",
-      "legacy/materials/top_shell.jpg",
-      "legacy/materials/wide_angle_camera.jpg",
-    ],
-    badge: "USD",
-    importLabel: "Load sample",
-    icon: "🐕",
-    preview: {
-      top: "rgba(121, 151, 117, 0.58)",
-      bottom: "rgba(54, 76, 50, 0.92)",
-      caption: "ANYMAL-C",
-      imageUrl: getLibrarySamplePreviewImage("anymal_c"),
-    },
-    defaultImportOptions: {
-      usd: {
-        floatingBase: true,
-        selfCollision: false,
-        collisionProfile: "outer_hull",
-      },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.anymal_c.manager.v1",
-      recipeId: "isaaclab.anymal_c.manager.v1",
-      taskTemplate: "anymal_c_manager",
-      task: "Isaac-Velocity-Rough-Anymal-C-v0",
-    },
-    terrainOptions: ["none", "flat", "rough", "full_scene"],
-    environmentUsdEntries: [MANAGED_FLAT_FLOOR_WORKSPACE_KEY],
-    fullSceneSceneAssetId: "floor:rough",
-    usdVariants: [
-      {
-        id: "anymal_c",
-        label: "ANYmal-C (default)",
-        entry: "anymal_c.usd",
-      },
-      {
-        id: "legacy",
-        label: "Legacy",
-        entry: "legacy/anymal.usd",
-      },
-    ],
-  },
-  {
-    id: "ur10",
-    label: "UR10 Sample",
-    description: "Isaac Lab UR10 sample with Reach manager and original cube-stack IK manager variants.",
-    kind: "usd",
-    entry: "Legacy/ur10.usd",
-    files: [
-      "Legacy/Props/Materials/material_library.usd",
-      "Legacy/Props/long_gripper.usd",
-      "Legacy/Props/short_gripper.usd",
-      "Legacy/Props/ur10_base.usd",
-      "Legacy/Props/ur10_elbow.usd",
-      "Legacy/Props/ur10_forearm.usd",
-      "Legacy/Props/ur10_shoulder.usd",
-      "Legacy/Props/ur10_tool.usd",
-      "Legacy/Props/ur10_upper_arm.usd",
-      "Legacy/Props/ur10_wrist_1.usd",
-      "Legacy/Props/ur10_wrist_2.usd",
-      "Legacy/Props/ur10_wrist_3.usd",
-      "Legacy/ur10.usd",
-      "Legacy/ur10_long_suction.usd",
-      "Legacy/ur10_low_res.usd",
-      "Legacy/ur10_short_suction.usd",
-      "configuration/ur10_base.usd",
-      "configuration/ur10_physics.usd",
-      "configuration/ur10_robot_schema.usd",
-      "configuration/ur10_sensor.usd",
-      "environment/Props/Blocks/DexCube/Materials/dex_cube_mod.png",
-      "environment/Props/Blocks/DexCube/Props/instanceable_meshes.usd",
-      "environment/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-      "environment/Props/Blocks/Materials/Materials.usd",
-      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_D1.png",
-      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_N1.png",
-      "environment/Props/Blocks/Materials/Textures/T_NvidiaCube_ORM1.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_BaseColor.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Normal.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Roughness.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_green1_BaseColor.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_green1_Normal.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_green1_Roughness.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_red1_BaseColor.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_red1_Normal.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_red1_Roughness.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_BaseColor.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Normal.png",
-      "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Roughness.png",
-      "environment/Props/Blocks/MultiColorCube/Props/instanceable_meshes.usd",
-      "environment/Props/Blocks/MultiColorCube/multi_color_cube_instanceable.usd",
-      "environment/Props/Blocks/basic_block.usd",
-      "environment/Props/Blocks/block.usd",
-      "environment/Props/Blocks/block_instanceable.usd",
-      "environment/Props/Blocks/blue_block.usd",
-      "environment/Props/Blocks/green_block.usd",
-      "environment/Props/Blocks/nvidia_cube.usd",
-      "environment/Props/Blocks/red_block.usd",
-      "environment/Props/Blocks/yellow_block.usd",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_BaseColor.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Metallic.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Normal.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Roughness.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_BaseColor.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Metallic.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Normal.png",
-      "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Roughness.png",
-      "environment/Props/Mounts/SeattleLabTable/table.usd",
-      "environment/Props/Mounts/SeattleLabTable/table_instanceable.usd",
-      "environment/ur10_table_cubes_scene.usda",
-      "grippers/long_gripper.usd",
-      "grippers/short_gripper.usd",
-      "ur10.usd",
-    ],
-    badge: "USD",
-    importLabel: "Load sample",
-    icon: "🦾",
-    preview: {
-      top: "rgba(126, 150, 174, 0.58)",
-      bottom: "rgba(48, 61, 81, 0.92)",
-      caption: "UR10",
-      imageUrl: getLibrarySamplePreviewImage("ur10"),
-    },
-    defaultImportOptions: {
-      usd: {
-        floatingBase: false,
-        selfCollision: false,
-      },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.ur10.reach.manager.v1",
-      recipeId: "isaaclab.ur10.reach.manager.v1",
-      taskTemplate: "ur10_reach_manager",
-      task: "Isaac-Reach-UR10-v0",
-    },
-    terrainOptions: ["none", "flat", "full_scene"],
-    environmentUsdEntries: ["environment/ur10_table_cubes_scene.usda"],
-    sampleData: {
-      artifacts: [
-        {
-          id: "ur10-reach-default-policy",
-          label: "UR10 Reach Policy (placeholder)",
-          workspaceKey: "library/ur10/training/policies/ur10_reach_policy.onnx",
-          kind: "policy",
-          description: "Reserved contract entry for future bundled UR10 reach policy artifacts.",
-        },
-        {
-          id: "ur10-cube-stack-ik-checkpoint",
-          label: "UR10 Cube Stack IK Checkpoint (placeholder)",
-          workspaceKey: "library/ur10/training/checkpoints/ur10_stack_ik.ckpt",
-          kind: "training_checkpoint",
-          description: "Reserved contract entry for future bundled stack-IK training checkpoints.",
-        },
-      ],
-      metadata: {
-        modelFamily: "ur10",
-        supportStatus: "contract_only_placeholder",
-      },
-    },
-    usdVariants: [
-      {
-        id: "standard",
-        label: "Standard (default)",
-        entry: "Legacy/ur10.usd",
-        trainingDefaults: {
-          templateId: "isaaclab.ur10.reach.manager.v1",
-          recipeId: "isaaclab.ur10.reach.manager.v1",
-          taskTemplate: "ur10_reach_manager",
-          task: "Isaac-Reach-UR10-v0",
-          ikModelId: "none",
-        },
-      },
-      {
-        id: "modern_compact",
-        label: "Modern compact",
-        entry: "ur10.usd",
-        trainingDefaults: {
-          templateId: "isaaclab.ur10.reach.manager.v1",
-          recipeId: "isaaclab.ur10.reach.manager.v1",
-          taskTemplate: "ur10_reach_manager",
-          task: "Isaac-Reach-UR10-v0",
-          ikModelId: "none",
-        },
-      },
-      {
-        id: "long_suction",
-        label: "Long suction",
-        entry: "Legacy/ur10_long_suction.usd",
-        trainingDefaults: {
-          templateId: "isaaclab.ur10.stack_ik.manager.v1",
-          recipeId: "isaaclab.ur10.stack_ik.manager.v1",
-          taskTemplate: "ur10_stack_ik_manager",
-          task: "Agent-Stack-Cube-UR10-Long-Suction-IK-Rel-v0",
-          ikModelId: "native_stack_ik",
-        },
-      },
-      {
-        id: "short_suction",
-        label: "Short suction",
-        entry: "Legacy/ur10_short_suction.usd",
-        trainingDefaults: {
-          templateId: "isaaclab.ur10.stack_ik.manager.v1",
-          recipeId: "isaaclab.ur10.stack_ik.manager.v1",
-          taskTemplate: "ur10_stack_ik_manager",
-          task: "Agent-Stack-Cube-UR10-Short-Suction-IK-Rel-v0",
-          ikModelId: "native_stack_ik",
-        },
-      },
-    ],
-  },
-  {
-    id: "open_arm",
-    label: "Open Arm Sample",
-    description: "OpenArm manipulator sample with unimanual/bimanual USD variants.",
-    kind: "usd",
-    entry: "openarm_unimanual/openarm_unimanual.usd",
-    files: [
-      "openarm_unimanual/openarm_unimanual.usd",
-      "openarm_unimanual/configuration/openarm_unimanual_base.usd",
-      "openarm_unimanual/configuration/openarm_unimanual_physics.usd",
-      "openarm_unimanual/configuration/openarm_unimanual_sensor.usd",
-      "openarm_bimanual/openarm_bimanual.usd",
-      "openarm_bimanual/configuration/openarm_bimanual_base.usd",
-      "openarm_bimanual/configuration/openarm_bimanual_physics.usd",
-      "openarm_bimanual/configuration/openarm_bimanual_sensor.usd",
-      "terrain/table_scene.usda",
-    ],
-    badge: "USD",
-    importLabel: "Load sample",
-    icon: "🦾",
-    preview: {
-      top: "rgba(112, 122, 158, 0.58)",
-      bottom: "rgba(47, 57, 84, 0.92)",
-      caption: "OPEN ARM",
-      imageUrl: getLibrarySamplePreviewImage("open_arm"),
-    },
-    defaultImportOptions: {
-      usd: {
-        floatingBase: false,
-        selfCollision: false,
-      },
-    },
-    trainingDefaults: {
-      templateId: "isaaclab.generic.manager.v1",
-      recipeId: "isaaclab.generic.manager.v1",
-      taskTemplate: "generic_manager",
-      task: "Agent-Generic-Manager-v0",
-    },
-    terrainOptions: ["none", "full_scene"],
-    environmentUsdEntries: ["terrain/table_scene.usda"],
-    usdVariants: [
-      {
-        id: "unimanual",
-        label: "Unimanual (default)",
-        entry: "openarm_unimanual/openarm_unimanual.usd",
-      },
-      {
-        id: "bimanual",
-        label: "Bimanual",
-        entry: "openarm_bimanual/openarm_bimanual.usd",
-      },
-    ],
-  },
-];
+const DEFAULT_LIBRARY_INDEX: LibraryCatalogIndex = {
+  schemaVersion: "library.index.v1",
+  samples: [],
+};
 
-export function getLibrarySampleById(sampleId: string): LibrarySample | null {
-  return LIBRARY_SAMPLES.find((sample) => sample.id === sampleId) ?? null;
+const normalizePath = (value: string) => String(value ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+const uniqueStrings = (values: string[]) => Array.from(new Set(values.map((value) => normalizePath(value)).filter(Boolean)));
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+const asText = (value: unknown) => String(value ?? "").trim();
+const asOptionalText = (value: unknown) => {
+  const token = asText(value);
+  return token ? token : undefined;
+};
+
+const asStringArray = (value: unknown) =>
+  Array.isArray(value) ? uniqueStrings(value.map((item) => String(item ?? "").trim())) : [];
+
+const asBoolean = (value: unknown) => value === true;
+
+function clonePreview(value: unknown, fallbackCaption = ""): LibraryCardPreview {
+  const record = asRecord(value);
+  return {
+    top: asText(record.top) || "rgba(92, 112, 142, 0.56)",
+    bottom: asText(record.bottom) || "rgba(40, 48, 62, 0.92)",
+    caption: asText(record.caption) || fallbackCaption,
+    ...(asOptionalText(record.imageUrl) ? { imageUrl: asText(record.imageUrl) } : {}),
+  };
+}
+
+function cloneTrainingDefaults(value: unknown): LibrarySampleTrainingDefaults | undefined {
+  const record = asRecord(value);
+  const templateId = asText(record.templateId);
+  const recipeId = asText(record.recipeId);
+  const taskTemplate = asText(record.taskTemplate);
+  const task = asText(record.task);
+  if (!templateId || !recipeId || !taskTemplate || !task) return undefined;
+  return {
+    templateId,
+    recipeId,
+    taskTemplate,
+    task,
+    ...(asOptionalText(record.ikModelId) ? { ikModelId: asText(record.ikModelId) } : {}),
+  };
+}
+
+function cloneTransform(value: unknown): LibraryAssetPackItemTransform {
+  const record = asRecord(value);
+  const vector = (input: unknown) => {
+    const entry = asRecord(input);
+    const x = Number(entry.x);
+    const y = Number(entry.y);
+    const z = Number(entry.z);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined;
+    return { x, y, z };
+  };
+  return {
+    ...(vector(record.position) ? { position: vector(record.position) } : {}),
+    ...(vector(record.rotationDeg) ? { rotationDeg: vector(record.rotationDeg) } : {}),
+    ...(vector(record.scale) ? { scale: vector(record.scale) } : {}),
+  };
+}
+
+function cloneAssetPackItemDefinition(value: unknown): LibraryAssetPackItemDefinition | null {
+  const record = asRecord(value);
+  const id = asText(record.id);
+  const entry = asText(record.entry);
+  const label = asText(record.label);
+  const description = asText(record.description);
+  const modelId = asText(record.modelId);
+  if (!id || !entry || !label || !description || !modelId) return null;
+  return {
+    id,
+    modelId,
+    section: "links",
+    label,
+    description,
+    entry,
+    files: asStringArray(record.files),
+    ...(asOptionalText(record.rootName) ? { rootName: asText(record.rootName) } : {}),
+    sceneRole: asText(record.sceneRole) === "terrain" ? "terrain" : "scene_asset",
+    ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
+  };
+}
+
+function cloneAssetPackPresetDefinition(value: unknown): LibraryAssetPackPresetDefinition | null {
+  const record = asRecord(value);
+  const id = asText(record.id);
+  const label = asText(record.label);
+  const description = asText(record.description);
+  const modelId = asText(record.modelId);
+  if (!id || !label || !description || !modelId) return null;
+  const placements = Array.isArray(record.placements)
+    ? record.placements
+        .map((placement) => {
+          const entry = asRecord(placement);
+          const itemId = asText(entry.itemId);
+          if (!itemId) return null;
+          return {
+            itemId,
+            transform: cloneTransform(entry.transform),
+          } satisfies LibraryAssetPackPresetPlacement;
+        })
+        .filter((item): item is LibraryAssetPackPresetPlacement => Boolean(item))
+    : [];
+  return {
+    id,
+    modelId,
+    label,
+    description,
+    section: "links",
+    placements,
+    ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
+  };
+}
+
+function cloneEnvironmentAction(value: unknown): LibrarySampleEnvironmentAction | null {
+  const record = asRecord(value);
+  const kind = asText(record.kind);
+  if (kind === "usd_bundle") {
+    const entry = asText(record.entry);
+    if (!entry) return null;
+    return {
+      kind: "usd_bundle",
+      entry,
+      ...(Array.isArray(record.files) ? { files: asStringArray(record.files) } : {}),
+      ...(asText(record.sceneRole) === "terrain" ? { sceneRole: "terrain" } : {}),
+      ...(asOptionalText(record.rootName) ? { rootName: asText(record.rootName) } : {}),
+    };
+  }
+  if (kind === "generated_scene_asset") {
+    const sceneAssetId = asText(record.sceneAssetId) as SceneAssetId;
+    if (!sceneAssetId) return null;
+    return {
+      kind: "generated_scene_asset",
+      sceneAssetId,
+      ...(asOptionalText(record.label) ? { label: asText(record.label) } : {}),
+    };
+  }
+  if (kind === "asset_pack_item") {
+    const itemId = asText(record.itemId);
+    if (!itemId) return null;
+    return {
+      kind: "asset_pack_item",
+      itemId,
+      ...(Object.keys(asRecord(record.transform)).length > 0 ? { transform: cloneTransform(record.transform) } : {}),
+    };
+  }
+  if (kind === "asset_pack_preset") {
+    const presetId = asText(record.presetId);
+    if (!presetId) return null;
+    return {
+      kind: "asset_pack_preset",
+      presetId,
+    };
+  }
+  return null;
+}
+
+function cloneEnvironment(value: unknown): LibrarySampleEnvironment | null {
+  const record = asRecord(value);
+  const id = asText(record.id);
+  const label = asText(record.label);
+  if (!id || !label) return null;
+  const imports = Array.isArray(record.imports)
+    ? record.imports.map(cloneEnvironmentAction).filter((item): item is LibrarySampleEnvironmentAction => Boolean(item))
+    : [];
+  if (imports.length === 0) return null;
+  return {
+    id,
+    label,
+    ...(asOptionalText(record.description) ? { description: asText(record.description) } : {}),
+    ...(asOptionalText(record.hint) ? { hint: asText(record.hint) } : {}),
+    ...(asBoolean(record.hidden) ? { hidden: true } : {}),
+    ...(asBoolean(record.replaceFullScene) ? { replaceFullScene: true } : {}),
+    ...(cloneTrainingDefaults(record.trainingDefaults) ? { trainingDefaults: cloneTrainingDefaults(record.trainingDefaults) } : {}),
+    ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
+    imports,
+  };
+}
+
+function cloneVariant(value: unknown): LibrarySampleUsdVariant | null {
+  const record = asRecord(value);
+  const id = asText(record.id);
+  const label = asText(record.label);
+  const entry = asText(record.entry);
+  if (!id || !label || !entry) return null;
+  return {
+    id,
+    label,
+    entry,
+    ...(asOptionalText(record.description) ? { description: asText(record.description) } : {}),
+    ...(asOptionalText(record.defaultEnvironmentId) ? { defaultEnvironmentId: asText(record.defaultEnvironmentId) } : {}),
+    ...(cloneTrainingDefaults(record.trainingDefaults) ? { trainingDefaults: cloneTrainingDefaults(record.trainingDefaults) } : {}),
+    ...(asBoolean(record.hidden) ? { hidden: true } : {}),
+    ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
+  };
+}
+
+function cloneSampleData(value: unknown): LibrarySampleDataContract | undefined {
+  const record = asRecord(value);
+  const artifacts = Array.isArray(record.artifacts)
+    ? record.artifacts
+        .map((artifact) => {
+          const item = asRecord(artifact);
+          const id = asText(item.id);
+          const label = asText(item.label);
+          const workspaceKey = asText(item.workspaceKey);
+          const kindToken = asText(item.kind);
+          if (!id || !label || !workspaceKey) return null;
+          if (
+            kindToken !== "training_checkpoint" &&
+            kindToken !== "rl_model" &&
+            kindToken !== "policy" &&
+            kindToken !== "dataset" &&
+            kindToken !== "metadata"
+          ) {
+            return null;
+          }
+          return {
+            id,
+            label,
+            workspaceKey,
+            kind: kindToken,
+            ...(asOptionalText(item.description) ? { description: asText(item.description) } : {}),
+          } satisfies LibrarySampleDataArtifact;
+        })
+        .filter((item): item is LibrarySampleDataArtifact => Boolean(item))
+    : [];
+  const metadata = asRecord(record.metadata);
+  if (artifacts.length === 0 && Object.keys(metadata).length === 0) return undefined;
+  return {
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+function cloneLibrarySample(value: unknown): LibrarySample | null {
+  const record = asRecord(value);
+  const id = asText(record.id);
+  const label = asText(record.label);
+  const description = asText(record.description);
+  const kind = asText(record.kind);
+  const entry = asText(record.entry);
+  if (!id || !label || !description || !entry) return null;
+  if (kind !== "urdf" && kind !== "usd") return null;
+
+  const assetPackRecord = asRecord(record.assetPack);
+  const items = Array.isArray(assetPackRecord.items)
+    ? assetPackRecord.items
+        .map(cloneAssetPackItemDefinition)
+        .filter((item): item is LibraryAssetPackItemDefinition => Boolean(item))
+    : [];
+  const presets = Array.isArray(assetPackRecord.presets)
+    ? assetPackRecord.presets
+        .map(cloneAssetPackPresetDefinition)
+        .filter((item): item is LibraryAssetPackPresetDefinition => Boolean(item))
+    : [];
+
+  return {
+    id,
+    label,
+    description,
+    kind,
+    entry,
+    files: asStringArray(record.files),
+    ...(asOptionalText(record.bundlePath) ? { bundlePath: asText(record.bundlePath) } : {}),
+    ...(asStringArray(record.legacyKeys).length > 0 ? { legacyKeys: asStringArray(record.legacyKeys) } : {}),
+    ...(asOptionalText(record.badge) ? { badge: asText(record.badge) } : {}),
+    ...(asOptionalText(record.importLabel) ? { importLabel: asText(record.importLabel) } : {}),
+    ...(asOptionalText(record.icon) ? { icon: asText(record.icon) } : {}),
+    preview: clonePreview(record.preview, label.toUpperCase()),
+    ...(Object.keys(asRecord(record.defaultImportOptions)).length > 0
+      ? {
+          defaultImportOptions: {
+            ...(Object.keys(asRecord(asRecord(record.defaultImportOptions).urdf)).length > 0
+              ? { urdf: asRecord(asRecord(record.defaultImportOptions).urdf) as Partial<UrdfImportOptions> }
+              : {}),
+            ...(Object.keys(asRecord(asRecord(record.defaultImportOptions).usd)).length > 0
+              ? { usd: asRecord(asRecord(record.defaultImportOptions).usd) as Partial<UsdImportOptions> }
+              : {}),
+          },
+        }
+      : {}),
+    ...(Array.isArray(record.variants)
+      ? {
+          usdVariants: record.variants.map(cloneVariant).filter((item): item is LibrarySampleUsdVariant => Boolean(item)),
+        }
+      : {}),
+    ...(Array.isArray(record.environments)
+      ? {
+          environments: record.environments
+            .map(cloneEnvironment)
+            .filter((item): item is LibrarySampleEnvironment => Boolean(item)),
+        }
+      : {}),
+    ...(cloneTrainingDefaults(record.trainingDefaults) ? { trainingDefaults: cloneTrainingDefaults(record.trainingDefaults) } : {}),
+    ...(cloneSampleData(record.sampleData) ? { sampleData: cloneSampleData(record.sampleData) } : {}),
+    ...((items.length > 0 || presets.length > 0)
+      ? {
+          assetPack: {
+            ...(items.length > 0 ? { items } : {}),
+            ...(presets.length > 0 ? { presets } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizeLibraryCatalogIndex(value: unknown): LibraryCatalogIndex {
+  const record = asRecord(value);
+  const samples = Array.isArray(record.samples)
+    ? record.samples.map(cloneLibrarySample).filter((item): item is LibrarySample => Boolean(item))
+    : [];
+  return {
+    schemaVersion: asText(record.schemaVersion) || DEFAULT_LIBRARY_INDEX.schemaVersion,
+    samples: samples.sort((a, b) => a.id.localeCompare(b.id)),
+  };
+}
+
+export const useLibraryCatalogStore = create<LibraryCatalogState>((set) => ({
+  status: "idle",
+  schemaVersion: DEFAULT_LIBRARY_INDEX.schemaVersion,
+  samples: DEFAULT_LIBRARY_INDEX.samples,
+  error: null,
+  setLoading: () => set((state) => (state.status === "ready" ? state : { ...state, status: "loading", error: null })),
+  setReady: (catalog) =>
+    set({
+      status: "ready",
+      schemaVersion: catalog.schemaVersion,
+      samples: catalog.samples,
+      error: null,
+    }),
+  setError: (message) =>
+    set({
+      status: "error",
+      schemaVersion: DEFAULT_LIBRARY_INDEX.schemaVersion,
+      samples: DEFAULT_LIBRARY_INDEX.samples,
+      error: message,
+    }),
+}));
+
+let catalogCache: LibraryCatalogIndex | null = null;
+let catalogPromise: Promise<LibraryCatalogIndex> | null = null;
+
+const resolveLibraryBaseUrl = () => {
+  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
+  return base.endsWith("/") ? base : `${base}/`;
+};
+
+export async function ensureLibraryCatalogLoaded(): Promise<LibraryCatalogIndex> {
+  if (catalogCache) return catalogCache;
+  if (catalogPromise) return catalogPromise;
+  useLibraryCatalogStore.getState().setLoading();
+  catalogPromise = (async () => {
+    const url = `${resolveLibraryBaseUrl()}library/index.json`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to load library index: ${url} (${response.status} ${response.statusText})`);
+    }
+    const payload = normalizeLibraryCatalogIndex(await response.json());
+    catalogCache = payload;
+    useLibraryCatalogStore.getState().setReady(payload);
+    return payload;
+  })()
+    .catch((error) => {
+      useLibraryCatalogStore.getState().setError(String((error as Error)?.message ?? error));
+      throw error;
+    })
+    .finally(() => {
+      catalogPromise = null;
+    });
+  return catalogPromise;
+}
+
+export function getLoadedLibrarySamples(): LibrarySample[] {
+  if (catalogCache) return catalogCache.samples;
+  return useLibraryCatalogStore.getState().samples;
+}
+
+const hasLibraryWorkspacePrefix = (path: string) =>
+  normalizePath(path).toLowerCase().startsWith(`${LIBRARY_ROOT.toLowerCase()}/`);
+
+export function resolveLibraryWorkspaceKey(sample: Pick<LibrarySample, "id">, path: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized) return "";
+  if (hasLibraryWorkspacePrefix(normalized)) return normalized;
+  return `${LIBRARY_ROOT}/${sample.id}/${normalized}`;
 }
 
 export function buildLibrarySampleEntryKey(sample: LibrarySample): string {
   return resolveLibraryWorkspaceKey(sample, sample.entry);
 }
 
-export function listLibrarySampleUsdEntries(sample: LibrarySample): string[] {
+export function getLibrarySampleById(sampleId: string, samples: LibrarySample[] = getLoadedLibrarySamples()): LibrarySample | null {
+  const normalized = asText(sampleId);
+  if (!normalized) return null;
+  return samples.find((sample) => sample.id === normalized) ?? null;
+}
+
+export function listLibrarySamples(samples: LibrarySample[] = getLoadedLibrarySamples()): LibrarySample[] {
+  return [...samples];
+}
+
+function createFallbackUsdVariant(sample: LibrarySample): LibrarySampleUsdVariant {
+  return {
+    id: "default",
+    label: "Default",
+    entry: sample.entry,
+    ...(sample.trainingDefaults ? { trainingDefaults: sample.trainingDefaults } : {}),
+  };
+}
+
+export function listLibrarySampleUsdVariants(
+  sample: LibrarySample,
+  options?: { includeHidden?: boolean; selectedWorkspaceKey?: string | null }
+): LibrarySampleUsdVariant[] {
   if (sample.kind !== "usd") return [];
-  const entries = [
-    sample.entry,
-    ...(Array.isArray(sample.usdVariants) ? sample.usdVariants.map((variant) => variant.entry) : []),
-  ]
-    .map((entry) => normalizeLibraryFile(String(entry ?? "").trim()))
-    .filter((entry) => entry.length > 0);
-  return Array.from(new Set(entries));
+  const selectedWorkspaceKey = normalizePath(options?.selectedWorkspaceKey ?? "");
+  const baseVariants = sample.usdVariants && sample.usdVariants.length > 0 ? sample.usdVariants : [createFallbackUsdVariant(sample)];
+  const visible = baseVariants.filter((variant) => {
+    if (options?.includeHidden) return true;
+    if (!variant.hidden) return true;
+    if (!selectedWorkspaceKey) return false;
+    return resolveLibraryWorkspaceKey(sample, variant.entry) === selectedWorkspaceKey;
+  });
+  return visible.length > 0 ? visible : [createFallbackUsdVariant(sample)];
 }
 
-export function listLibrarySampleUsdWorkspaceKeys(sample: LibrarySample): string[] {
-  return listLibrarySampleUsdEntries(sample).map((entry) => resolveLibraryWorkspaceKey(sample, entry));
+export function listLibrarySampleUsdEntries(
+  sample: LibrarySample,
+  options?: { includeHidden?: boolean; selectedWorkspaceKey?: string | null }
+): string[] {
+  return listLibrarySampleUsdVariants(sample, options).map((variant) => normalizePath(variant.entry)).filter(Boolean);
 }
 
-export function listLibrarySampleEnvironmentWorkspaceKeys(sample: LibrarySample): string[] {
-  if (sample.kind !== "usd") return [];
-  const entries = Array.isArray(sample.environmentUsdEntries)
-    ? sample.environmentUsdEntries
-        .map((entry) => normalizeLibraryFile(String(entry ?? "").trim()))
-        .filter((entry) => entry.length > 0)
-    : [];
-  return Array.from(new Set(entries.map((entry) => resolveLibraryWorkspaceKey(sample, entry))));
+export function listLibrarySampleUsdWorkspaceKeys(
+  sample: LibrarySample,
+  options?: { includeHidden?: boolean; selectedWorkspaceKey?: string | null }
+): string[] {
+  return uniqueStrings(
+    listLibrarySampleUsdEntries(sample, options).map((entry) => resolveLibraryWorkspaceKey(sample, entry))
+  );
 }
 
-export function buildLibrarySampleSceneAssetTerrainOptionValue(assetId: SceneAssetId): string {
-  return `${SAMPLE_TERRAIN_SCENE_ASSET_PREFIX}${assetId}`;
-}
-
-export function resolveLibrarySampleFullSceneSceneAssetId(sample: LibrarySample): SceneAssetId | null {
+export function getLibrarySampleVariantByWorkspaceKey(
+  sample: LibrarySample,
+  workspaceKey: string | null | undefined
+): LibrarySampleUsdVariant | null {
   if (sample.kind !== "usd") return null;
-  const assetId = sample.fullSceneSceneAssetId;
-  return assetId ? assetId : null;
+  const normalized = normalizePath(workspaceKey ?? "");
+  if (!normalized) return null;
+  const variants = sample.usdVariants && sample.usdVariants.length > 0 ? sample.usdVariants : [createFallbackUsdVariant(sample)];
+  return variants.find((variant) => resolveLibraryWorkspaceKey(sample, variant.entry) === normalized) ?? null;
 }
 
-export function resolveDefaultSampleEnvironmentWorkspaceKey(
+export function listLibrarySampleEnvironments(
+  sample: LibrarySample,
+  options?: { includeHidden?: boolean }
+): LibrarySampleEnvironment[] {
+  if (sample.kind !== "usd") return [];
+  const environments = sample.environments ?? [];
+  if (options?.includeHidden) return [...environments];
+  return environments.filter((environment) => environment.hidden !== true);
+}
+
+export function getLibrarySampleEnvironmentById(
+  sample: LibrarySample,
+  environmentId: string | null | undefined
+): LibrarySampleEnvironment | null {
+  const normalized = asText(environmentId);
+  if (!normalized || sample.kind !== "usd") return null;
+  return (sample.environments ?? []).find((environment) => environment.id === normalized) ?? null;
+}
+
+export function resolveDefaultSampleEnvironmentId(
   sample: LibrarySample,
   selectedUsdWorkspaceKey: string | null | undefined
 ): string | null {
-  const fullSceneAssetId = resolveLibrarySampleFullSceneSceneAssetId(sample);
-  if (fullSceneAssetId && Array.isArray(sample.terrainOptions) && sample.terrainOptions.includes("full_scene")) {
-    return buildLibrarySampleSceneAssetTerrainOptionValue(fullSceneAssetId);
+  if (sample.kind !== "usd") return null;
+  const environments = listLibrarySampleEnvironments(sample, { includeHidden: false });
+  if (environments.length === 0) return null;
+  const variant = getLibrarySampleVariantByWorkspaceKey(sample, selectedUsdWorkspaceKey);
+  const defaultEnvironmentId = asText(variant?.defaultEnvironmentId ?? "");
+  if (defaultEnvironmentId && environments.some((environment) => environment.id === defaultEnvironmentId)) {
+    return defaultEnvironmentId;
   }
-  const environmentEntries = listLibrarySampleEnvironmentWorkspaceKeys(sample);
-  if (environmentEntries.length === 0) return null;
-  const preferred = normalizeLibraryFile(String(selectedUsdWorkspaceKey ?? "").trim());
-  if (preferred.length > 0 && environmentEntries.includes(preferred)) {
-    return preferred;
-  }
-  return environmentEntries[0] ?? null;
+  return environments[0]?.id ?? null;
 }
 
 export function hasLibrarySampleEnvironment(sample: LibrarySample): boolean {
-  if (sample.kind !== "usd") return false;
-  if (Array.isArray(sample.terrainOptions) && sample.terrainOptions.includes("full_scene")) return true;
-  if (resolveLibrarySampleFullSceneSceneAssetId(sample)) return true;
-  return listLibrarySampleEnvironmentWorkspaceKeys(sample).length > 0;
+  return listLibrarySampleEnvironments(sample).length > 0;
 }
 
 export function findLibrarySampleKey(keys: string[], sample: LibrarySample): string | null {
-  if (!keys.length) return null;
-  const sampleEntryKeys = sample.kind === "usd"
-    ? listLibrarySampleUsdWorkspaceKeys(sample)
-    : [buildLibrarySampleEntryKey(sample)];
+  const normalizedKeys = uniqueStrings(keys);
+  if (normalizedKeys.length === 0) return null;
+
+  const sampleEntryKeys =
+    sample.kind === "usd"
+      ? listLibrarySampleUsdWorkspaceKeys(sample, { includeHidden: true })
+      : [buildLibrarySampleEntryKey(sample)];
   for (const entryKey of sampleEntryKeys) {
-    if (keys.includes(entryKey)) return entryKey;
+    if (normalizedKeys.includes(entryKey)) return entryKey;
   }
 
   const legacyKeys = sample.legacyKeys ?? [];
   for (const legacyKey of legacyKeys) {
-    const normalizedLegacy = normalizeLibraryFile(legacyKey);
-    const exact = keys.find((key) => key === normalizedLegacy);
+    const normalizedLegacy = normalizePath(legacyKey);
+    const exact = normalizedKeys.find((key) => key === normalizedLegacy);
     if (exact) return exact;
-    const bySuffix = keys.find((key) => key.endsWith(`/${normalizedLegacy}`));
+    const bySuffix = normalizedKeys.find((key) => key.endsWith(`/${normalizedLegacy}`));
     if (bySuffix) return bySuffix;
   }
 
-  const sampleEntries = sample.kind === "usd" ? listLibrarySampleUsdEntries(sample) : [sample.entry];
+  const sampleEntries =
+    sample.kind === "usd"
+      ? listLibrarySampleUsdEntries(sample, { includeHidden: true })
+      : [normalizePath(sample.entry)];
   for (const entry of sampleEntries) {
-    const byEntry = keys.find((key) => key.endsWith(`/${entry}`));
+    const byEntry = normalizedKeys.find((key) => key.endsWith(`/${entry}`));
     if (byEntry) return byEntry;
-    const byName = keys.find((key) => key === entry);
+    const byName = normalizedKeys.find((key) => key === entry);
     if (byName) return byName;
   }
   return null;
@@ -613,27 +702,26 @@ export function findLibrarySampleKey(keys: string[], sample: LibrarySample): str
 
 export function findLibrarySampleByWorkspaceKey(
   key: string,
-  samples: LibrarySample[] = LIBRARY_SAMPLES
+  samples: LibrarySample[] = getLoadedLibrarySamples()
 ): LibrarySample | null {
-  const normalized = normalizeLibraryFile(String(key ?? "").trim());
+  const normalized = normalizePath(key);
   if (!normalized) return null;
   for (const sample of samples) {
-    const entryKeys = sample.kind === "usd"
-      ? listLibrarySampleUsdWorkspaceKeys(sample)
-      : [buildLibrarySampleEntryKey(sample)];
-    for (const entryKeyRaw of entryKeys) {
-      const entryKey = normalizeLibraryFile(entryKeyRaw);
-      if (entryKey === normalized) return sample;
-    }
+    const entryKeys =
+      sample.kind === "usd"
+        ? listLibrarySampleUsdWorkspaceKeys(sample, { includeHidden: true })
+        : [buildLibrarySampleEntryKey(sample)];
+    if (entryKeys.some((entryKey) => normalizePath(entryKey) === normalized)) return sample;
 
-    const sampleEntries = sample.kind === "usd" ? listLibrarySampleUsdEntries(sample) : [sample.entry];
-    for (const entry of sampleEntries) {
-      if (normalized === entry || normalized.endsWith(`/${entry}`)) return sample;
-    }
+    const sampleEntries =
+      sample.kind === "usd"
+        ? listLibrarySampleUsdEntries(sample, { includeHidden: true })
+        : [normalizePath(sample.entry)];
+    if (sampleEntries.some((entry) => normalized === entry || normalized.endsWith(`/${entry}`))) return sample;
 
     const legacyKeys = sample.legacyKeys ?? [];
     for (const legacyKey of legacyKeys) {
-      const normalizedLegacy = normalizeLibraryFile(legacyKey);
+      const normalizedLegacy = normalizePath(legacyKey);
       if (!normalizedLegacy) continue;
       if (normalized === normalizedLegacy || normalized.endsWith(`/${normalizedLegacy}`)) return sample;
     }
@@ -643,7 +731,7 @@ export function findLibrarySampleByWorkspaceKey(
 
 export function findLibrarySampleFromKeys(
   keys: string[],
-  samples: LibrarySample[] = LIBRARY_SAMPLES
+  samples: LibrarySample[] = getLoadedLibrarySamples()
 ): { sample: LibrarySample; matchedKey: string } | null {
   for (const sample of samples) {
     const matchedKey = findLibrarySampleKey(keys, sample);
@@ -652,24 +740,9 @@ export function findLibrarySampleFromKeys(
   return null;
 }
 
-const resolveLibraryBaseUrl = () => {
-  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
-  return base.endsWith("/") ? base : `${base}/`;
-};
-
-const normalizeLibraryFile = (path: string) => path.replace(/^\/+/, "");
-const hasLibraryWorkspacePrefix = (path: string) =>
-  normalizeLibraryFile(path).toLowerCase().startsWith(`${LIBRARY_ROOT.toLowerCase()}/`);
-const resolveLibraryWorkspaceKey = (sample: LibrarySample, path: string) => {
-  const normalized = normalizeLibraryFile(path);
-  if (!normalized) return "";
-  if (hasLibraryWorkspacePrefix(normalized)) return normalized;
-  return `${LIBRARY_ROOT}/${sample.id}/${normalized}`;
-};
-
 const createFileWithRelativePath = (blob: Blob, filename: string, relativePath: string) => {
   const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
-  const normalized = normalizeLibraryFile(relativePath);
+  const normalized = normalizePath(relativePath);
   Object.defineProperty(file, "webkitRelativePath", {
     value: normalized,
     configurable: true,
@@ -677,33 +750,58 @@ const createFileWithRelativePath = (blob: Blob, filename: string, relativePath: 
   return file;
 };
 
-export async function fetchLibrarySampleFiles(sample: LibrarySample, filePaths?: string[]): Promise<File[]> {
+export async function fetchLibraryWorkspaceFiles(workspaceKeys: string[]): Promise<File[]> {
   const baseUrl = resolveLibraryBaseUrl();
-  const sourcePaths =
-    Array.isArray(filePaths) && filePaths.length > 0 ? filePaths : sample.files;
-  const workspaceKeys = new Set<string>(
-    sourcePaths
-      .map((filePath) => resolveLibraryWorkspaceKey(sample, String(filePath ?? "").trim()))
-      .filter((filePath) => filePath.length > 0)
-  );
-  const entryWorkspaceKey = buildLibrarySampleEntryKey(sample);
-  if (entryWorkspaceKey) workspaceKeys.add(entryWorkspaceKey);
-  const files = Array.from(workspaceKeys);
-
+  const normalizedWorkspaceKeys = uniqueStrings(workspaceKeys);
   const responses = await Promise.all(
-    files.map(async (workspaceKey) => {
+    normalizedWorkspaceKeys.map(async (workspaceKey) => {
       const url = `${baseUrl}${workspaceKey}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Failed to load library file: ${url} (${res.status} ${res.statusText})`);
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to load library file: ${url} (${response.status} ${response.statusText})`);
       }
-      const blob = await res.blob();
+      const blob = await response.blob();
       const filename = workspaceKey.split("/").pop() ?? workspaceKey;
       return createFileWithRelativePath(blob, filename, workspaceKey);
     })
   );
-
   return responses;
+}
+
+export async function fetchLibrarySampleFiles(sample: LibrarySample, filePaths?: string[]): Promise<File[]> {
+  const sourcePaths = Array.isArray(filePaths) && filePaths.length > 0 ? filePaths : sample.files;
+  const workspaceKeys = uniqueStrings(
+    sourcePaths
+      .map((filePath) => resolveLibraryWorkspaceKey(sample, String(filePath ?? "").trim()))
+      .filter(Boolean)
+  );
+  const entryWorkspaceKey = buildLibrarySampleEntryKey(sample);
+  if (entryWorkspaceKey) workspaceKeys.push(entryWorkspaceKey);
+  return fetchLibraryWorkspaceFiles(uniqueStrings(workspaceKeys));
+}
+
+export async function ensureLibraryWorkspaceKeysImported(
+  workspaceKeys: string[],
+  assetsProvider: () => Record<string, AssetEntry>,
+  importFiles: (files: File[] | FileList) => void
+): Promise<boolean> {
+  const requestedKeys = uniqueStrings(workspaceKeys);
+  if (requestedKeys.length === 0) return true;
+  const knownKeys = new Set(
+    Object.keys(assetsProvider())
+      .map((key) => normalizePath(key))
+      .filter(Boolean)
+  );
+  const missing = requestedKeys.filter((key) => !knownKeys.has(key));
+  if (missing.length === 0) return true;
+  const files = await fetchLibraryWorkspaceFiles(missing);
+  importFiles(files);
+  const finalKnown = new Set(
+    Object.keys(assetsProvider())
+      .map((key) => normalizePath(key))
+      .filter(Boolean)
+  );
+  return requestedKeys.every((key) => finalKnown.has(key));
 }
 
 export async function ensureLibrarySampleImported(
@@ -711,27 +809,19 @@ export async function ensureLibrarySampleImported(
   assetsProvider: () => Record<string, AssetEntry>,
   importFiles: (files: File[] | FileList) => void
 ): Promise<string | null> {
-  const assetKeys = Object.keys(assetsProvider()).map((key) => normalizeLibraryFile(key));
+  const assetKeys = Object.keys(assetsProvider()).map((key) => normalizePath(key));
   const existingKey = findLibrarySampleKey(assetKeys, sample);
   const knownAssetKeySet = new Set(assetKeys);
   const expectedFiles = new Set<string>(
     sample.files
       .map((file) => resolveLibraryWorkspaceKey(sample, file))
-      .filter((file) => file.length > 0)
+      .filter(Boolean)
   );
   expectedFiles.add(buildLibrarySampleEntryKey(sample));
-  const missingFiles = Array.from(expectedFiles).filter(
-    (workspaceKey) => workspaceKey.length > 0 && !knownAssetKeySet.has(workspaceKey)
-  );
-  const samplePrefix = normalizeLibraryFile(`${LIBRARY_ROOT}/${sample.id}/`);
-  const sharedWorkspaceFiles = Array.from(expectedFiles).filter((workspaceKey) => {
-    if (!workspaceKey.startsWith(`${LIBRARY_ROOT}/`)) return false;
-    return !workspaceKey.startsWith(samplePrefix);
-  });
-  const filesToImport = Array.from(new Set([...missingFiles, ...sharedWorkspaceFiles]));
-  if (existingKey && filesToImport.length === 0) return existingKey;
+  const missingFiles = Array.from(expectedFiles).filter((workspaceKey) => !knownAssetKeySet.has(workspaceKey));
+  if (existingKey && missingFiles.length === 0) return existingKey;
 
-  const files = await fetchLibrarySampleFiles(sample, filesToImport.length > 0 ? filesToImport : undefined);
+  const files = await fetchLibrarySampleFiles(sample, missingFiles.length > 0 ? missingFiles : undefined);
   importFiles(files);
   return findLibrarySampleKey(Object.keys(assetsProvider()), sample);
 }

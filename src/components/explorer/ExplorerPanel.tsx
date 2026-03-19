@@ -7,10 +7,9 @@ import { useUsdImportDialogStore } from "../../app/core/store/useUsdImportDialog
 import { ExplorerToolbar } from "./ui/Toolbar";
 import { useWorkspaceImport } from "./services/workspaceImport";
 import {
+  ensureLibraryCatalogLoaded,
   findLibrarySampleByWorkspaceKey,
-  listLibrarySampleEnvironmentWorkspaceKeys,
-  listLibrarySampleUsdWorkspaceKeys,
-  resolveDefaultSampleEnvironmentWorkspaceKey,
+  resolveDefaultSampleEnvironmentId,
 } from "../asset-library/librarySamples";
 
 const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
@@ -32,29 +31,22 @@ export default function ExplorerPanel() {
   const { fileInputRef, onImportClick, onImportChange } = useWorkspaceImport(importFiles);
 
   /** "Load file" button — handles URDF and USD based on what's selected */
-  const onLoadFile = () => {
+  const onLoadFile = async () => {
     if (usdKey && isUsdPath(usdKey)) {
+      await ensureLibraryCatalogLoaded().catch(() => null);
       const entry = assets[usdKey];
       if (!entry) {
         alert("Selected USD file not found in workspace.");
         return;
       }
       const sample = findLibrarySampleByWorkspaceKey(usdKey);
-      const sampleVariantKeys = sample
-        ? listLibrarySampleUsdWorkspaceKeys(sample).filter((key) => Boolean(assets[key]))
-        : [];
-      const variantUsdKeys = sampleVariantKeys.length > 0 ? sampleVariantKeys : [normalizeWorkspaceFilePath(usdKey)];
-      const terrainUsdKeys = sample
-        ? listLibrarySampleEnvironmentWorkspaceKeys(sample).filter((key) => Boolean(assets[key]))
-        : [];
       requestUsdImport({
         usdKey,
         source: "directories",
+        librarySampleId: sample?.id ?? null,
         optionOverrides: sample?.defaultImportOptions?.usd,
         bundleHintPaths: sample?.files,
-        variantUsdKeys,
-        terrainUsdKeys,
-        selectedTerrainUsdKey: sample ? resolveDefaultSampleEnvironmentWorkspaceKey(sample, usdKey) : terrainUsdKeys[0] ?? null,
+        selectedEnvironmentId: sample ? resolveDefaultSampleEnvironmentId(sample, usdKey) : null,
       });
       return;
     }
@@ -83,7 +75,9 @@ export default function ExplorerPanel() {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
       <ExplorerToolbar
         onImportClick={onImportClick}
-        onLoadURDF={onLoadFile}
+        onLoadURDF={() => {
+          void onLoadFile();
+        }}
         fileInput={
           <input
             ref={fileInputRef}

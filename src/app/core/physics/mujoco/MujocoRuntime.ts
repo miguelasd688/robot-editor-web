@@ -8,6 +8,7 @@ import { computeInertiaFromGeom, inferGeomInfo, isValidInertia } from "../geomUt
 import { sanitizeMjcfName, type MjcfNameMap } from "./mjcfNames";
 import { getDocId } from "../../scene/docIds";
 import { logInfo } from "../../services/logger";
+import type { RuntimeBuildReport, SceneAssetCollisionCoverage } from "./runtimeBuildReport";
 
 export type MujocoConfig = {
   noiseRate: number;
@@ -100,7 +101,7 @@ export type MujocoRuntime = {
     roots: THREE.Object3D[],
     config: MujocoConfig,
     source: MujocoModelSource
-  ) => Promise<{ warnings: string[] }>;
+  ) => Promise<RuntimeBuildReport>;
   step: (dt: number) => void;
   setNoiseRate: (value: number) => void;
   setNoiseScale: (value: number) => void;
@@ -156,6 +157,7 @@ const TERRAIN_MESH_FACE_LIMIT_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_M
 const TERRAIN_HEIGHTMAP_GRID_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_GRID ?? "96");
 const TERRAIN_HEIGHTMAP_MIN_COVERAGE_RAW = Number(import.meta.env.VITE_MUJOCO_TERRAIN_HEIGHTMAP_MIN_COVERAGE ?? "0.02");
 const TERRAIN_COLLISION_SIMPLIFIED_CODE = "MUJOCO_TERRAIN_COLLISION_SIMPLIFIED";
+const TERRAIN_COLLISION_INCOMPLETE_CODE = "MUJOCO_TERRAIN_COLLISION_INCOMPLETE";
 const POINTER_CURSOR_BODY_NAME = "__pointer_cursor_body";
 const POINTER_CURSOR_PARK_Z_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_PARK_Z ?? "-1000");
 const POINTER_CURSOR_RADIUS_RAW = Number(import.meta.env.VITE_MUJOCO_POINTER_RADIUS ?? "0.06");
@@ -360,6 +362,20 @@ function isSceneAssetRoot(root: THREE.Object3D): boolean {
     .trim()
     .toLowerCase();
   return Boolean(workspaceKey && /(terrain|rough|floor|ground)/.test(workspaceKey));
+}
+
+function resolveSourceRoleInChain(obj: THREE.Object3D): SceneAssetCollisionCoverage["sourceRole"] {
+  let current: THREE.Object3D | null = obj;
+  while (current) {
+    if (current.userData?.editorRobotRoot === true) return "robot";
+    const source = current.userData?.sceneAssetSource as { role?: string } | undefined;
+    const role = String(source?.role ?? "").trim().toLowerCase();
+    if (role === "terrain") return "terrain";
+    if (role === "scene_asset") return "scene_asset";
+    if (isSceneAssetRoot(current)) return "scene_asset";
+    current = current.parent;
+  }
+  return "unknown";
 }
 
 function hasTerrainSourceInChain(obj: THREE.Object3D): boolean {
@@ -606,6 +622,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const jointActuators: string[] = [];
   const collisionAssetLines: string[] = [];
   const warnings: string[] = [];
+  const terrainCollisionCoverage: SceneAssetCollisionCoverage[] = [];
   let inlineMeshCounter = 0;
   const safe = (value: number, fallback = 0) => (Number.isFinite(value) ? value : fallback);
   const sceneJointDamping = Number.isFinite(DEFAULT_SCENE_JOINT_DAMPING) ? Math.max(0, DEFAULT_SCENE_JOINT_DAMPING) : 0;
@@ -767,33 +784,29 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
       : 0;
   };
 
-  const pickDominantMeshTarget = (targets: THREE.Object3D[]): THREE.Object3D | null => {
-    let best: THREE.Object3D | null = null;
-    let bestNonPrimitive = -1;
-    let bestVertexCount = -1;
-    for (const target of targets) {
-      const mesh = target as THREE.Mesh;
-      if (!mesh.isMesh || !(mesh.geometry instanceof THREE.BufferGeometry)) continue;
-      const vertexCount = getMeshVertexCount(target);
-      const nonPrimitive = isSimplePrimitiveMesh(mesh) ? 0 : 1;
-      if (
-        nonPrimitive > bestNonPrimitive ||
-        (nonPrimitive === bestNonPrimitive && vertexCount > bestVertexCount)
-      ) {
-        best = target;
-        bestNonPrimitive = nonPrimitive;
-        bestVertexCount = vertexCount;
-      }
-    }
-    return best;
-  };
-
-  const findDominantMeshTarget = (root: THREE.Object3D): THREE.Object3D | null => {
-    const meshTargets: THREE.Object3D[] = [];
-    root.traverse((obj) => {
-      if ((obj as THREE.Mesh).isMesh) meshTargets.push(obj);
+  const sortTerrainTargets = (targets: THREE.Object3D[]) =>
+    [...targets].sort((a, b) => {
+      const aNonPrimitive = isSimplePrimitiveMesh(a as THREE.Mesh) ? 0 : 1;
+      const bNonPrimitive = isSimplePrimitiveMesh(b as THREE.Mesh) ? 0 : 1;
+      if (aNonPrimitive !== bNonPrimitive) return bNonPrimitive - aNonPrimitive;
+      const aVertex = getMeshVertexCount(a);
+      const bVertex = getMeshVertexCount(b);
+      if (aVertex !== bVertex) return bVertex - aVertex;
+      const aKey = `${String(a.name ?? "").trim()}|${getDocId(a)}`;
+      const bKey = `${String(b.name ?? "").trim()}|${getDocId(b)}`;
+      return aKey.localeCompare(bKey);
     });
-    return pickDominantMeshTarget(meshTargets);
+
+  const uniqueTargets = (targets: THREE.Object3D[]) => {
+    const seen = new Set<string>();
+    const unique: THREE.Object3D[] = [];
+    for (const target of targets) {
+      const key = `${target.uuid}|${getDocId(target)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(target);
+    }
+    return unique;
   };
 
   const resolveRelativeTransform = (body: THREE.Object3D, target: THREE.Object3D) => {
@@ -1204,7 +1217,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   const resolveManagedRoughTerrainEntry = (
     bodyObj: THREE.Object3D,
     geomTarget: THREE.Object3D
-  ): { entry: GeomEntry; warning?: string } => {
+  ): { entry: GeomEntry; warning?: string; mode: "hfield" | "mesh" | "primitive" } => {
     const hfield = buildHeightfieldAsset(bodyObj, geomTarget);
     if (hfield.hfieldName) {
       return {
@@ -1214,6 +1227,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
           pos: hfield.pos,
           quat: hfield.quat,
         },
+        mode: "hfield",
       };
     }
 
@@ -1221,6 +1235,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     if (fullMesh.meshName) {
       return {
         entry: { kind: "mesh", meshName: fullMesh.meshName },
+        mode: "mesh",
         warning: buildTerrainSimplifiedWarning({
           objectLabel: geomTarget.name || getDocId(geomTarget),
           mode: "mesh",
@@ -1234,6 +1249,7 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const relative = resolveRelativeTransform(bodyObj, geomTarget);
     return {
       entry: { kind: "primitive", info, pos: relative.pos, quat: relative.quat },
+      mode: "primitive",
       warning: buildTerrainSimplifiedWarning({
         objectLabel: geomTarget.name || getDocId(geomTarget),
         mode: "primitive",
@@ -1241,6 +1257,39 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
         meshFailure: fullMesh,
       }),
     };
+  };
+
+  const pushTerrainCollisionCoverage = (input: {
+    object: THREE.Object3D;
+    attemptedTargets: number;
+    emittedGeoms: number;
+    hfieldGeoms: number;
+    meshGeoms: number;
+    primitiveGeoms: number;
+  }) => {
+    const skippedTargets = Math.max(0, input.attemptedTargets - input.emittedGeoms);
+    const objectId = getDocId(input.object);
+    const objectName = String(input.object.name ?? "").trim() || objectId;
+    const sourceRole = resolveSourceRoleInChain(input.object);
+    const incomplete = input.attemptedTargets <= 0 || input.emittedGeoms <= 0 || skippedTargets > 0;
+    const coverage: SceneAssetCollisionCoverage = {
+      objectId,
+      objectName,
+      sourceRole,
+      attemptedTargets: input.attemptedTargets,
+      emittedGeoms: input.emittedGeoms,
+      skippedTargets,
+      hfieldGeoms: input.hfieldGeoms,
+      meshGeoms: input.meshGeoms,
+      primitiveGeoms: input.primitiveGeoms,
+      incomplete,
+    };
+    terrainCollisionCoverage.push(coverage);
+    if (incomplete) {
+      warnings.push(
+        `[${TERRAIN_COLLISION_INCOMPLETE_CODE}] '${objectName}' emitted ${input.emittedGeoms}/${input.attemptedTargets} terrain colliders (sourceRole=${sourceRole}, skipped=${skippedTargets}).`
+      );
+    }
   };
 
   const linkSet = new Set(linkCandidates);
@@ -1328,11 +1377,18 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const collisionNodes = findCollisionNodes(linkObj);
     const geomEntries: GeomEntry[] = [];
     const managedRoughTerrainLink = terrainLike && isManagedRoughTerrainObject(linkObj);
+    let attemptedTargets = 0;
+    let hfieldGeoms = 0;
+    let meshGeoms = 0;
+    let primitiveGeoms = 0;
     const appendEntry = (geomTarget: THREE.Object3D) => {
       const managedRoughTerrain = terrainLike && isManagedRoughTerrainObject(geomTarget);
       if (managedRoughTerrain) {
         const resolved = resolveManagedRoughTerrainEntry(linkObj, geomTarget);
         geomEntries.push(resolved.entry);
+        if (resolved.mode === "hfield") hfieldGeoms += 1;
+        else if (resolved.mode === "mesh") meshGeoms += 1;
+        else primitiveGeoms += 1;
         if (resolved.warning) warnings.push(resolved.warning);
         return;
       }
@@ -1351,9 +1407,22 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     }
 
     if (managedRoughTerrainLink) {
-      const visualTargets = findVisualMeshesForLink(linkObj);
-      const primaryTarget = pickDominantMeshTarget([...collisionTargets, ...visualTargets]);
-      if (primaryTarget) appendEntry(primaryTarget);
+      const targets = uniqueTargets(
+        collisionTargets.length > 0 ? collisionTargets : findVisualMeshesForLink(linkObj)
+      );
+      const orderedTargets = sortTerrainTargets(targets);
+      attemptedTargets = orderedTargets.length;
+      for (const target of orderedTargets) {
+        appendEntry(target);
+      }
+      pushTerrainCollisionCoverage({
+        object: linkObj,
+        attemptedTargets,
+        emittedGeoms: geomEntries.length,
+        hfieldGeoms,
+        meshGeoms,
+        primitiveGeoms,
+      });
       return geomEntries;
     }
 
@@ -1579,13 +1648,33 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
     const physics = instance.physics;
     const terrainLike = isTerrainObject(obj);
     const managedRoughTerrain = terrainLike && isManagedRoughTerrainObject(obj);
-    const primaryGeomTarget = managedRoughTerrain ? findDominantMeshTarget(obj) ?? obj : obj;
     const geomEntries: GeomEntry[] = [];
+    let attemptedTargets = 0;
+    let hfieldGeoms = 0;
+    let meshGeoms = 0;
+    let primitiveGeoms = 0;
     if (managedRoughTerrain) {
-      const resolved = resolveManagedRoughTerrainEntry(obj, primaryGeomTarget);
-      geomEntries.push(resolved.entry);
-      if (resolved.warning) warnings.push(resolved.warning);
+      const meshTargets = uniqueTargets(findMeshLikes(obj));
+      const orderedTargets = sortTerrainTargets(meshTargets.length > 0 ? meshTargets : [obj]);
+      attemptedTargets = orderedTargets.length;
+      for (const target of orderedTargets) {
+        const resolved = resolveManagedRoughTerrainEntry(obj, target);
+        geomEntries.push(resolved.entry);
+        if (resolved.mode === "hfield") hfieldGeoms += 1;
+        else if (resolved.mode === "mesh") meshGeoms += 1;
+        else primitiveGeoms += 1;
+        if (resolved.warning) warnings.push(resolved.warning);
+      }
+      pushTerrainCollisionCoverage({
+        object: obj,
+        attemptedTargets,
+        emittedGeoms: geomEntries.length,
+        hfieldGeoms,
+        meshGeoms,
+        primitiveGeoms,
+      });
     } else {
+      const primaryGeomTarget = obj;
       const inferred = inferGeomInfo(primaryGeomTarget);
       const geomInfo = terrainLike ? maybePromoteTerrainMeshToPlane(primaryGeomTarget, inferred) : inferred;
       const relative = primaryGeomTarget !== obj ? resolveRelativeTransform(obj, primaryGeomTarget) : null;
@@ -1666,7 +1755,12 @@ function buildSceneMJCF(roots: THREE.Object3D[], collisionMask?: CollisionMask) 
   }
   lines.push(`</mujoco>`);
 
-  return { xml: lines.join("\n"), bodies, warnings: Array.from(new Set(warnings)) };
+  return {
+    xml: lines.join("\n"),
+    bodies,
+    warnings: Array.from(new Set(warnings)),
+    terrainCollisionCoverage,
+  };
 }
 
 function buildNameMap(roots: THREE.Object3D[]) {
@@ -2541,12 +2635,14 @@ export function createMujocoRuntime(): MujocoRuntime {
       let extraBodies: Array<{ name: string; object: THREE.Object3D }> | null = null;
       let xmlToWrite = "";
       const loadWarnings: string[] = [];
+      const terrainCollisionCoverage: SceneAssetCollisionCoverage[] = [];
 
       if (source.kind === "generated") {
         const built = buildSceneMJCF(roots);
         generatedBodies = built.bodies;
         xmlToWrite = built.xml;
         loadWarnings.push(...built.warnings);
+        terrainCollisionCoverage.push(...built.terrainCollisionCoverage);
       } else {
         xmlPath = `/working/${source.filename}`;
         xmlToWrite = source.content;
@@ -2587,6 +2683,7 @@ export function createMujocoRuntime(): MujocoRuntime {
           const built = buildSceneMJCF(extraRoots, extraCollisionMask);
           extraBodies = built.bodies;
           loadWarnings.push(...built.warnings);
+          terrainCollisionCoverage.push(...built.terrainCollisionCoverage);
           const extraAsset = extractAssetContent(built.xml);
           const extraWorld = extractWorldbodyContent(built.xml);
           const extraActuator = extractActuatorContent(built.xml);
@@ -2800,7 +2897,10 @@ export function createMujocoRuntime(): MujocoRuntime {
       parkPointerCursor();
 
       syncBindings();
-      return { warnings: Array.from(new Set(loadWarnings)) };
+      return {
+        warnings: Array.from(new Set(loadWarnings)),
+        terrainCollisionCoverage,
+      };
     },
     step(dt) {
       if (!mujoco || !model || !data) return;

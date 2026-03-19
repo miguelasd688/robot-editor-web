@@ -17,7 +17,12 @@ let cachedFloorNoise: THREE.Texture | null = null;
 let cachedRoughFloorMap: THREE.Texture | null = null;
 let cachedRoughFloorNoise: THREE.Texture | null = null;
 
-const MANAGED_ROUGH_FLOOR_WORKSPACE_KEYS = new Set<string>([]);
+const MANAGED_ROUGH_FLOOR_WORKSPACE_KEYS = new Set<string>([
+  "library/anymal_c/terrain/rough_generator_exact_5x5.usda",
+  "library/anymal_c/terrain/rough_generator_exact_5x5.usd",
+  "library/anymal_c/terrain/rough_generator_exact_5x5.usdc",
+  "library/anymal_c/terrain/rough_generator_exact_5x5.usdz",
+]);
 
 const normalizeWorkspaceKey = (value: string): string =>
   String(value ?? "")

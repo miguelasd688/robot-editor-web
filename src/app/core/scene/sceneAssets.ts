@@ -65,6 +65,42 @@ const primitiveNames: Record<PrimitiveMeshShape, string> = {
   cylinder: "Cylinder",
 };
 
+const primitiveAssetIds: Record<PrimitiveMeshShape, SceneAssetId> = {
+  cube: "mesh:cube",
+  sphere: "mesh:sphere",
+  cylinder: "mesh:cylinder",
+};
+
+function createGeneratedSceneAssetRootNode(
+  id: DocId,
+  name: string,
+  assetId: SceneAssetId,
+  role: "scene_asset" | "terrain",
+  options?: {
+    transform?: Transform;
+    metadata?: Record<string, unknown>;
+  }
+): CreateNodeInput {
+  return {
+    id,
+    name,
+    kind: "group",
+    parentId: null,
+    components: {
+      transform: options?.transform ?? defaultTransform(),
+      sceneAssetSource: {
+        kind: "generated",
+        role,
+        metadata: {
+          generatedFrom: "scene_asset_catalog",
+          sceneAssetId: assetId,
+          ...(options?.metadata ?? {}),
+        },
+      },
+    },
+  };
+}
+
 function createLinkNode(id: DocId, parentId: DocId | null): CreateNodeInput {
   return {
     id,
@@ -150,6 +186,23 @@ function createLinkTree(
   return {
     rootId: linkId,
     nodes,
+  };
+}
+
+function createPrimitiveSceneAssetTree(rootId: DocId, shape: PrimitiveMeshShape): SceneAssetTree {
+  const linkId = createDocId();
+  const visualId = createDocId();
+  const collisionId = createDocId();
+  const meshId = createDocId();
+  return {
+    rootId,
+    nodes: [
+      createGeneratedSceneAssetRootNode(rootId, primitiveNames[shape], primitiveAssetIds[shape], "scene_asset"),
+      createLinkNode(linkId, rootId),
+      createVisualNode(visualId, linkId),
+      createCollisionNode(collisionId, linkId),
+      createPrimitiveMeshNode(meshId, visualId, shape),
+    ],
   };
 }
 
@@ -320,16 +373,19 @@ export function createSceneAssetTree(
 
   if (assetId === "mesh:cube") {
     if (embedUnderContainer && parentId) return createPrimitiveMeshTree(parentId, "cube");
+    if (!parentId) return createPrimitiveSceneAssetTree(rootId, "cube");
     return createLinkTree(rootId, parentId, { primitive: "cube", embedUnderLink });
   }
 
   if (assetId === "mesh:sphere") {
     if (embedUnderContainer && parentId) return createPrimitiveMeshTree(parentId, "sphere");
+    if (!parentId) return createPrimitiveSceneAssetTree(rootId, "sphere");
     return createLinkTree(rootId, parentId, { primitive: "sphere", embedUnderLink });
   }
 
   if (assetId === "mesh:cylinder") {
     if (embedUnderContainer && parentId) return createPrimitiveMeshTree(parentId, "cylinder");
+    if (!parentId) return createPrimitiveSceneAssetTree(rootId, "cylinder");
     return createLinkTree(rootId, parentId, { primitive: "cylinder", embedUnderLink });
   }
 
@@ -346,24 +402,12 @@ export function createSceneAssetTree(
     return {
       rootId: floorGroupId,
       nodes: [
-        {
-          id: floorGroupId,
-          name: "Floor",
-          kind: "group",
-          parentId: null,
-          components: {
-            transform: floorTransform,
-            sceneAssetSource: {
-              kind: "generated",
-              role: "terrain",
-              metadata: {
-                generatedFrom: "scene_asset_catalog",
-                managedTerrainAssetId: "floor",
-                sceneAssetId: "floor",
-              },
-            },
+        createGeneratedSceneAssetRootNode(floorGroupId, "Floor", "floor", "terrain", {
+          transform: floorTransform,
+          metadata: {
+            managedTerrainAssetId: "floor",
           },
-        },
+        }),
         {
           id: floorLinkId,
           name: "Link",
@@ -438,24 +482,12 @@ export function createSceneAssetTree(
     };
 
     const nodes: CreateNodeInput[] = [
-      {
-        id: floorGroupId,
-        name: "Rough Floor",
-        kind: "group",
-        parentId: null,
-        components: {
-          transform: floorTransform,
-          sceneAssetSource: {
-            kind: "generated",
-            role: "terrain",
-            metadata: {
-              generatedFrom: "scene_asset_catalog",
-              managedTerrainAssetId: "floor:rough",
-              sceneAssetId: "floor:rough",
-            },
-          },
+      createGeneratedSceneAssetRootNode(floorGroupId, "Rough Floor", "floor:rough", "terrain", {
+        transform: floorTransform,
+        metadata: {
+          managedTerrainAssetId: "floor:rough",
         },
-      },
+      }),
       {
         id: floorLinkId,
         name: "Link",

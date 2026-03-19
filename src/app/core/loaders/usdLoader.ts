@@ -12,10 +12,14 @@ import { logInfo, logWarn } from "../services/logger";
 import { useLoaderStore } from "../store/useLoaderStore";
 import { disposeObject3D } from "../viewer/objectRegistry";
 import {
+  convertUsdAssetToMjcfAsset,
+  fetchUsdAssetIntrospectionPayload,
+  fetchUsdAssetMeshScenePayload,
+  uploadUsdBundleAsset,
+} from "./usdConverterClient";
+import {
   applyDefaultFloorAppearanceToMesh,
-  applyRoughFloorAppearanceToMesh,
   createDefaultFloorMaterial,
-  createRoughFloorMaterial,
   isDefaultFloorWorkspaceKey,
   isManagedRoughFloorWorkspaceKey,
 } from "../assets/floorAppearance";
@@ -102,16 +106,11 @@ type ParsedMjcf = {
   >;
 };
 
-type UsdConverterUploadResponse = {
-  assetId?: string;
-  filename?: string;
-  entryFilename?: string;
-};
-
-type UsdConverterToMjcfResponse = {
-  mjcfAssetId?: string;
-  meta?: { assetId?: string; filename?: string };
-  diagnostics?: unknown;
+type NormalizedUsdConverterDiagnostics = {
+  placeholderGeomBodies: number;
+  bodiesWithAnyGeom: number;
+  linkCount: number;
+  jointCount: number;
 };
 
 type UsdConverterIntrospectionJoint = {
@@ -429,10 +428,6 @@ const resolveUsdMeshSceneProfile = (
 ): "balanced" | "high_fidelity" => {
   const explicit = importOptions?.meshSceneProfile;
   if (explicit === "balanced" || explicit === "high_fidelity") return explicit;
-  const normalized = String(usdKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
-  if (normalized.includes("/open_arm/") || normalized.includes("openarm_")) {
-    return "high_fidelity";
-  }
   return "balanced";
 };
 
@@ -447,6 +442,20 @@ const resolveUsdCollisionProfile = (
     return "outer_hull";
   }
   return "authored";
+};
+
+const normalizeUsdConverterDiagnostics = (value: unknown): NormalizedUsdConverterDiagnostics => {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const asCount = (input: unknown) => {
+    const next = Number(input);
+    return Number.isFinite(next) && next > 0 ? Math.floor(next) : 0;
+  };
+  return {
+    placeholderGeomBodies: asCount(record.placeholderGeomBodies),
+    bodiesWithAnyGeom: asCount(record.bodiesWithAnyGeom),
+    linkCount: asCount(record.linkCount),
+    jointCount: asCount(record.jointCount),
+  };
 };
 
 type UsdPrimNode = {
@@ -519,8 +528,8 @@ const applyRoughFloorAppearanceToSceneAsset = (root: THREE.Object3D): number =>
   applyManagedFloorAppearanceToSceneAsset(root, {
     materialName: "Rough Floor",
     materialSource: "editor.rough_floor",
-    createMaterial: createRoughFloorMaterial,
-    applyToMesh: applyRoughFloorAppearanceToMesh,
+    createMaterial: createDefaultFloorMaterial,
+    applyToMesh: applyDefaultFloorAppearanceToMesh,
   });
 
 const retagUsdRootAsSceneAsset = (root: THREE.Object3D, sceneAssetName: string) => {
@@ -1942,6 +1951,82 @@ const configureCollisionGroup = (group: THREE.Group, linkName: string, selfColli
   group.userData.urdfRole = "collision";
   group.userData.selfCollisionEnabled = selfCollisionEnabled;
   group.visible = false;
+};
+
+const isLinkLikeNode = (node: THREE.Object3D) =>
+  node.userData?.editorKind === "link" || Boolean((node as THREE.Object3D & { isURDFLink?: boolean }).isURDFLink);
+
+const isVisualLikeNode = (node: THREE.Object3D) =>
+  node.userData?.editorKind === "visual" || Boolean((node as THREE.Object3D & { isURDFVisual?: boolean }).isURDFVisual);
+
+const isCollisionLikeNode = (node: THREE.Object3D) =>
+  node.userData?.editorKind === "collision" || Boolean((node as THREE.Object3D & { isURDFCollider?: boolean }).isURDFCollider);
+
+const ensureSceneAssetRootHierarchy = (
+  inputRoot: THREE.Object3D,
+  options?: {
+    sceneAssetName?: string;
+    selfCollisionEnabled?: boolean;
+    sourceRole?: "scene_asset" | "terrain";
+  }
+) => {
+  const selfCollisionEnabled = options?.selfCollisionEnabled === true;
+  const sceneAssetName = String(options?.sceneAssetName ?? "").trim() || inputRoot.name || "Scene Asset";
+  const sourceRole = options?.sourceRole === "terrain" ? "terrain" : "scene_asset";
+  let root = inputRoot;
+
+  // Canonical asset structure in the editor should always start with a group root.
+  if (isLinkLikeNode(root) || isVisualLikeNode(root) || isCollisionLikeNode(root) || root instanceof THREE.Mesh) {
+    const wrapper = new THREE.Group();
+    wrapper.name = sceneAssetName;
+    wrapper.userData.editorKind = "group";
+    wrapper.add(root);
+    root = wrapper;
+  }
+
+  const directChildren = [...root.children];
+  const strayDirectChildren = directChildren.filter((child) => {
+    if (isLinkLikeNode(child)) return false;
+    if (child.userData?.sceneAssetContainer === true) return false;
+    if (child.userData?.usdOrphans === true) return false;
+    if (child instanceof THREE.Mesh) return true;
+    if (isVisualLikeNode(child) || isCollisionLikeNode(child)) return true;
+    return false;
+  });
+
+  if (strayDirectChildren.length > 0) {
+    const fallbackLink = new THREE.Group();
+    fallbackLink.name = "Link";
+    fallbackLink.userData.editorKind = "link";
+    fallbackLink.userData.physics = {
+      mass: 0,
+      fixed: true,
+      useDensity: false,
+      collisionsEnabled: true,
+      friction: ISAAC_LAB_DEFAULT_SURFACE_FRICTION,
+      restitution: ISAAC_LAB_DEFAULT_SURFACE_RESTITUTION,
+    };
+    if (sourceRole === "terrain") {
+      fallbackLink.userData.sceneAssetTerrainLink = true;
+    }
+    const fallbackVisual = new THREE.Group();
+    configureVisualGroup(fallbackVisual, fallbackLink.name);
+    const fallbackCollision = new THREE.Group();
+    configureCollisionGroup(fallbackCollision, fallbackLink.name, selfCollisionEnabled);
+    fallbackLink.add(fallbackVisual);
+    fallbackLink.add(fallbackCollision);
+    root.add(fallbackLink);
+
+    for (const child of strayDirectChildren) {
+      if (isCollisionLikeNode(child)) {
+        fallbackCollision.add(child);
+      } else {
+        fallbackVisual.add(child);
+      }
+    }
+  }
+
+  return root;
 };
 
 const groupLooksVisual = (group: THREE.Group) => {
@@ -4181,30 +4266,6 @@ const attachUsdIntrospectionMetadata = (
   };
 };
 
-const buildUsdConverterUrl = (path: string) => `${usdConverterBaseUrl}${path}`;
-
-const uploadUsdBundle = async (bundle: CollectedUsdBundle) => {
-  const uploadForm = new FormData();
-  uploadForm.append("entryPath", bundle.entryPath);
-  for (const item of bundle.files) {
-    uploadForm.append("files", item.file, item.path);
-  }
-  const uploadRes = await fetch(buildUsdConverterUrl("/v1/assets/usd-bundle"), {
-    method: "POST",
-    body: uploadForm,
-  });
-  if (!uploadRes.ok) {
-    const text = await uploadRes.text();
-    throw new Error(`USD converter bundle upload failed (${uploadRes.status}): ${text || uploadRes.statusText}`);
-  }
-  const uploaded = (await uploadRes.json()) as UsdConverterUploadResponse;
-  const converterAssetId = String(uploaded.assetId ?? "").trim();
-  if (!converterAssetId) {
-    throw new Error("USD converter did not return assetId after bundle upload.");
-  }
-  return converterAssetId;
-};
-
 const resolveUsdConverterAssetId = async (params: {
   usdUrl: string;
   usdKey: string;
@@ -4226,7 +4287,10 @@ const resolveUsdConverterAssetId = async (params: {
     assetsByKey: params.assetsByKey,
     bundleHintPaths: params.bundleHintPaths,
   });
-  return uploadUsdBundle(bundle);
+  return uploadUsdBundleAsset({
+    baseUrl: usdConverterBaseUrl,
+    bundle,
+  });
 };
 
 const convertUsdAssetToMjcf = async (params: {
@@ -4234,56 +4298,27 @@ const convertUsdAssetToMjcf = async (params: {
   usdKey: string;
   importOptions?: UsdImportOptions;
 }) => {
-  const query = new URLSearchParams();
-  query.set("floating_base", String(params.importOptions?.floatingBase ?? false));
-  query.set("self_collision", String(params.importOptions?.selfCollision ?? false));
-  query.set("collision_profile", resolveUsdCollisionProfile(params.usdKey, params.importOptions));
-
-  const convertRes = await fetch(
-    buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(params.converterAssetId)}:convert-usd-to-mjcf?${query.toString()}`),
-    {
-      method: "POST",
-    }
-  );
-  if (!convertRes.ok) {
-    const text = await convertRes.text();
-    throw new Error(`USD converter conversion failed (${convertRes.status}): ${text || convertRes.statusText}`);
-  }
-  const converted = (await convertRes.json()) as UsdConverterToMjcfResponse;
-  const mjcfAssetId = String(converted.mjcfAssetId ?? converted.meta?.assetId ?? "").trim();
-  if (!mjcfAssetId) {
-    throw new Error("USD converter did not return mjcfAssetId.");
-  }
-
-  const mjcfRes = await fetch(buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(mjcfAssetId)}`), {
-    method: "GET",
+  const converted = await convertUsdAssetToMjcfAsset({
+    baseUrl: usdConverterBaseUrl,
+    converterAssetId: params.converterAssetId,
+    floatingBase: params.importOptions?.floatingBase ?? false,
+    selfCollision: params.importOptions?.selfCollision ?? false,
+    collisionProfile: resolveUsdCollisionProfile(params.usdKey, params.importOptions),
   });
-  if (!mjcfRes.ok) {
-    const text = await mjcfRes.text();
-    throw new Error(`USD converter MJCF download failed (${mjcfRes.status}): ${text || mjcfRes.statusText}`);
-  }
-  const mjcfXml = await mjcfRes.text();
 
   return {
     converterAssetId: params.converterAssetId,
-    mjcfAssetId,
-    mjcfXml,
+    mjcfAssetId: converted.mjcfAssetId,
+    mjcfXml: converted.mjcfXml,
     diagnostics: converted.diagnostics ?? null,
   };
 };
 
 const introspectUsdAsset = async (converterAssetId: string): Promise<NormalizedUsdIntrospection | null> => {
-  const response = await fetch(
-    buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(converterAssetId)}/introspect`),
-    {
-      method: "GET",
-    }
-  );
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`USD converter introspection failed (${response.status}): ${text || response.statusText}`);
-  }
-  const payload = (await response.json()) as UsdConverterIntrospectionResponse;
+  const payload = (await fetchUsdAssetIntrospectionPayload({
+    baseUrl: usdConverterBaseUrl,
+    converterAssetId,
+  })) as UsdConverterIntrospectionResponse;
   return normalizeUsdIntrospection(payload, converterAssetId);
 };
 
@@ -4291,19 +4326,11 @@ const fetchUsdMeshScene = async (
   converterAssetId: string,
   profile: "balanced" | "high_fidelity"
 ): Promise<NormalizedUsdMeshScene | null> => {
-  const query = new URLSearchParams();
-  query.set("profile", profile);
-  const response = await fetch(
-    buildUsdConverterUrl(`/v1/assets/${encodeURIComponent(converterAssetId)}/mesh-scene?${query.toString()}`),
-    {
-      method: "GET",
-    }
-  );
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`USD mesh scene request failed (${response.status}): ${text || response.statusText}`);
-  }
-  const payload = (await response.json()) as UsdConverterMeshSceneResponse;
+  const payload = (await fetchUsdAssetMeshScenePayload({
+    baseUrl: usdConverterBaseUrl,
+    converterAssetId,
+    profile,
+  })) as UsdConverterMeshSceneResponse;
   return normalizeUsdMeshScene(payload, converterAssetId);
 };
 
@@ -4329,10 +4356,12 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   let resolvedConverterAssetId = converterAssetId ?? null;
   let resolvedMjcfAssetId: string | undefined;
   let mjcfXml: string | undefined;
-  const useVisualCollisionSync = true;
+  let useVisualCollisionSync = true;
   let introspection: NormalizedUsdIntrospection | null = null;
   let meshScene: NormalizedUsdMeshScene | null = null;
   let detectedFloatingBase: boolean | undefined;
+  let converterDiagnostics = normalizeUsdConverterDiagnostics(null);
+  const normalizedUsdKey = String(usdKey ?? "").trim().replace(/\\/g, "/").toLowerCase();
   const importWarnings: UsdImportWarning[] = [];
 
   if (usdConverterEnabled) {
@@ -4416,6 +4445,19 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         usdKey,
         importOptions,
       });
+      converterDiagnostics = normalizeUsdConverterDiagnostics(converted.diagnostics);
+      if (converterDiagnostics.placeholderGeomBodies > 0) {
+        useVisualCollisionSync = false;
+        importWarnings.push({
+          code: "USD_IMPORT_PLACEHOLDER_COLLISION_GEOMS",
+          message: "USD conversion synthesized placeholder collision geometry; visual collision proxy sync was disabled to preserve authored collision diagnostics.",
+          context: {
+            usdKey,
+            placeholderGeomBodies: converterDiagnostics.placeholderGeomBodies,
+            bodiesWithAnyGeom: converterDiagnostics.bodiesWithAnyGeom,
+          },
+        });
+      }
       resolvedConverterAssetId = converted.converterAssetId;
       resolvedMjcfAssetId = converted.mjcfAssetId;
       mjcfXml = converted.mjcfXml;
@@ -4448,6 +4490,28 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         });
       } else {
         const parsed = parseMjcf(mjcfXml);
+        const eeLinkBody = parsed.bodies.find((body) => body.name === "ee_link") ?? null;
+        const eeLinkOnlyPlaceholderBox =
+          !!eeLinkBody && eeLinkBody.geoms.length > 0 && eeLinkBody.geoms.every((geom) => geom.type === "box");
+        const meshSceneHasEeLinkGeometry = Boolean(
+          meshScene?.meshes.some((mesh) => mesh.parentBody === "ee_link") ||
+          meshScene?.primitives.some((primitive) => primitive.parentBody === "ee_link")
+        );
+        if (
+          eeLinkOnlyPlaceholderBox &&
+          meshSceneHasEeLinkGeometry &&
+          (normalizedUsdKey.includes("/ur10") || normalizedUsdKey.endsWith("ur10.usd"))
+        ) {
+          importWarnings.push({
+            code: "USD_IMPORT_EE_LINK_PLACEHOLDER_COLLISION",
+            message: "ee_link imported with placeholder box collision geometry while mesh-scene data still exposes end-effector visuals.",
+            context: {
+              usdKey,
+              placeholderGeomBodies: converterDiagnostics.placeholderGeomBodies,
+              eeLinkGeomTypes: eeLinkBody?.geoms.map((geom) => geom.type) ?? [],
+            },
+          });
+        }
         detectedFloatingBase = parsed.bodies.some((body) => body.joints.some((joint) => joint.type === "free"));
         const builtFromMjcf = buildRobotFromMjcf(parsed, displayName, { introspection });
         const introspectionBodyCount = introspection
@@ -4565,13 +4629,24 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         }
       }
 
-      logInfo("USD visual->collision sync enabled by default.", {
-        scope: "usd",
-        data: {
-          usdKey,
-          converterAssetId: resolvedConverterAssetId,
-        },
-      });
+      if (useVisualCollisionSync) {
+        logInfo("USD visual->collision sync enabled by default.", {
+          scope: "usd",
+          data: {
+            usdKey,
+            converterAssetId: resolvedConverterAssetId,
+          },
+        });
+      } else {
+        logWarn("USD visual->collision sync disabled to avoid masking authored placeholder collision diagnostics.", {
+          scope: "usd",
+          data: {
+            usdKey,
+            converterAssetId: resolvedConverterAssetId,
+            placeholderGeomBodies: converterDiagnostics.placeholderGeomBodies,
+          },
+        });
+      }
     } catch (error) {
       logWarn("USD conversion failed; checking introspection fallback.", {
         scope: "usd",
@@ -4759,14 +4834,20 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
 
   if (importSceneRole === "scene_asset") {
     const sceneAssetRole = inferSceneAssetSourceRole(usdKey);
+    const sceneAssetName = stripFileExtension(displayName) || displayName;
+    const sceneAssetRoot = ensureSceneAssetRootHierarchy(root, {
+      sceneAssetName,
+      selfCollisionEnabled: importOptions?.selfCollision === true,
+      sourceRole: sceneAssetRole,
+    });
     const usesManagedDefaultFloor = sceneAssetRole === "terrain" && isDefaultFloorWorkspaceKey(usdKey);
     const usesManagedRoughFloor = sceneAssetRole === "terrain" && isManagedRoughFloorWorkspaceKey(usdKey);
-    const grouping = groupSceneAssetLinksUnderContainers(root);
+    const grouping = groupSceneAssetLinksUnderContainers(sceneAssetRoot);
     let styledFloorMeshes = 0;
     if (usesManagedDefaultFloor) {
-      styledFloorMeshes = applyDefaultFloorAppearanceToSceneAsset(root);
+      styledFloorMeshes = applyDefaultFloorAppearanceToSceneAsset(sceneAssetRoot);
     } else if (usesManagedRoughFloor) {
-      styledFloorMeshes = applyRoughFloorAppearanceToSceneAsset(root);
+      styledFloorMeshes = applyRoughFloorAppearanceToSceneAsset(sceneAssetRoot);
     }
     const sceneAssetMetadata: Record<string, unknown> = {
       importSceneRole,
@@ -4783,16 +4864,17 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       sceneAssetMetadata.visualStyle = "rough_floor";
       sceneAssetMetadata.styledMeshCount = styledFloorMeshes;
     }
-    retagUsdRootAsSceneAsset(root, stripFileExtension(displayName) || displayName);
-    applySceneAssetPhysicsDefaults(root, {
-      forceRootCollider: meshAttach.attachedToRoot > 0,
+    retagUsdRootAsSceneAsset(sceneAssetRoot, sceneAssetName);
+    applySceneAssetPhysicsDefaults(sceneAssetRoot, {
+      forceRootCollider: meshAttach.attachedToRoot > 0 || (sceneAssetRoot.userData?.usdMeshScene?.bodyCount ?? 0) <= 0,
       sourceRole: sceneAssetRole,
       meshScene,
     });
-    root.userData.usdUrl = usdUrl;
-    root.userData.usdWorkspaceKey = usdKey;
-    root.userData.usdImportWarnings = uniqueImportWarnings;
-    root.userData.sceneAssetSource = {
+    sceneAssetRoot.userData.usdUrl = usdUrl;
+    sceneAssetRoot.userData.usdWorkspaceKey = usdKey;
+    sceneAssetRoot.userData.usdImportWarnings = uniqueImportWarnings;
+    sceneAssetRoot.userData.usdConverterDiagnostics = converterDiagnostics;
+    sceneAssetRoot.userData.sceneAssetSource = {
       kind: "usd",
       role: sceneAssetRole,
       workspaceKey: usdKey,
@@ -4802,10 +4884,10 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       importOptions: importOptions ? { ...importOptions } : null,
       metadata: sceneAssetMetadata,
     };
-    if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
-    if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
-    if (mjcfXml) root.userData.mjcfSource = mjcfXml;
-    if (mjcfBodiesPatchedFromMeshScene > 0) root.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
+    if (resolvedConverterAssetId) sceneAssetRoot.userData.converterAssetId = resolvedConverterAssetId;
+    if (resolvedMjcfAssetId) sceneAssetRoot.userData.mjcfAssetId = resolvedMjcfAssetId;
+    if (mjcfXml) sceneAssetRoot.userData.mjcfSource = mjcfXml;
+    if (mjcfBodiesPatchedFromMeshScene > 0) sceneAssetRoot.userData.mjcfBodyPosePatchCount = mjcfBodiesPatchedFromMeshScene;
     if (usesManagedDefaultFloor) {
       logInfo("USD default floor scene asset restyled to editor floor material", {
         scope: "usd",
@@ -4829,7 +4911,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
       scope: "usd",
       data: {
         usdKey,
-        sceneAssetName: root.name,
+        sceneAssetName: sceneAssetRoot.name,
         converterAssetId: resolvedConverterAssetId,
         attachedMeshes: meshAttach.attachedMeshes,
         attachedPrimitives: meshAttach.attachedPrimitives,
@@ -4839,7 +4921,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
         importWarningCount: uniqueImportWarnings.length,
       },
     });
-    return root;
+    return sceneAssetRoot;
   }
 
   const modelSource: UsdModelSource = {
@@ -4868,6 +4950,7 @@ export async function loadUSDObject(params: USDLoaderParams): Promise<THREE.Obje
   root.userData.usdUrl = usdUrl;
   root.userData.usdWorkspaceKey = usdKey;
   root.userData.usdImportWarnings = uniqueImportWarnings;
+  root.userData.usdConverterDiagnostics = converterDiagnostics;
   if (resolvedConverterAssetId) root.userData.converterAssetId = resolvedConverterAssetId;
   if (resolvedMjcfAssetId) root.userData.mjcfAssetId = resolvedMjcfAssetId;
   if (mjcfXml) root.userData.mjcfSource = mjcfXml;
@@ -4884,10 +4967,11 @@ export type USDImportDeps = {
   rootName?: string;
   sceneRole?: USDLoaderParams["sceneRole"];
   frameOnAdd?: boolean;
+  skipPostLoadHook?: boolean;
 };
 
 export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
-  const { usdKey, assets, importOptions, bundleHintPaths, rootName, sceneRole, frameOnAdd } = deps;
+  const { usdKey, assets, importOptions, bundleHintPaths, rootName, sceneRole, frameOnAdd, skipPostLoadHook } = deps;
 
   if (!usdKey) {
     logWarn("USD load requested but no USD selected.", { scope: "usd" });
@@ -4921,6 +5005,7 @@ export async function loadWorkspaceUSDIntoViewer(deps: USDImportDeps) {
     {
       name: rootName?.trim() || undefined,
       frame: frameOnAdd ?? true,
+      skipPostLoadHook: skipPostLoadHook === true,
     }
   );
 }

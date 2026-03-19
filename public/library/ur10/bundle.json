@@ -1,0 +1,347 @@
+{
+  "id": "ur10",
+  "label": "UR10 Sample",
+  "description": "Isaac Lab UR10 sample with reach and stack environments bundled with the robot package.",
+  "kind": "usd",
+  "entry": "Legacy/ur10.usd",
+  "badge": "USD",
+  "importLabel": "Load sample",
+  "preview": {
+    "top": "rgba(126, 150, 174, 0.58)",
+    "bottom": "rgba(48, 61, 81, 0.92)",
+    "caption": "UR10",
+    "imageUrl": "/browser-previews/robots/ur10.png"
+  },
+  "defaultImportOptions": {
+    "usd": {
+      "floatingBase": false,
+      "selfCollision": false
+    }
+  },
+  "trainingDefaults": {
+    "templateId": "isaaclab.ur10.reach.manager.v1",
+    "recipeId": "isaaclab.ur10.reach.manager.v1",
+    "taskTemplate": "ur10_reach_manager",
+    "task": "Isaac-Reach-UR10-v0"
+  },
+  "sampleData": {
+    "artifacts": [
+      {
+        "id": "ur10-reach-default-policy",
+        "label": "UR10 Reach Policy (placeholder)",
+        "workspaceKey": "library/ur10/training/policies/ur10_reach_policy.onnx",
+        "kind": "policy",
+        "description": "Reserved contract entry for future bundled UR10 reach policy artifacts."
+      },
+      {
+        "id": "ur10-cube-stack-ik-checkpoint",
+        "label": "UR10 Cube Stack IK Checkpoint (placeholder)",
+        "workspaceKey": "library/ur10/training/checkpoints/ur10_stack_ik.ckpt",
+        "kind": "training_checkpoint",
+        "description": "Reserved contract entry for future bundled stack-IK training checkpoints."
+      }
+    ],
+    "metadata": {
+      "modelFamily": "ur10",
+      "supportStatus": "contract_only_placeholder"
+    }
+  },
+  "variants": [
+    {
+      "id": "standard",
+      "label": "Standard (default)",
+      "entry": "Legacy/ur10.usd",
+      "defaultEnvironmentId": "reach",
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.reach.manager.v1",
+        "recipeId": "isaaclab.ur10.reach.manager.v1",
+        "taskTemplate": "ur10_reach_manager",
+        "task": "Isaac-Reach-UR10-v0",
+        "ikModelId": "none"
+      }
+    },
+    {
+      "id": "modern_compact",
+      "label": "Modern compact (experimental)",
+      "entry": "ur10.usd",
+      "description": "Kept off the default variant list while ee_link placeholder collision output is still present.",
+      "defaultEnvironmentId": "reach",
+      "hidden": true,
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.reach.manager.v1",
+        "recipeId": "isaaclab.ur10.reach.manager.v1",
+        "taskTemplate": "ur10_reach_manager",
+        "task": "Isaac-Reach-UR10-v0",
+        "ikModelId": "none"
+      }
+    },
+    {
+      "id": "long_suction",
+      "label": "Long suction",
+      "entry": "Legacy/ur10_long_suction.usd",
+      "defaultEnvironmentId": "stack",
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.stack_ik.manager.v1",
+        "recipeId": "isaaclab.ur10.stack_ik.manager.v1",
+        "taskTemplate": "ur10_stack_ik_manager",
+        "task": "Agent-Stack-Cube-UR10-Long-Suction-IK-Rel-v0",
+        "ikModelId": "native_stack_ik"
+      }
+    },
+    {
+      "id": "short_suction",
+      "label": "Short suction",
+      "entry": "Legacy/ur10_short_suction.usd",
+      "defaultEnvironmentId": "stack",
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.stack_ik.manager.v1",
+        "recipeId": "isaaclab.ur10.stack_ik.manager.v1",
+        "taskTemplate": "ur10_stack_ik_manager",
+        "task": "Agent-Stack-Cube-UR10-Short-Suction-IK-Rel-v0",
+        "ikModelId": "native_stack_ik"
+      }
+    }
+  ],
+  "environments": [
+    {
+      "id": "reach",
+      "label": "Reach",
+      "description": "Instantiates the SeattleLab table only. No cubes are imported in this environment.",
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.reach.manager.v1",
+        "recipeId": "isaaclab.ur10.reach.manager.v1",
+        "taskTemplate": "ur10_reach_manager",
+        "task": "Isaac-Reach-UR10-v0",
+        "ikModelId": "none"
+      },
+      "imports": [
+        {
+          "kind": "asset_pack_preset",
+          "presetId": "ur10:reach_table_scene"
+        }
+      ]
+    },
+    {
+      "id": "stack",
+      "label": "Stack",
+      "description": "Instantiates the SeattleLab table plus blue, red, and green cubes.",
+      "trainingDefaults": {
+        "templateId": "isaaclab.ur10.stack_ik.manager.v1",
+        "recipeId": "isaaclab.ur10.stack_ik.manager.v1",
+        "taskTemplate": "ur10_stack_ik_manager",
+        "task": "Agent-Stack-Cube-UR10-IK-Rel-v0",
+        "ikModelId": "native_stack_ik"
+      },
+      "imports": [
+        {
+          "kind": "asset_pack_preset",
+          "presetId": "ur10:cube_stack_isaac_lab"
+        }
+      ]
+    }
+  ],
+  "assetPack": {
+    "items": [
+      {
+        "id": "ur10:table",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Table",
+        "description": "SeattleLab table used by the UR10 environment sample.",
+        "entry": "environment/Props/Mounts/SeattleLabTable/table_instanceable.usd",
+        "files": [
+          "environment/Props/Mounts/SeattleLabTable/table_instanceable.usd",
+          "environment/Props/Mounts/SeattleLabTable/table.usd",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_BaseColor.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Metallic.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Normal.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableBase_Roughness.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_BaseColor.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Metallic.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Normal.png",
+          "environment/Props/Mounts/SeattleLabTable/Materials/Textures/DemoTable_TableParts_Roughness.png"
+        ],
+        "rootName": "UR10 Table",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(116, 138, 157, 0.56)",
+          "bottom": "rgba(46, 57, 73, 0.9)",
+          "caption": "TABLE"
+        }
+      },
+      {
+        "id": "ur10:cube_blue",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Cube Blue",
+        "description": "Blue training cube with imported material textures.",
+        "entry": "environment/Props/Blocks/blue_block.usd",
+        "files": [
+          "environment/Props/Blocks/blue_block.usd",
+          "environment/Props/Blocks/Materials/Materials.usd",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Roughness.png"
+        ],
+        "rootName": "UR10 Cube Blue",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(120, 125, 134, 0.56)",
+          "bottom": "rgba(56, 61, 70, 0.92)",
+          "caption": "BLUE"
+        }
+      },
+      {
+        "id": "ur10:cube_red",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Cube Red",
+        "description": "Red training cube with imported material textures.",
+        "entry": "environment/Props/Blocks/red_block.usd",
+        "files": [
+          "environment/Props/Blocks/red_block.usd",
+          "environment/Props/Blocks/Materials/Materials.usd",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Roughness.png"
+        ],
+        "rootName": "UR10 Cube Red",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(171, 131, 107, 0.58)",
+          "bottom": "rgba(83, 59, 46, 0.92)",
+          "caption": "RED"
+        }
+      },
+      {
+        "id": "ur10:cube_green",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Cube Green",
+        "description": "Green training cube with imported material textures.",
+        "entry": "environment/Props/Blocks/green_block.usd",
+        "files": [
+          "environment/Props/Blocks/green_block.usd",
+          "environment/Props/Blocks/Materials/Materials.usd",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_blue1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_red1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_green1_Roughness.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_BaseColor.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Normal.png",
+          "environment/Props/Blocks/Materials/Textures/basic_block_yellow_Roughness.png"
+        ],
+        "rootName": "UR10 Cube Green",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(132, 152, 104, 0.56)",
+          "bottom": "rgba(51, 66, 40, 0.9)",
+          "caption": "GREEN"
+        }
+      }
+    ],
+    "presets": [
+      {
+        "id": "ur10:reach_table_scene",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Reach Scene",
+        "description": "Imports the SeattleLab table at the Isaac Lab reach position with no cubes.",
+        "placements": [
+          {
+            "itemId": "ur10:table",
+            "transform": {
+              "position": {
+                "x": 0.5,
+                "y": 0.0,
+                "z": 0.0
+              }
+            }
+          }
+        ],
+        "preview": {
+          "top": "rgba(116, 138, 157, 0.56)",
+          "bottom": "rgba(46, 57, 73, 0.9)",
+          "caption": "REACH"
+        }
+      },
+      {
+        "id": "ur10:cube_stack_isaac_lab",
+        "modelId": "ur10",
+        "section": "links",
+        "label": "UR10 Cube Stack Scene",
+        "description": "Imports table plus cubes with the same coordinates as the Isaac Lab cube-stack scene.",
+        "placements": [
+          {
+            "itemId": "ur10:table",
+            "transform": {
+              "position": {
+                "x": 0.5,
+                "y": 0.0,
+                "z": 0.0
+              }
+            }
+          },
+          {
+            "itemId": "ur10:cube_blue",
+            "transform": {
+              "position": {
+                "x": 0.4,
+                "y": 0.0,
+                "z": 0.0203
+              }
+            }
+          },
+          {
+            "itemId": "ur10:cube_red",
+            "transform": {
+              "position": {
+                "x": 0.55,
+                "y": 0.05,
+                "z": 0.0203
+              }
+            }
+          },
+          {
+            "itemId": "ur10:cube_green",
+            "transform": {
+              "position": {
+                "x": 0.6,
+                "y": -0.1,
+                "z": 0.0203
+              }
+            }
+          }
+        ],
+        "preview": {
+          "top": "rgba(132, 152, 104, 0.56)",
+          "bottom": "rgba(51, 66, 40, 0.9)",
+          "caption": "STACK"
+        }
+      }
+    ]
+  }
+}

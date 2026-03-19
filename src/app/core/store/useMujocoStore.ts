@@ -12,6 +12,7 @@ import {
   type PointerSpringDebugState,
   type PointerWorldPoint,
 } from "../physics/mujoco/MujocoRuntime";
+import type { RuntimeBuildReport } from "../physics/mujoco/runtimeBuildReport";
 import { restoreInitialTransforms } from "../physics/mujoco/mujocoModelSource";
 import { logError, logInfo, logWarn } from "../services/logger";
 import { editorEngine } from "../editor/engineSingleton";
@@ -33,6 +34,7 @@ type MujocoState = {
   isLoading: boolean;
   isDirty: boolean;
   lastError: string | null;
+  lastRuntimeBuildReport: RuntimeBuildReport | null;
   actuatorsArmed: boolean;
   actuatorTargets: Record<string, number>;
   actuatorVelocityTargets: Record<string, number>;
@@ -383,6 +385,7 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
   isLoading: false,
   isDirty: false,
   lastError: null,
+  lastRuntimeBuildReport: null,
   actuatorsArmed: false,
   actuatorTargets: {},
   actuatorVelocityTargets: {},
@@ -809,7 +812,7 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
       });
       const warnings: string[] = [];
 
-      set({ isLoading: true, lastError: null, isReady: false });
+      set({ isLoading: true, lastError: null, isReady: false, lastRuntimeBuildReport: null });
       try {
         const buildResult = await mujocoEnvironmentManager.buildRuntimeSource({
           compilation,
@@ -825,6 +828,10 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
         const runtimeInstance = getRuntimeFor("default");
         const runtimeLoad = await runtimeInstance.loadFromScene(snapshot, roots, { noiseRate, noiseScale }, buildResult.source);
         warnings.push(...runtimeLoad.warnings);
+        const runtimeReport: RuntimeBuildReport = {
+          warnings: Array.from(new Set([...warnings, ...runtimeLoad.warnings])),
+          terrainCollisionCoverage: runtimeLoad.terrainCollisionCoverage,
+        };
         {
           const { pointerSpringStiffnessNPerM, pointerMaxForceN } = get();
           runtimeInstance.setPointerForceConfig({
@@ -832,7 +839,7 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
             maxForceN: pointerMaxForceN,
           });
         }
-        set({ nameMapsByRobot });
+        set({ nameMapsByRobot, lastRuntimeBuildReport: runtimeReport });
 
         const {
           actuatorConfigsByRobot,
@@ -919,7 +926,7 @@ export const useMujocoStore = create<MujocoState>((set, get) => {
         console.error(e);
         const msg = String(e?.message ?? e);
         const extra = warnings.length ? `\n${warnings.join("\n")}` : "";
-        set({ lastError: `${msg}${extra}` });
+        set({ lastError: `${msg}${extra}`, lastRuntimeBuildReport: null });
         logError("MuJoCo: load failed", { scope: "mujoco", data: { message: msg } });
         alert("MuJoCo load failed. Check console.");
       } finally {

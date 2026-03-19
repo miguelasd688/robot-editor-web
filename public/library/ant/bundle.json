@@ -1,0 +1,70 @@
+{
+  "id": "ant",
+  "label": "Ant Sample",
+  "description": "Isaac Lab Ant USD sample.",
+  "kind": "usd",
+  "entry": "ant.usd",
+  "badge": "USD",
+  "importLabel": "Load sample",
+  "preview": {
+    "top": "rgba(109, 139, 179, 0.55)",
+    "bottom": "rgba(43, 58, 83, 0.92)",
+    "caption": "ANT",
+    "imageUrl": "/browser-previews/robots/ant.webp"
+  },
+  "defaultImportOptions": {
+    "usd": {
+      "floatingBase": true,
+      "selfCollision": false
+    }
+  },
+  "trainingDefaults": {
+    "templateId": "isaaclab.ant.manager.v1",
+    "recipeId": "isaaclab.ant.manager.v1",
+    "taskTemplate": "ant_manager",
+    "task": "Isaac-Ant-v0"
+  },
+  "variants": [
+    {
+      "id": "standard",
+      "label": "Standard (default)",
+      "entry": "ant.usd",
+      "defaultEnvironmentId": "full_scene"
+    },
+    {
+      "id": "colored",
+      "label": "Colored",
+      "entry": "ant_colored.usd",
+      "defaultEnvironmentId": "full_scene"
+    }
+  ],
+  "environments": [
+    {
+      "id": "flat",
+      "label": "Flat floor",
+      "description": "Imports the managed default floor bundle without replacing the robot scene.",
+      "imports": [
+        {
+          "kind": "usd_bundle",
+          "entry": "library/floors/flat_floor.usda",
+          "sceneRole": "terrain",
+          "rootName": "Default Floor"
+        }
+      ]
+    },
+    {
+      "id": "full_scene",
+      "label": "Full environment",
+      "description": "Clears the current scene and imports the managed default floor bundle.",
+      "replaceFullScene": true,
+      "imports": [
+        {
+          "kind": "usd_bundle",
+          "entry": "library/floors/flat_floor.usda",
+          "sceneRole": "terrain",
+          "rootName": "Default Floor"
+        }
+      ]
+    }
+  ]
+}
