@@ -1,0 +1,39 @@
+{
+  "id": "flat_floor",
+  "section": "floors",
+  "label": "Flat Floor",
+  "description": "Managed flat floor terrain bundle.",
+  "kind": "usd",
+  "entry": "flat_floor.usda",
+  "badge": "USD",
+  "importLabel": "Import floor",
+  "preview": {
+    "top": "rgba(78, 117, 151, 0.55)",
+    "bottom": "rgba(32, 47, 64, 0.88)",
+    "caption": "FLAT",
+    "imageUrl": "/browser-previews/floors/default-floor.png"
+  },
+  "assetPack": {
+    "items": [
+      {
+        "id": "floors:flat_floor",
+        "modelId": "floors",
+        "section": "floors",
+        "label": "Flat Floor",
+        "description": "Adds the managed default 6m floor plane.",
+        "entry": "flat_floor.usda",
+        "files": [
+          "flat_floor.usda"
+        ],
+        "rootName": "Default Floor",
+        "sceneRole": "terrain",
+        "preview": {
+          "top": "rgba(78, 117, 151, 0.55)",
+          "bottom": "rgba(32, 47, 64, 0.88)",
+          "caption": "PLANE",
+          "imageUrl": "/browser-previews/floors/default-floor.png"
+        }
+      }
+    ]
+  }
+}

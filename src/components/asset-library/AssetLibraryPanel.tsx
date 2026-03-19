@@ -20,8 +20,6 @@ import {
   encodeBrowserImportPayload,
 } from "./browserDragDrop";
 import {
-  MANAGED_FLAT_FLOOR_WORKSPACE_KEY,
-  MANAGED_ROUGH_FLOOR_WORKSPACE_KEY,
   ensureLibraryCatalogLoaded,
   ensureLibrarySampleImported,
   findLibrarySampleByWorkspaceKey,
@@ -35,10 +33,9 @@ import {
   ensureLibraryAssetPackItemImported,
   getLibraryAssetPackItemById,
   getLibraryAssetPackPresetById,
-  listLinkLibraryAssetPackItems,
-  listLinkLibraryAssetPackPresets,
+  listLibraryAssetPackItems,
+  listLibraryAssetPackPresets,
 } from "./libraryAssetPacks";
-import { getBrowserItemPreviewImage } from "./browserPreviewCatalog";
 import { buildTree, type TreeNode } from "../explorer/model/tree";
 
 type LibrarySectionId = Exclude<BrowserDirectoryId, "workspace">;
@@ -104,21 +101,6 @@ const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").re
 
 const xacroCaption = (path: string) => (path.toLowerCase().endsWith(".xacro") ? "XACRO" : "URDF");
 
-const resolvePublicBaseUrl = () => {
-  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
-  return base.endsWith("/") ? base : `${base}/`;
-};
-
-const createWorkspaceFile = (blob: Blob, workspaceKey: string) => {
-  const filename = workspaceKey.split("/").pop() ?? workspaceKey;
-  const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
-  Object.defineProperty(file, "webkitRelativePath", {
-    value: normalizeWorkspaceFilePath(workspaceKey),
-    configurable: true,
-  });
-  return file;
-};
-
 function buildSampleBrowserItem(sample: LibrarySample): BrowserItem {
   return {
     id: `robot-sample-${sample.id}`,
@@ -134,45 +116,63 @@ function buildSampleBrowserItem(sample: LibrarySample): BrowserItem {
   };
 }
 
+function buildAssetPackItemBrowserItem(item: {
+  id: string;
+  label: string;
+  description: string;
+  preview?: BrowserCardPreview;
+}): BrowserItem {
+  return {
+    id: `asset-pack-item-${item.id}`,
+    label: item.label,
+    pathName: item.label.replace(/\s+/g, ""),
+    description: item.description,
+    icon: "🧩",
+    badge: "USD",
+    assetPackItemId: item.id,
+    importLabel: "Import asset",
+    preview: item.preview ?? {
+      top: "rgba(116, 138, 157, 0.56)",
+      bottom: "rgba(46, 57, 73, 0.9)",
+      caption: "ASSET",
+    },
+  };
+}
+
+function buildAssetPackPresetBrowserItem(preset: {
+  id: string;
+  label: string;
+  description: string;
+  preview?: BrowserCardPreview;
+}): BrowserItem {
+  return {
+    id: `asset-pack-preset-${preset.id}`,
+    label: preset.label,
+    pathName: preset.label.replace(/\s+/g, ""),
+    description: preset.description,
+    icon: "📦",
+    badge: "PRESET",
+    assetPackPresetId: preset.id,
+    importLabel: "Import preset",
+    preview: preset.preview ?? {
+      top: "rgba(132, 152, 104, 0.56)",
+      bottom: "rgba(51, 66, 40, 0.9)",
+      caption: "SCENE",
+    },
+  };
+}
+
 function buildLibrarySections(input: {
-  samples: LibrarySample[];
-  ur10LinkItems: BrowserItem[];
-  ur10PresetItems: BrowserItem[];
+  robotSamples: LibrarySample[];
+  floorItems: BrowserItem[];
+  linkItems: BrowserItem[];
+  linkPresetItems: BrowserItem[];
 }): BrowserSection[] {
   return [
     {
       id: "floors",
       title: "Floors",
-      items: [
-        {
-          id: "floor-default",
-          label: "Default Floor",
-          pathName: "DefaultFloor",
-          description: "Adds the existing 6m floor plane.",
-          icon: "▦",
-          assetId: "floor",
-          preview: {
-            top: "rgba(78, 117, 151, 0.55)",
-            bottom: "rgba(32, 47, 64, 0.88)",
-            caption: "PLANE",
-            imageUrl: getBrowserItemPreviewImage("floor-default"),
-          },
-        },
-        {
-          id: "floor-rough",
-          label: "Rough Floor",
-          pathName: "RoughFloor",
-          description: "Adds a rough floor profile for locomotion previews.",
-          icon: "▨",
-          assetId: "floor:rough",
-          preview: {
-            top: "rgba(121, 146, 98, 0.55)",
-            bottom: "rgba(51, 68, 39, 0.88)",
-            caption: "ROUGH",
-            imageUrl: getBrowserItemPreviewImage("floor-rough"),
-          },
-        },
-      ],
+      items: input.floorItems,
     },
     {
       id: "robots",
@@ -191,7 +191,7 @@ function buildLibrarySections(input: {
             caption: "ROBOT",
           },
         },
-        ...input.samples.map(buildSampleBrowserItem),
+        ...input.robotSamples.map(buildSampleBrowserItem),
       ],
     },
     {
@@ -211,50 +211,8 @@ function buildLibrarySections(input: {
             caption: "LINK",
           },
         },
-        {
-          id: "link-cube",
-          label: "Cube Link",
-          pathName: "CubeLink",
-          description: "Link with a cube primitive.",
-          icon: "⬛",
-          assetId: "mesh:cube",
-          preview: {
-            top: "rgba(120, 125, 134, 0.56)",
-            bottom: "rgba(56, 61, 70, 0.92)",
-            caption: "CUBE",
-            imageUrl: getBrowserItemPreviewImage("link-cube"),
-          },
-        },
-        {
-          id: "link-sphere",
-          label: "Sphere Link",
-          pathName: "SphereLink",
-          description: "Link with a sphere primitive.",
-          icon: "⚪",
-          assetId: "mesh:sphere",
-          preview: {
-            top: "rgba(133, 159, 170, 0.6)",
-            bottom: "rgba(53, 65, 73, 0.93)",
-            caption: "SPHERE",
-            imageUrl: getBrowserItemPreviewImage("link-sphere"),
-          },
-        },
-        {
-          id: "link-cylinder",
-          label: "Cylinder Link",
-          pathName: "CylinderLink",
-          description: "Link with a cylinder primitive.",
-          icon: "🥫",
-          assetId: "mesh:cylinder",
-          preview: {
-            top: "rgba(171, 131, 107, 0.58)",
-            bottom: "rgba(83, 59, 46, 0.92)",
-            caption: "CYLINDER",
-            imageUrl: getBrowserItemPreviewImage("link-cylinder"),
-          },
-        },
-        ...input.ur10LinkItems,
-        ...input.ur10PresetItems,
+        ...input.linkItems,
+        ...input.linkPresetItems,
       ],
     },
     {
@@ -417,47 +375,22 @@ export default function AssetLibraryPanel() {
 
   const spawnIndex = useRef(0);
   const normalizedQuery = query.trim().toLowerCase();
-  const ur10LinkItems = useMemo(
-    () =>
-      listLinkLibraryAssetPackItems("ur10").map((item) => ({
-        id: `link-pack-${item.id}`,
-        label: item.label,
-        pathName: item.label.replace(/\s+/g, ""),
-        description: item.description,
-        icon: "🧩",
-        badge: "USD",
-        assetPackItemId: item.id,
-        importLabel: "Import asset",
-        preview: item.preview ?? {
-          top: "rgba(116, 138, 157, 0.56)",
-          bottom: "rgba(46, 57, 73, 0.9)",
-          caption: "LINK",
-        },
-      })),
+  const robotSamples = useMemo(() => librarySamples.filter((sample) => sample.section === "robots"), [librarySamples]);
+  const floorItems = useMemo(
+    () => listLibraryAssetPackItems({ section: "floors" }).map((item) => buildAssetPackItemBrowserItem(item)),
     [librarySamples]
   );
-  const ur10PresetItems = useMemo(
-    () =>
-      listLinkLibraryAssetPackPresets("ur10").map((preset) => ({
-        id: `link-pack-preset-${preset.id}`,
-        label: preset.label,
-        pathName: preset.label.replace(/\s+/g, ""),
-        description: preset.description,
-        icon: "📦",
-        badge: "PRESET",
-        assetPackPresetId: preset.id,
-        importLabel: "Import preset",
-        preview: preset.preview ?? {
-          top: "rgba(132, 152, 104, 0.56)",
-          bottom: "rgba(51, 66, 40, 0.9)",
-          caption: "SCENE",
-        },
-      })),
+  const linkItems = useMemo(
+    () => listLibraryAssetPackItems({ section: "links" }).map((item) => buildAssetPackItemBrowserItem(item)),
+    [librarySamples]
+  );
+  const linkPresetItems = useMemo(
+    () => listLibraryAssetPackPresets({ section: "links" }).map((preset) => buildAssetPackPresetBrowserItem(preset)),
     [librarySamples]
   );
   const librarySections = useMemo(
-    () => buildLibrarySections({ samples: librarySamples, ur10LinkItems, ur10PresetItems }),
-    [librarySamples, ur10LinkItems, ur10PresetItems]
+    () => buildLibrarySections({ robotSamples, floorItems, linkItems, linkPresetItems }),
+    [floorItems, linkItems, linkPresetItems, robotSamples]
   );
 
   useEffect(() => {
@@ -549,45 +482,6 @@ export default function AssetLibraryPanel() {
     return BROWSER_DIRECTORIES.find((directory) => directory.id === selectedRootDirectoryId.value) ?? null;
   }, [navigationVersion, selectedRootDirectoryId]);
 
-  const ensureWorkspaceLibraryFilesImported = useCallback(
-    async (workspaceKeys: string[]) => {
-      const normalizedRequested = workspaceKeys
-        .map((key) => normalizeWorkspaceFilePath(key))
-        .filter((key) => key.length > 0);
-      if (normalizedRequested.length === 0) return true;
-      const known = new Set(
-        Object.keys(useAssetStore.getState().assets)
-          .map((key) => normalizeWorkspaceFilePath(key))
-          .filter((key) => key.length > 0)
-      );
-      const missing = normalizedRequested.filter((key) => !known.has(key));
-      if (missing.length === 0) return true;
-
-      const baseUrl = resolvePublicBaseUrl();
-      const files: File[] = [];
-      for (const workspaceKey of missing) {
-        const url = `${baseUrl}${workspaceKey}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-          logWarn("Browser managed library asset download failed", {
-            scope: "assets",
-            data: {
-              workspaceKey,
-              status: response.status,
-              statusText: response.statusText,
-            },
-          });
-          return false;
-        }
-        const blob = await response.blob();
-        files.push(createWorkspaceFile(blob, workspaceKey));
-      }
-      importFiles(files);
-      return true;
-    },
-    [importFiles]
-  );
-
   const applyImportedRootTransform = useCallback((rootId: string, transform: {
     position?: { x: number; y: number; z: number };
     rotationDeg?: { x: number; y: number; z: number };
@@ -610,69 +504,8 @@ export default function AssetLibraryPanel() {
     );
   }, []);
 
-  const importManagedTerrainAssetIfAvailable = useCallback(
-    async (assetId: SceneAssetId, label: string) => {
-      const managedWorkspaceKeys =
-        assetId === "floor"
-          ? [MANAGED_FLAT_FLOOR_WORKSPACE_KEY]
-          : assetId === "floor:rough"
-            ? [MANAGED_ROUGH_FLOOR_WORKSPACE_KEY]
-            : [];
-      if (managedWorkspaceKeys.length === 0) return false;
-
-      for (const managedWorkspaceKey of managedWorkspaceKeys) {
-        const ready = await ensureWorkspaceLibraryFilesImported([managedWorkspaceKey]);
-        if (!ready) continue;
-
-        const assetStore = useAssetStore.getState();
-        const result = await importManager.import_usd({
-          usdKey: managedWorkspaceKey,
-          assets: assetStore.assets,
-          importOptions: assetStore.usdOptions,
-          bundleHintPaths: [managedWorkspaceKey],
-          sceneRole: "scene_asset",
-          rootName: label,
-        });
-        if (!result.ok) {
-          logWarn("Browser managed terrain import failed; trying next managed terrain candidate.", {
-            scope: "assets",
-            data: {
-              assetId,
-              managedWorkspaceKey,
-              diagnostics: result.diagnostics,
-            },
-          });
-          continue;
-        }
-        logInfo(`Browser import: ${label} (managed terrain)`, {
-          scope: "assets",
-          data: {
-            assetId,
-            managedWorkspaceKey,
-            rootId: result.rootId,
-          },
-        });
-        return true;
-      }
-
-      logWarn("Browser managed terrain import unavailable; using generated fallback.", {
-        scope: "assets",
-        data: {
-          assetId,
-          managedWorkspaceKeys,
-        },
-      });
-      return false;
-    },
-    [ensureWorkspaceLibraryFilesImported]
-  );
-
   const importSceneAsset = useCallback(
     async (assetId: SceneAssetId, label: string) => {
-      if (assetId === "floor" || assetId === "floor:rough") {
-        const managedImported = await importManagedTerrainAssetIfAvailable(assetId, label);
-        if (managedImported) return true;
-      }
       const isMesh = isMeshAssetId(assetId);
       const idx = isMesh ? spawnIndex.current++ : spawnIndex.current;
       const position = isMesh
@@ -686,7 +519,7 @@ export default function AssetLibraryPanel() {
       logInfo(`Browser import: ${label}`, { scope: "assets", data: { assetId } });
       return true;
     },
-    [importManagedTerrainAssetIfAvailable]
+    []
   );
 
   const openFileInEditor = useCallback((path: string) => {

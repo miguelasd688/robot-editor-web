@@ -1,0 +1,79 @@
+{
+  "id": "anymal_c",
+  "section": "robots",
+  "label": "Anymal-C Sample",
+  "description": "Isaac Lab ANYmal-C USD sample.",
+  "kind": "usd",
+  "entry": "anymal_c.usd",
+  "badge": "USD",
+  "importLabel": "Load sample",
+  "preview": {
+    "top": "rgba(121, 151, 117, 0.58)",
+    "bottom": "rgba(54, 76, 50, 0.92)",
+    "caption": "ANYMAL-C",
+    "imageUrl": "/browser-previews/robots/anymal-c.webp"
+  },
+  "defaultImportOptions": {
+    "usd": {
+      "floatingBase": true,
+      "selfCollision": false,
+      "collisionProfile": "outer_hull"
+    }
+  },
+  "trainingDefaults": {
+    "templateId": "isaaclab.anymal_c.manager.v1",
+    "recipeId": "isaaclab.anymal_c.manager.v1",
+    "taskTemplate": "anymal_c_manager",
+    "task": "Isaac-Velocity-Rough-Anymal-C-v0"
+  },
+  "variants": [
+    {
+      "id": "anymal_c",
+      "label": "ANYmal-C (default)",
+      "entry": "anymal_c.usd",
+      "defaultEnvironmentId": "rough_full_scene"
+    },
+    {
+      "id": "legacy",
+      "label": "Legacy",
+      "entry": "legacy/anymal.usd",
+      "defaultEnvironmentId": "rough_full_scene"
+    }
+  ],
+  "environments": [
+    {
+      "id": "flat",
+      "label": "Flat floor",
+      "description": "Imports the managed default floor bundle without replacing the robot scene.",
+      "imports": [
+        {
+          "kind": "asset_pack_item",
+          "itemId": "floors:flat_floor"
+        }
+      ]
+    },
+    {
+      "id": "rough",
+      "label": "Rough floor",
+      "description": "Adds the rough floor USD terrain bundle without replacing the current scene.",
+      "imports": [
+        {
+          "kind": "asset_pack_item",
+          "itemId": "floors:rough_terrain"
+        }
+      ]
+    },
+    {
+      "id": "rough_full_scene",
+      "label": "Full rough environment",
+      "description": "Clears the current scene and instantiates the rough floor USD terrain bundle.",
+      "replaceFullScene": true,
+      "imports": [
+        {
+          "kind": "asset_pack_item",
+          "itemId": "floors:rough_terrain"
+        }
+      ]
+    }
+  ]
+}

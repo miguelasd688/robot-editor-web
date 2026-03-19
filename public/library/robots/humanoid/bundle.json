@@ -1,0 +1,61 @@
+{
+  "id": "humanoid",
+  "section": "robots",
+  "label": "Humanoid Sample",
+  "description": "Isaac Lab Humanoid USD sample.",
+  "kind": "usd",
+  "entry": "humanoid.usd",
+  "badge": "USD",
+  "importLabel": "Load sample",
+  "preview": {
+    "top": "rgba(159, 126, 109, 0.56)",
+    "bottom": "rgba(84, 56, 43, 0.92)",
+    "caption": "HUMANOID",
+    "imageUrl": "/browser-previews/robots/humanoid.webp"
+  },
+  "defaultImportOptions": {
+    "usd": {
+      "floatingBase": true,
+      "selfCollision": false
+    }
+  },
+  "trainingDefaults": {
+    "templateId": "isaaclab.humanoid.manager.v1",
+    "recipeId": "isaaclab.humanoid.manager.v1",
+    "taskTemplate": "humanoid_manager",
+    "task": "Isaac-Humanoid-v0"
+  },
+  "variants": [
+    {
+      "id": "standard",
+      "label": "Standard (default)",
+      "entry": "humanoid.usd",
+      "defaultEnvironmentId": "full_scene"
+    }
+  ],
+  "environments": [
+    {
+      "id": "flat",
+      "label": "Flat floor",
+      "description": "Imports the managed default floor bundle without replacing the robot scene.",
+      "imports": [
+        {
+          "kind": "asset_pack_item",
+          "itemId": "floors:flat_floor"
+        }
+      ]
+    },
+    {
+      "id": "full_scene",
+      "label": "Full environment",
+      "description": "Clears the current scene and imports the managed default floor bundle.",
+      "replaceFullScene": true,
+      "imports": [
+        {
+          "kind": "asset_pack_item",
+          "itemId": "floors:flat_floor"
+        }
+      ]
+    }
+  ]
+}

@@ -18,10 +18,10 @@ let cachedRoughFloorMap: THREE.Texture | null = null;
 let cachedRoughFloorNoise: THREE.Texture | null = null;
 
 const MANAGED_ROUGH_FLOOR_WORKSPACE_KEYS = new Set<string>([
-  "library/anymal_c/terrain/rough_generator_exact_5x5.usda",
-  "library/anymal_c/terrain/rough_generator_exact_5x5.usd",
-  "library/anymal_c/terrain/rough_generator_exact_5x5.usdc",
-  "library/anymal_c/terrain/rough_generator_exact_5x5.usdz",
+  "library/floors/rough_terrain/rough_terrain.usda",
+  "library/floors/rough_terrain/rough_terrain.usd",
+  "library/floors/rough_terrain/rough_terrain.usdc",
+  "library/floors/rough_terrain/rough_terrain.usdz",
 ]);
 
 const normalizeWorkspaceKey = (value: string): string =>
@@ -36,10 +36,10 @@ const normalizeWorkspaceKey = (value: string): string =>
 export function isDefaultFloorWorkspaceKey(workspaceKey: string): boolean {
   const normalized = normalizeWorkspaceKey(workspaceKey);
   return (
-    normalized === "library/floors/flat_floor.usda" ||
-    normalized === "library/floors/flat_floor.usd" ||
-    normalized === "library/floors/flat_floor.usdc" ||
-    normalized === "library/floors/flat_floor.usdz"
+    normalized === "library/floors/flat_floor/flat_floor.usda" ||
+    normalized === "library/floors/flat_floor/flat_floor.usd" ||
+    normalized === "library/floors/flat_floor/flat_floor.usdc" ||
+    normalized === "library/floors/flat_floor/flat_floor.usdz"
   );
 }
 

@@ -1,0 +1,27 @@
+{
+  "id": "cartpole",
+  "section": "robots",
+  "label": "Cartpole Sample",
+  "description": "Cartpole URDF with simple material colors.",
+  "kind": "urdf",
+  "entry": "Cartpole_robot.urdf",
+  "badge": "URDF",
+  "importLabel": "Load sample",
+  "preview": {
+    "top": "rgba(101, 148, 117, 0.55)",
+    "bottom": "rgba(38, 74, 57, 0.9)",
+    "caption": "CARTPOLE",
+    "imageUrl": "/browser-previews/robots/cartpole.png"
+  },
+  "defaultImportOptions": {
+    "urdf": {
+      "floatingBase": false
+    }
+  },
+  "trainingDefaults": {
+    "templateId": "isaaclab.cartpole.manager.v1",
+    "recipeId": "isaaclab.cartpole.manager.v1",
+    "taskTemplate": "cartpole_manager",
+    "task": "Isaac-Cartpole-v0"
+  }
+}

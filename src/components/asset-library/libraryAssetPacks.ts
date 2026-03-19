@@ -6,6 +6,7 @@ import {
   resolveLibraryWorkspaceKey,
   type LibraryAssetPackItem,
   type LibraryAssetPackPreset,
+  type LibrarySampleSection,
   type LibrarySample,
 } from "./librarySamples";
 
@@ -30,15 +31,31 @@ function flattenAssetPackPresets(samples: LibrarySample[] = getLoadedLibrarySamp
 }
 
 export function listLinkLibraryAssetPackItems(modelId?: string): LibraryAssetPackItem[] {
-  const target = String(modelId ?? "").trim().toLowerCase();
-  const items = flattenAssetPackItems().filter((item) => item.section === "links");
+  return listLibraryAssetPackItems({ section: "links", modelId });
+}
+
+export function listLinkLibraryAssetPackPresets(modelId?: string): LibraryAssetPackPreset[] {
+  return listLibraryAssetPackPresets({ section: "links", modelId });
+}
+
+export function listLibraryAssetPackItems(options?: {
+  section?: Extract<LibrarySampleSection, "floors" | "links">;
+  modelId?: string;
+}): LibraryAssetPackItem[] {
+  const section = options?.section;
+  const target = String(options?.modelId ?? "").trim().toLowerCase();
+  const items = flattenAssetPackItems().filter((item) => (section ? item.section === section : true));
   if (!target) return items;
   return items.filter((item) => item.modelId.toLowerCase() === target);
 }
 
-export function listLinkLibraryAssetPackPresets(modelId?: string): LibraryAssetPackPreset[] {
-  const target = String(modelId ?? "").trim().toLowerCase();
-  const presets = flattenAssetPackPresets().filter((preset) => preset.section === "links");
+export function listLibraryAssetPackPresets(options?: {
+  section?: Extract<LibrarySampleSection, "floors" | "links">;
+  modelId?: string;
+}): LibraryAssetPackPreset[] {
+  const section = options?.section;
+  const target = String(options?.modelId ?? "").trim().toLowerCase();
+  const presets = flattenAssetPackPresets().filter((preset) => (section ? preset.section === section : true));
   if (!target) return presets;
   return presets.filter((preset) => preset.modelId.toLowerCase() === target);
 }

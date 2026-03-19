@@ -31,6 +31,7 @@ import {
   listLibrarySampleEnvironments,
   listLibrarySampleUsdVariants,
   resolveDefaultSampleEnvironmentId,
+  resolveLibraryBundleRoot,
   resolveLibraryWorkspaceKey,
 } from "../asset-library/librarySamples";
 import {
@@ -147,7 +148,7 @@ function resolveScopedBundleHintPaths(usdKey: string, bundleHintPaths: string[] 
     return scoped.length > 0 ? scoped : undefined;
   }
 
-  const samplePrefix = normalizeWorkspaceFilePath(`${LIBRARY_ROOT}/${sample.id}/`);
+  const samplePrefix = normalizeWorkspaceFilePath(`${resolveLibraryBundleRoot(sample)}/`);
   if (!normalizedUsdKey.startsWith(samplePrefix)) return hints;
   const relativeEntry = normalizedUsdKey.slice(samplePrefix.length);
   const entryDir = relativeEntry.includes("/") ? relativeEntry.slice(0, relativeEntry.lastIndexOf("/") + 1) : "";

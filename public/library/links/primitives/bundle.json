@@ -1,0 +1,76 @@
+{
+  "id": "primitives",
+  "section": "links",
+  "label": "Primitive Links",
+  "description": "Reusable primitive link bundles.",
+  "kind": "usd",
+  "entry": "cube_link.usda",
+  "badge": "USD",
+  "importLabel": "Import link",
+  "preview": {
+    "top": "rgba(120, 125, 134, 0.56)",
+    "bottom": "rgba(56, 61, 70, 0.92)",
+    "caption": "PRIMS"
+  },
+  "assetPack": {
+    "items": [
+      {
+        "id": "links:primitive_cube",
+        "modelId": "generic",
+        "section": "links",
+        "label": "Cube Link",
+        "description": "Link with a cube primitive.",
+        "entry": "cube_link.usda",
+        "files": [
+          "cube_link.usda"
+        ],
+        "rootName": "Cube Link",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(120, 125, 134, 0.56)",
+          "bottom": "rgba(56, 61, 70, 0.92)",
+          "caption": "CUBE",
+          "imageUrl": "/browser-previews/links/cube-link.png"
+        }
+      },
+      {
+        "id": "links:primitive_sphere",
+        "modelId": "generic",
+        "section": "links",
+        "label": "Sphere Link",
+        "description": "Link with a sphere primitive.",
+        "entry": "sphere_link.usda",
+        "files": [
+          "sphere_link.usda"
+        ],
+        "rootName": "Sphere Link",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(133, 159, 170, 0.6)",
+          "bottom": "rgba(53, 65, 73, 0.93)",
+          "caption": "SPHERE",
+          "imageUrl": "/browser-previews/links/sphere-link.png"
+        }
+      },
+      {
+        "id": "links:primitive_cylinder",
+        "modelId": "generic",
+        "section": "links",
+        "label": "Cylinder Link",
+        "description": "Link with a cylinder primitive.",
+        "entry": "cylinder_link.usda",
+        "files": [
+          "cylinder_link.usda"
+        ],
+        "rootName": "Cylinder Link",
+        "sceneRole": "scene_asset",
+        "preview": {
+          "top": "rgba(171, 131, 107, 0.58)",
+          "bottom": "rgba(83, 59, 46, 0.92)",
+          "caption": "CYLINDER",
+          "imageUrl": "/browser-previews/links/cylinder-link.png"
+        }
+      }
+    ]
+  }
+}

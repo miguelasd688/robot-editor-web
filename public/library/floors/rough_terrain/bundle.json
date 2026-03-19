@@ -1,0 +1,39 @@
+{
+  "id": "rough_terrain",
+  "section": "floors",
+  "label": "Rough Terrain",
+  "description": "Managed rough terrain bundle for locomotion previews.",
+  "kind": "usd",
+  "entry": "rough_terrain.usda",
+  "badge": "USD",
+  "importLabel": "Import floor",
+  "preview": {
+    "top": "rgba(121, 146, 98, 0.55)",
+    "bottom": "rgba(51, 68, 39, 0.88)",
+    "caption": "ROUGH",
+    "imageUrl": "/browser-previews/floors/rough-floor.svg"
+  },
+  "assetPack": {
+    "items": [
+      {
+        "id": "floors:rough_terrain",
+        "modelId": "floors",
+        "section": "floors",
+        "label": "Rough Terrain",
+        "description": "Adds the managed rough terrain profile.",
+        "entry": "rough_terrain.usda",
+        "files": [
+          "rough_terrain.usda"
+        ],
+        "rootName": "Rough Floor",
+        "sceneRole": "terrain",
+        "preview": {
+          "top": "rgba(121, 146, 98, 0.55)",
+          "bottom": "rgba(51, 68, 39, 0.88)",
+          "caption": "ROUGH",
+          "imageUrl": "/browser-previews/floors/rough-floor.svg"
+        }
+      }
+    ]
+  }
+}

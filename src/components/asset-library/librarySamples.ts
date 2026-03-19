@@ -5,6 +5,7 @@ import type { UrdfImportOptions } from "../../app/core/urdf/urdfImportOptions";
 import type { UsdImportOptions } from "../../app/core/usd/usdImportOptions";
 
 export type LibrarySampleKind = "urdf" | "usd";
+export type LibrarySampleSection = "floors" | "robots" | "links";
 
 export type LibrarySampleTrainingDefaults = {
   templateId: string;
@@ -43,7 +44,7 @@ export type LibraryAssetPackItemTransform = {
 export type LibraryAssetPackItemDefinition = {
   id: string;
   modelId: string;
-  section: "links";
+  section: "links" | "floors";
   label: string;
   description: string;
   entry: string;
@@ -67,7 +68,7 @@ export type LibraryAssetPackPresetDefinition = {
   modelId: string;
   label: string;
   description: string;
-  section: "links";
+  section: "links" | "floors";
   placements: LibraryAssetPackPresetPlacement[];
   preview?: LibraryCardPreview;
 };
@@ -124,6 +125,7 @@ export type LibrarySampleEnvironment = {
 
 export type LibrarySample = {
   id: string;
+  section: LibrarySampleSection;
   label: string;
   description: string;
   kind: LibrarySampleKind;
@@ -167,8 +169,8 @@ type LibraryCatalogState = {
 };
 
 export const LIBRARY_ROOT = "library";
-export const MANAGED_FLAT_FLOOR_WORKSPACE_KEY = "library/floors/flat_floor.usda";
-export const MANAGED_ROUGH_FLOOR_WORKSPACE_KEY = "library/anymal_c/terrain/rough_generator_exact_5x5.usda";
+export const MANAGED_FLAT_FLOOR_WORKSPACE_KEY = "library/floors/flat_floor/flat_floor.usda";
+export const MANAGED_ROUGH_FLOOR_WORKSPACE_KEY = "library/floors/rough_terrain/rough_terrain.usda";
 
 const DEFAULT_LIBRARY_INDEX: LibraryCatalogIndex = {
   schemaVersion: "library.index.v1",
@@ -243,10 +245,12 @@ function cloneAssetPackItemDefinition(value: unknown): LibraryAssetPackItemDefin
   const description = asText(record.description);
   const modelId = asText(record.modelId);
   if (!id || !entry || !label || !description || !modelId) return null;
+  const sectionToken = asText(record.section);
+  const section: "links" | "floors" = sectionToken === "floors" ? "floors" : "links";
   return {
     id,
     modelId,
-    section: "links",
+    section,
     label,
     description,
     entry,
@@ -264,6 +268,8 @@ function cloneAssetPackPresetDefinition(value: unknown): LibraryAssetPackPresetD
   const description = asText(record.description);
   const modelId = asText(record.modelId);
   if (!id || !label || !description || !modelId) return null;
+  const sectionToken = asText(record.section);
+  const section: "links" | "floors" = sectionToken === "floors" ? "floors" : "links";
   const placements = Array.isArray(record.placements)
     ? record.placements
         .map((placement) => {
@@ -282,7 +288,7 @@ function cloneAssetPackPresetDefinition(value: unknown): LibraryAssetPackPresetD
     modelId,
     label,
     description,
-    section: "links",
+    section,
     placements,
     ...(Object.keys(asRecord(record.preview)).length > 0 ? { preview: clonePreview(record.preview, label.toUpperCase()) } : {}),
   };
@@ -416,8 +422,10 @@ function cloneLibrarySample(value: unknown): LibrarySample | null {
   const description = asText(record.description);
   const kind = asText(record.kind);
   const entry = asText(record.entry);
+  const sectionToken = asText(record.section);
   if (!id || !label || !description || !entry) return null;
   if (kind !== "urdf" && kind !== "usd") return null;
+  if (sectionToken !== "floors" && sectionToken !== "robots" && sectionToken !== "links") return null;
 
   const assetPackRecord = asRecord(record.assetPack);
   const items = Array.isArray(assetPackRecord.items)
@@ -433,6 +441,7 @@ function cloneLibrarySample(value: unknown): LibrarySample | null {
 
   return {
     id,
+    section: sectionToken,
     label,
     description,
     kind,
@@ -555,11 +564,27 @@ export function getLoadedLibrarySamples(): LibrarySample[] {
 const hasLibraryWorkspacePrefix = (path: string) =>
   normalizePath(path).toLowerCase().startsWith(`${LIBRARY_ROOT.toLowerCase()}/`);
 
-export function resolveLibraryWorkspaceKey(sample: Pick<LibrarySample, "id">, path: string): string {
+const dirnamePath = (path: string): string => {
+  const normalized = normalizePath(path);
+  const idx = normalized.lastIndexOf("/");
+  if (idx < 0) return "";
+  return normalized.slice(0, idx);
+};
+
+export function resolveLibraryBundleRoot(sample: Pick<LibrarySample, "id" | "bundlePath">): string {
+  const bundlePath = normalizePath(sample.bundlePath ?? "");
+  if (bundlePath && hasLibraryWorkspacePrefix(bundlePath)) {
+    const root = dirnamePath(bundlePath);
+    if (root) return root;
+  }
+  return `${LIBRARY_ROOT}/${sample.id}`;
+}
+
+export function resolveLibraryWorkspaceKey(sample: Pick<LibrarySample, "id" | "bundlePath">, path: string): string {
   const normalized = normalizePath(path);
   if (!normalized) return "";
   if (hasLibraryWorkspacePrefix(normalized)) return normalized;
-  return `${LIBRARY_ROOT}/${sample.id}/${normalized}`;
+  return `${resolveLibraryBundleRoot(sample)}/${normalized}`;
 }
 
 export function buildLibrarySampleEntryKey(sample: LibrarySample): string {
