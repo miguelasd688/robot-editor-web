@@ -453,7 +453,7 @@ const usdTextureLoader = new THREE.TextureLoader();
 const usdTextureCache = new Map<string, THREE.Texture>();
 
 const resolveUsdMeshSceneProfile = (
-  usdKey: string,
+  _usdKey: string,
   importOptions?: UsdImportOptions
 ): "balanced" | "high_fidelity" => {
   const explicit = importOptions?.meshSceneProfile;

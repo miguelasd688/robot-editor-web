@@ -1,5 +1,6 @@
 import type { AssetEntry } from "../../assets/assetRegistryTypes";
-import type { EnvironmentDiagnostic, EnvironmentDoc } from "../../editor/document/types";
+import type { ActuatorDescriptor } from "../../physics/mujoco/ActuatorRegistry";
+import type { EnvironmentDiagnostic, EnvironmentDoc, SceneNode } from "../../editor/document/types";
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import {
   buildSceneCompositionPlan,
@@ -16,7 +17,10 @@ import {
   toObjectOrEmpty,
   toTextOrEmpty,
 } from "./trainingBuildUtils";
-import type { CustomTrainingEnvironmentPayload } from "./trainingRequestTypes";
+import type {
+  CustomTrainingEnvironmentPayload,
+  CustomTrainingRobotRuntimeSemantics,
+} from "./trainingRequestTypes";
 import type { SceneTrainingEligibility } from "../sceneTrainingEligibility";
 
 type BuildTrainingEnvironmentInput = {
@@ -38,6 +42,8 @@ type BuildTrainingEnvironmentInput = {
   getCachedSceneAssetIdFn?: (signature: string) => string | undefined;
   setCachedSceneAssetIdFn?: (signature: string, sceneAssetId: string) => void;
   sceneEligibility?: SceneTrainingEligibility | null;
+  sourceSceneNodes?: Record<string, SceneNode>;
+  actuatorRegistryByRobot?: Record<string, ActuatorDescriptor[]>;
 };
 
 type SnapshotSceneTrainingAssetResolution = {
@@ -173,6 +179,138 @@ function normalizeRobotCount(raw: unknown, fallback: number): number {
   return Math.max(0, Math.round(parsed));
 }
 
+function toVector3Tuple(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const x = Number(value[0]);
+  const y = Number(value[1]);
+  const z = Number(value[2]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  return [x, y, z];
+}
+
+function toFiniteNumberOrUndefined(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function resolvePrimaryRobotNodeId(input: {
+  snapshot: EnvironmentDoc | null;
+  primaryRobotEntityId: string | null;
+  sourceSceneNodes?: Record<string, SceneNode>;
+}): string {
+  const snapshotEntities =
+    input.snapshot && typeof input.snapshot.entities === "object" && input.snapshot.entities
+      ? (input.snapshot.entities as Record<string, Record<string, unknown>>)
+      : {};
+  const sourceSceneNodes = input.sourceSceneNodes ?? {};
+  const primaryEntity =
+    input.primaryRobotEntityId && snapshotEntities[input.primaryRobotEntityId]
+      ? snapshotEntities[input.primaryRobotEntityId]
+      : null;
+  const candidateNodeIds = [
+    toTextOrEmpty(primaryEntity?.nodeId),
+    toTextOrEmpty(primaryEntity?.id),
+    toTextOrEmpty(input.primaryRobotEntityId),
+  ].filter((item) => item.length > 0);
+  for (const candidate of candidateNodeIds) {
+    if (sourceSceneNodes[candidate]?.kind === "robot") return candidate;
+  }
+  return "";
+}
+
+function buildRobotRuntimeSemantics(input: {
+  sourceSceneNodes?: Record<string, SceneNode>;
+  actuatorRegistryByRobot?: Record<string, ActuatorDescriptor[]>;
+  robotNodeId: string;
+}): CustomTrainingRobotRuntimeSemantics | undefined {
+  const sourceSceneNodes = input.sourceSceneNodes ?? {};
+  const robotNode = sourceSceneNodes[input.robotNodeId];
+  if (!robotNode || robotNode.kind !== "robot") return undefined;
+
+  const jointNodesById = new Map<string, SceneNode>();
+  const jointNodesByName = new Map<string, SceneNode>();
+  const stack = [robotNode.id];
+  while (stack.length > 0) {
+    const nodeId = stack.pop() as string;
+    const node = sourceSceneNodes[nodeId];
+    if (!node) continue;
+    for (const childId of node.children) stack.push(childId);
+    const urdf = node.components?.urdf;
+    if (!urdf || urdf.kind !== "joint") continue;
+    jointNodesById.set(node.id, node);
+    jointNodesByName.set(urdf.joint.name, node);
+  }
+
+  const rawActuators = (input.actuatorRegistryByRobot?.[input.robotNodeId] ?? [])
+    .filter((entry) => entry && String(entry.jointName ?? "").trim().length > 0)
+    .sort((a, b) => a.jointName.localeCompare(b.jointName));
+
+  const actuators = rawActuators.map((entry) => {
+    const jointNode = jointNodesById.get(entry.jointId) ?? jointNodesByName.get(entry.jointName);
+    const urdfJoint =
+      jointNode?.components?.urdf && jointNode.components.urdf.kind === "joint"
+        ? jointNode.components.urdf.joint
+        : null;
+    return {
+      jointId: entry.jointId,
+      jointName: entry.jointName,
+      actuatorName: entry.actuatorName,
+      type: entry.actuatorType,
+      enabled: true,
+      sourceType: toTextOrEmpty(urdfJoint?.actuator?.sourceType) || undefined,
+      stiffness: toFiniteNumberOrUndefined(urdfJoint?.actuator?.stiffness) ?? entry.stiffness,
+      damping: toFiniteNumberOrUndefined(urdfJoint?.actuator?.damping) ?? entry.damping,
+      initialPosition:
+        toFiniteNumberOrUndefined(urdfJoint?.actuator?.initialPosition) ?? entry.initialPosition,
+    };
+  });
+
+  const tendons = Array.from(jointNodesById.values())
+    .map((node) => {
+      const urdf = node.components?.urdf;
+      if (!urdf || urdf.kind !== "joint") return null;
+      const joint = urdf.joint;
+      if (joint.actuator?.enabled === false || joint.actuator?.type !== "muscle" || !joint.muscle) {
+        return null;
+      }
+      const endA = toVector3Tuple(joint.muscle.endA.localPos);
+      const endB = toVector3Tuple(joint.muscle.endB.localPos);
+      if (!endA || !endB) return null;
+      const range =
+        Array.isArray(joint.muscle.range) &&
+        joint.muscle.range.length >= 2 &&
+        Number.isFinite(Number(joint.muscle.range[0])) &&
+        Number.isFinite(Number(joint.muscle.range[1]))
+          ? ([Number(joint.muscle.range[0]), Number(joint.muscle.range[1])] as [number, number])
+          : undefined;
+      return {
+        jointId: node.id,
+        jointName: joint.name,
+        kind: "muscle" as const,
+        range,
+        force: toFiniteNumberOrUndefined(joint.muscle.force),
+        scale: toFiniteNumberOrUndefined(joint.muscle.scale),
+        damping: toFiniteNumberOrUndefined(joint.muscle.damping),
+        endA: {
+          body: toTextOrEmpty(joint.muscle.endA.body) || undefined,
+          localPos: endA,
+        },
+        endB: {
+          body: toTextOrEmpty(joint.muscle.endB.body) || undefined,
+          localPos: endB,
+        },
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => a.jointName.localeCompare(b.jointName));
+
+  if (!actuators.length && !tendons.length) return undefined;
+  return {
+    ...(actuators.length > 0 ? { actuators } : {}),
+    ...(tendons.length > 0 ? { tendons } : {}),
+  };
+}
+
 export async function buildTrainingEnvironment(
   input: BuildTrainingEnvironmentInput
 ): Promise<{
@@ -201,6 +339,16 @@ export async function buildTrainingEnvironment(
     sceneEligibility?.robotCount,
     normalizeRobotCount(environmentMetadata.robotCount, 0)
   );
+  const primaryRobotNodeId = resolvePrimaryRobotNodeId({
+    snapshot,
+    primaryRobotEntityId: resolvedPrimaryRobotEntityId,
+    sourceSceneNodes: input.sourceSceneNodes,
+  });
+  const robotRuntimeSemantics = buildRobotRuntimeSemantics({
+    sourceSceneNodes: input.sourceSceneNodes,
+    actuatorRegistryByRobot: input.actuatorRegistryByRobot,
+    robotNodeId: primaryRobotNodeId,
+  });
 
   let diagnostics = input.diagnostics;
   const environment: CustomTrainingEnvironmentPayload = {
@@ -240,6 +388,7 @@ export async function buildTrainingEnvironment(
       compilationStats: input.compilationStats,
     },
     sourceHints: buildSourceHints(snapshot),
+    ...(robotRuntimeSemantics ? { robotRuntimeSemantics } : {}),
     controlPolicy:
       resolvedPrimaryRobotEntityId
         ? {

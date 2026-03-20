@@ -31,5 +31,6 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src", "../runtime-plugin-suite/src"]
+  "include": ["src", "../runtime-plugin-suite/src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "../runtime-plugin-suite/src/**/*.test.ts", "../runtime-plugin-suite/src/**/*.test.tsx"]
 }

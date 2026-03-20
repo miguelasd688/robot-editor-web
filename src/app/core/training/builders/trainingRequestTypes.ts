@@ -1,6 +1,41 @@
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
 
+export type CustomTrainingActuatorSemantic = {
+  jointId: string;
+  jointName: string;
+  actuatorName: string;
+  type: "position" | "velocity" | "torque" | "muscle";
+  enabled: boolean;
+  sourceType?: string;
+  stiffness?: number;
+  damping?: number;
+  initialPosition?: number;
+};
+
+export type CustomTrainingTendonSemantic = {
+  jointId: string;
+  jointName: string;
+  kind: "muscle";
+  range?: [number, number];
+  force?: number;
+  scale?: number;
+  damping?: number;
+  endA: {
+    body?: string;
+    localPos: [number, number, number];
+  };
+  endB: {
+    body?: string;
+    localPos: [number, number, number];
+  };
+};
+
+export type CustomTrainingRobotRuntimeSemantics = {
+  actuators?: CustomTrainingActuatorSemantic[];
+  tendons?: CustomTrainingTendonSemantic[];
+};
+
 export type CustomTrainingEnvironmentPlacement = {
   entityId: string;
   sourceAssetId?: string;
@@ -23,6 +58,7 @@ export type CustomTrainingEnvironmentPayload = {
   };
   sourceHints?: Record<string, unknown>;
   scenePreparation?: Record<string, unknown>;
+  robotRuntimeSemantics?: CustomTrainingRobotRuntimeSemantics;
   robotAssetId?: string;
   sceneAssetId?: string;
   robotUsdKey?: string | null;

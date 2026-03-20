@@ -14,7 +14,6 @@ import {
 
 const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
 const isUsdPath = (p: string) => USD_EXTENSIONS.some((ext) => p.toLowerCase().endsWith(ext));
-const normalizeWorkspaceFilePath = (path: string) => path.replace(/\\/g, "/").replace(/^\/+/, "");
 
 export default function ExplorerPanel() {
   const assets = useAssetStore((s) => s.assets);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EnvironmentDoc } from "../../editor/document/types";
+import type { EnvironmentDoc, SceneNode } from "../../editor/document/types";
+import type { ActuatorDescriptor } from "../../physics/mujoco/ActuatorRegistry";
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import { buildTrainingEnvironment } from "./buildTrainingEnvironment";
 
@@ -69,6 +70,122 @@ function createEnvironmentSnapshot(): EnvironmentDoc {
     },
     diagnostics: [],
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function createSourceSceneNodes(): Record<string, SceneNode> {
+  return {
+    robot_root: {
+      id: "robot_root",
+      name: "Robot",
+      kind: "robot",
+      parentId: null,
+      children: ["hip_joint", "muscle_joint"],
+      components: {},
+    },
+    hip_joint: {
+      id: "hip_joint",
+      name: "Hip Joint",
+      kind: "joint",
+      parentId: "robot_root",
+      children: [],
+      components: {
+        urdf: {
+          kind: "joint",
+          joint: {
+            name: "hip_joint",
+            type: "revolute",
+            parent: "base",
+            child: "leg",
+            origin: { xyz: [0, 0, 0], rpy: [0, 0, 0] },
+            axis: [1, 0, 0],
+            actuator: {
+              enabled: true,
+              type: "position",
+              sourceType: "authored",
+              stiffness: 12,
+              damping: 3,
+              initialPosition: 0.25,
+            },
+          },
+        },
+      },
+    },
+    muscle_joint: {
+      id: "muscle_joint",
+      name: "Muscle Joint",
+      kind: "joint",
+      parentId: "robot_root",
+      children: [],
+      components: {
+        urdf: {
+          kind: "joint",
+          joint: {
+            name: "muscle_joint",
+            type: "revolute",
+            parent: "leg",
+            child: "foot",
+            origin: { xyz: [0, 0, 0], rpy: [0, 0, 0] },
+            axis: [0, 1, 0],
+            actuator: {
+              enabled: true,
+              type: "muscle",
+              sourceType: "authored_muscle",
+            },
+            muscle: {
+              enabled: true,
+              endA: { body: "leg", localPos: [0.1, 0.2, 0.3] },
+              endB: { body: "foot", localPos: [0.4, 0.5, 0.6] },
+              range: [0.2, 1.4],
+              force: 18,
+              scale: 1.2,
+              damping: 0.8,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function createActuatorRegistryByRobot(): Record<string, ActuatorDescriptor[]> {
+  return {
+    robot_root: [
+      {
+        robotId: "robot_root",
+        jointId: "hip_joint",
+        jointName: "hip_joint",
+        type: "revolute",
+        mjcfJoint: "hip_joint",
+        actuatorName: "hip_motor",
+        range: { min: -1, max: 1 },
+        velocityRange: { min: -2, max: 2 },
+        effortRange: { min: -3, max: 3 },
+        initialPosition: 0.25,
+        stiffness: 12,
+        damping: 3,
+        continuous: false,
+        actuatorType: "position",
+        angular: true,
+      },
+      {
+        robotId: "robot_root",
+        jointId: "muscle_joint",
+        jointName: "muscle_joint",
+        type: "revolute",
+        mjcfJoint: "muscle_joint",
+        actuatorName: "muscle_drive",
+        range: { min: -1, max: 1 },
+        velocityRange: { min: -2, max: 2 },
+        effortRange: { min: -3, max: 3 },
+        initialPosition: 0,
+        stiffness: 4,
+        damping: 1,
+        continuous: false,
+        actuatorType: "muscle",
+        angular: true,
+      },
+    ],
   };
 }
 
@@ -197,5 +314,69 @@ describe("buildTrainingEnvironment", () => {
     expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).source).toBe(
       "composition_upload"
     );
+  });
+
+  it("serializes robot runtime semantics from primary robot actuators and muscle joints", async () => {
+    const snapshot = createEnvironmentSnapshot();
+    const result = await buildTrainingEnvironment({
+      submit: createSubmitInput(),
+      configValues: {
+        robotAssetId: "asset_robot_123",
+        sceneAssetId: "asset_scene_456",
+        environment: {},
+      },
+      compiledEnvironment: snapshot,
+      compilationTarget: "training",
+      compilationStats: { nodeCount: 2 },
+      context: {},
+      diagnostics: [],
+      sceneEligibility: {
+        canCreateExperiment: true,
+        robotCount: 1,
+        primaryRobotEntityId: "robot_root",
+        primaryRobotAssetId: "asset_robot_123",
+        robotCandidates: [],
+      },
+      sourceSceneNodes: createSourceSceneNodes(),
+      actuatorRegistryByRobot: createActuatorRegistryByRobot(),
+    });
+
+    expect(result.environment.robotRuntimeSemantics?.actuators).toEqual([
+      {
+        jointId: "hip_joint",
+        jointName: "hip_joint",
+        actuatorName: "hip_motor",
+        type: "position",
+        enabled: true,
+        sourceType: "authored",
+        stiffness: 12,
+        damping: 3,
+        initialPosition: 0.25,
+      },
+      {
+        jointId: "muscle_joint",
+        jointName: "muscle_joint",
+        actuatorName: "muscle_drive",
+        type: "muscle",
+        enabled: true,
+        sourceType: "authored_muscle",
+        stiffness: 4,
+        damping: 1,
+        initialPosition: 0,
+      },
+    ]);
+    expect(result.environment.robotRuntimeSemantics?.tendons).toEqual([
+      {
+        jointId: "muscle_joint",
+        jointName: "muscle_joint",
+        kind: "muscle",
+        range: [0.2, 1.4],
+        force: 18,
+        scale: 1.2,
+        damping: 0.8,
+        endA: { body: "leg", localPos: [0.1, 0.2, 0.3] },
+        endB: { body: "foot", localPos: [0.4, 0.5, 0.6] },
+      },
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import { editorEngine } from "../editor/engineSingleton";
 import { environmentCompilationManager } from "../environment/EnvironmentCompilationManager";
+import { useMujocoStore } from "../store/useMujocoStore";
 import { useTrainingImportContextStore } from "../store/useTrainingImportContextStore";
 import { buildTrainingAgent } from "./builders/buildTrainingAgent";
 import { buildTrainingEnvironment } from "./builders/buildTrainingEnvironment";
@@ -27,8 +28,9 @@ export class IsaacLabEnvironmentManager {
   async buildCustomTaskRequest(input: BuildCustomTaskRequestInput): Promise<CustomTrainingTaskBuildResult> {
     const configValues = toObjectOrEmpty(input.config);
     const context = useTrainingImportContextStore.getState();
+    const sourceDoc = input.doc ?? editorEngine.getDoc();
     const compiled = environmentCompilationManager.compileProjectDoc({
-      doc: input.doc ?? editorEngine.getDoc(),
+      doc: sourceDoc,
       target: "training",
     });
     const diagnostics = mergeDiagnostics(
@@ -54,6 +56,8 @@ export class IsaacLabEnvironmentManager {
         terrainUsdKey: context.terrainUsdKey,
         terrainMode: context.terrainMode,
       },
+      sourceSceneNodes: sourceDoc.scene.nodes,
+      actuatorRegistryByRobot: useMujocoStore.getState().actuatorRegistryByRobot,
       diagnostics,
     });
     const agent = buildTrainingAgent({ configValues });

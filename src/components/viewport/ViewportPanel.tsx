@@ -309,17 +309,6 @@ type UsdDialogFormOptions = {
   selfCollision: boolean;
 };
 
-type UsdDialogVariantOption = {
-  value: string;
-  label: string;
-  description?: string;
-  importHints?: {
-    referenceVariantId?: string;
-    extraBundleHintPaths?: string[];
-    posePolicy?: "auto" | "prefer_frame_pair" | "prefer_mjcf";
-  };
-};
-
 type UsdDialogEnvironmentOption = {
   value: string;
   label: string;
@@ -1153,7 +1142,7 @@ export default function ViewportPanel() {
           const presetResult = await resolveLibraryAssetPackPresetImportActions(action.presetId);
           diagnostics.push(...presetResult.diagnostics);
           if (presetResult.ok) {
-            executionActions.push(...presetResult.actions);
+            executionActions.push(...(presetResult.actions ?? []));
           }
         }
       }

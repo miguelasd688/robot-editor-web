@@ -331,7 +331,7 @@ function bytesToBase64(bytes: Uint8Array) {
     binary += String.fromCharCode(...chunk);
   }
   if (typeof btoa === "function") return btoa(binary);
-  return Buffer.from(binary, "binary").toString("base64");
+  throw new Error("Base64 encoding is unavailable in this runtime.");
 }
 
 async function encodeFileToBase64(file: File) {

@@ -241,6 +241,14 @@ export type TaskAutocompletePreview = {
     message: string;
     context?: Record<string, unknown>;
   }>;
+  featureCoverage?: Array<{
+    feature: string;
+    label: string;
+    status: "supported" | "preview_only" | "blocked" | "not_applicable";
+    severity: "info" | "warning" | "error";
+    message: string;
+    context?: Record<string, unknown>;
+  }>;
   scenePreparation?: Record<string, unknown> | null;
   catalogVersion?: string;
   message: string;
@@ -277,6 +285,14 @@ export type CustomTrainingTaskLaunchResponse = {
   warnings?: string[];
   diagnostics?: Array<{ code: string; severity: "warning" | "error"; message: string; context?: Record<string, unknown> }>;
   compatibility?: Array<{ category: string; code: string; severity: "info" | "warning" | "error"; message: string }>;
+  featureCoverage?: Array<{
+    feature: string;
+    label: string;
+    status: "supported" | "preview_only" | "blocked" | "not_applicable";
+    severity: "info" | "warning" | "error";
+    message: string;
+    context?: Record<string, unknown>;
+  }>;
   scenePreparation?: Record<string, unknown> | null;
 };
 
@@ -891,6 +907,32 @@ function normalizeCustomDryRunPreview(input: {
               code: String(record.code ?? "").trim() || "unknown",
               severity,
               message: String(record.message ?? "").trim() || "compatibility",
+              context: isPlainRecord(record.context) ? record.context : undefined,
+            };
+          })
+      : [],
+    featureCoverage: Array.isArray(parsed.featureCoverage)
+      ? parsed.featureCoverage
+          .filter((item) => isPlainRecord(item))
+          .map((item) => {
+            const record = item as Record<string, unknown>;
+            const severityToken = String(record.severity ?? "info").trim().toLowerCase();
+            const severity =
+              severityToken === "warning" || severityToken === "error" ? severityToken : "info";
+            const statusToken = String(record.status ?? "not_applicable").trim().toLowerCase();
+            const status =
+              statusToken === "supported" ||
+              statusToken === "preview_only" ||
+              statusToken === "blocked" ||
+              statusToken === "not_applicable"
+                ? statusToken
+                : "not_applicable";
+            return {
+              feature: String(record.feature ?? "").trim() || "unknown",
+              label: String(record.label ?? record.feature ?? "Feature").trim() || "Feature",
+              status,
+              severity,
+              message: String(record.message ?? "").trim() || "feature coverage",
               context: isPlainRecord(record.context) ? record.context : undefined,
             };
           })
