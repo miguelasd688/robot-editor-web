@@ -188,12 +188,26 @@ export type TaskAutocompleteRequest = {
   dryRun?: boolean;
 };
 
+export type CustomTrainingEnvironmentPlacement = {
+  entityId: string;
+  sourceAssetId?: string;
+  localTransform?: {
+    translation?: [number, number, number];
+    rotationQuat?: [number, number, number, number];
+    scale?: [number, number, number];
+  };
+};
+
+export type CustomTrainingEnvironmentPayload = Record<string, unknown> & {
+  placements?: CustomTrainingEnvironmentPlacement[];
+};
+
 export type CustomTrainingTaskRequest = {
   tenantId?: string;
   experimentName?: string;
   seed?: number;
   dryRun?: boolean;
-  environment: Record<string, unknown>;
+  environment: CustomTrainingEnvironmentPayload;
   agent: Record<string, unknown>;
   runtime: Record<string, unknown>;
 };

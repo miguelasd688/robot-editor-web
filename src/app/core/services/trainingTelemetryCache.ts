@@ -8,7 +8,9 @@ const VIDEO_STORE = "videoClips";
 const META_STORE = "cacheMeta";
 
 const MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_CACHE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_CACHE_BYTES = 256 * 1024 * 1024;
+const MIN_PRUNE_INTERVAL_MS = 20_000;
+const METRIC_CACHE_STEP_INTERVAL = 25;
 const DEFAULT_TENANT_ID = "local";
 const META_KEY_EVENT_COUNT = "eventCount";
 const META_KEY_JOB_COUNT = "jobCount";
@@ -65,6 +67,8 @@ type CachedCacheMetaRow = {
 };
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let nextPruneAllowedAtMs = 0;
+let pruneInFlight: Promise<void> | null = null;
 
 export function resolveTrainingCacheTenantId(tenantId: unknown): string {
   const token = String(tenantId ?? "").trim();
@@ -134,7 +138,7 @@ export async function cacheTrainingJobs(input: { items: TrainingJobSummary[] }):
     }
     await transactionDone(tx);
   });
-  await pruneTrainingTelemetryCache();
+  await pruneTrainingTelemetryCacheIfNeeded();
 }
 
 export async function hasHydratedTrainingEvents(input: { tenantId: string; jobId: string }): Promise<boolean> {
@@ -190,7 +194,7 @@ export async function cacheTrainingEvents(input: {
     }
     await transactionDone(tx);
   });
-  await pruneTrainingTelemetryCache();
+  await pruneTrainingTelemetryCacheIfNeeded();
 }
 
 export async function appendCachedMetricEvent(input: {
@@ -201,15 +205,18 @@ export async function appendCachedMetricEvent(input: {
   metrics: Record<string, unknown>;
   occurredAt?: string;
 }): Promise<void> {
+  const safeStep = Math.max(0, Math.round(Number(input.step) || 0));
+  if (safeStep <= 0) return;
+  if (safeStep > 5 && safeStep % METRIC_CACHE_STEP_INTERVAL !== 0) return;
   const occurredAtMs = parseCreatedAtMs(input.occurredAt, Date.now());
-  const eventId = `sse_metric_${String(input.runnerJobId ?? "none")}_${Math.max(0, Math.round(input.step))}_${occurredAtMs}`;
+  const eventId = `sse_metric_${String(input.runnerJobId ?? "none")}_${safeStep}_${occurredAtMs}`;
   const event: TrainingJobEventSummary = {
     id: eventId,
     jobId: input.jobId,
     eventType: "runner.metrics",
     payload: {
       runnerJobId: input.runnerJobId ?? null,
-      step: Math.max(0, Math.round(input.step)),
+      step: safeStep,
       metrics: isRecord(input.metrics) ? input.metrics : {},
     },
     createdAt: new Date(occurredAtMs).toISOString(),
@@ -396,10 +403,11 @@ export async function putCachedVideoClip(input: {
     store.put(row);
     await transactionDone(tx);
   });
-  await pruneTrainingTelemetryCache();
+  await pruneTrainingTelemetryCacheIfNeeded();
 }
 
 export async function clearTrainingTelemetryCache(): Promise<void> {
+  nextPruneAllowedAtMs = Date.now() + MIN_PRUNE_INTERVAL_MS;
   const db = await openCacheDb();
   if (!db) return;
   const tx = db.transaction([JOBS_STORE, EVENTS_STORE, VIDEO_STORE, META_STORE], "readwrite");
@@ -450,7 +458,25 @@ export async function deleteTrainingTelemetryForJob(input: { tenantId: string; j
   }
 
   await transactionDone(tx);
-  await pruneTrainingTelemetryCache();
+  await pruneTrainingTelemetryCacheIfNeeded();
+}
+
+async function pruneTrainingTelemetryCacheIfNeeded(): Promise<void> {
+  const now = Date.now();
+  if (now < nextPruneAllowedAtMs) return;
+  if (pruneInFlight) {
+    await pruneInFlight;
+    return;
+  }
+
+  nextPruneAllowedAtMs = now + MIN_PRUNE_INTERVAL_MS;
+  pruneInFlight = pruneTrainingTelemetryCache()
+    .catch(() => {})
+    .finally(() => {
+      pruneInFlight = null;
+      nextPruneAllowedAtMs = Date.now() + MIN_PRUNE_INTERVAL_MS;
+    });
+  await pruneInFlight;
 }
 
 export async function pruneTrainingTelemetryCache(): Promise<void> {
@@ -574,7 +600,11 @@ async function withCacheWrite(operation: (db: IDBDatabase) => Promise<void>): Pr
     await writeMetaRows(db, [{ key: META_KEY_LAST_WRITE_AT, value: Date.now() }]);
   } catch (error) {
     if (!isQuotaExceededError(error)) throw error;
+    if (pruneInFlight) {
+      await pruneInFlight;
+    }
     await pruneTrainingTelemetryCache();
+    nextPruneAllowedAtMs = Date.now() + MIN_PRUNE_INTERVAL_MS;
     await operation(db);
     await writeMetaRows(db, [{ key: META_KEY_LAST_WRITE_AT, value: Date.now() }]);
   }
