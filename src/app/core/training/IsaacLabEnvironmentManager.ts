@@ -4,6 +4,7 @@ import { useTrainingImportContextStore } from "../store/useTrainingImportContext
 import { buildTrainingAgent } from "./builders/buildTrainingAgent";
 import { buildTrainingEnvironment } from "./builders/buildTrainingEnvironment";
 import { buildTrainingRuntime } from "./builders/buildTrainingRuntime";
+import { deriveSceneTrainingEligibility } from "./sceneTrainingEligibility";
 import type {
   BuildCustomTaskRequestInput,
   CustomTrainingTaskBuildResult,
@@ -40,12 +41,14 @@ export class IsaacLabEnvironmentManager {
       input.submit.modelName ||
       "custom-experiment";
     const maxSteps = Math.max(1, Math.round(input.submit.maxSteps ?? input.submit.epochs));
+    const sceneEligibility = deriveSceneTrainingEligibility(compiled);
     const builtEnvironment = await buildTrainingEnvironment({
       submit: input.submit,
       configValues,
       compiledEnvironment: compiled.environment,
       compilationTarget: compiled.target,
       compilationStats: toObjectOrEmpty(compiled.stats),
+      sceneEligibility,
       context: {
         robotUsdKey: context.robotUsdKey,
         terrainUsdKey: context.terrainUsdKey,
@@ -58,8 +61,10 @@ export class IsaacLabEnvironmentManager {
       maxSteps,
       configValues,
     });
+    const sourcePayloadVersion: CustomTrainingTaskRequest["sourcePayloadVersion"] = "training_task_source_v2";
 
     const request: CustomTrainingTaskRequest = {
+      sourcePayloadVersion,
       tenantId: input.submit.tenantId,
       experimentName,
       seed: Number.isInteger(input.submit.seed) ? input.submit.seed : undefined,

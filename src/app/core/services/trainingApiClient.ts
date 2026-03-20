@@ -203,6 +203,7 @@ export type CustomTrainingEnvironmentPayload = Record<string, unknown> & {
 };
 
 export type CustomTrainingTaskRequest = {
+  sourcePayloadVersion?: string;
   tenantId?: string;
   experimentName?: string;
   seed?: number;
@@ -233,6 +234,14 @@ export type TaskAutocompletePreview = {
   environmentPreview: Record<string, unknown>;
   resolvedAgent?: AgentVariant;
   warnings?: string[];
+  compatibility?: Array<{
+    category: string;
+    code: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+    context?: Record<string, unknown>;
+  }>;
+  scenePreparation?: Record<string, unknown> | null;
   catalogVersion?: string;
   message: string;
 };
@@ -267,6 +276,8 @@ export type CustomTrainingTaskLaunchResponse = {
   job: TrainingJobSummary;
   warnings?: string[];
   diagnostics?: Array<{ code: string; severity: "warning" | "error"; message: string; context?: Record<string, unknown> }>;
+  compatibility?: Array<{ category: string; code: string; severity: "info" | "warning" | "error"; message: string }>;
+  scenePreparation?: Record<string, unknown> | null;
 };
 
 export type TrainingTaskCatalogEntry = {
@@ -868,6 +879,25 @@ function normalizeCustomDryRunPreview(input: {
     environmentPreview,
     resolvedAgent: isPlainRecord(parsed.resolvedAgent) ? (parsed.resolvedAgent as AgentVariant) : undefined,
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => String(item)) : [],
+    compatibility: Array.isArray(parsed.compatibility)
+      ? parsed.compatibility
+          .filter((item) => isPlainRecord(item))
+          .map((item) => {
+            const record = item as Record<string, unknown>;
+            const severityToken = String(record.severity ?? "warning").trim().toLowerCase();
+            const severity = severityToken === "error" || severityToken === "info" ? severityToken : "warning";
+            return {
+              category: String(record.category ?? "runtime_semantics").trim() || "runtime_semantics",
+              code: String(record.code ?? "").trim() || "unknown",
+              severity,
+              message: String(record.message ?? "").trim() || "compatibility",
+              context: isPlainRecord(record.context) ? record.context : undefined,
+            };
+          })
+      : [],
+    scenePreparation: isPlainRecord(parsed.scenePreparation)
+      ? parsed.scenePreparation
+      : null,
     catalogVersion: String(parsed.catalogVersion ?? "").trim() || undefined,
     message: String(parsed.message ?? "Custom payload validated."),
   } satisfies TaskAutocompletePreview;
@@ -887,6 +917,8 @@ export async function submitTrainingTaskRemote(
       agent: custom.agent,
       runtime: custom.runtime,
     };
+    const sourcePayloadVersion = String(custom.sourcePayloadVersion ?? "").trim();
+    if (sourcePayloadVersion) payload.sourcePayloadVersion = sourcePayloadVersion;
     const tenantId = String(custom.tenantId ?? "").trim();
     if (tenantId) payload.tenantId = tenantId;
     const experimentName = String(custom.experimentName ?? "").trim();

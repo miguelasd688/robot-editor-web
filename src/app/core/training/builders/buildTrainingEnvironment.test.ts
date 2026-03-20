@@ -96,12 +96,36 @@ describe("buildTrainingEnvironment", () => {
         terrainMode: "usd",
       },
       diagnostics: [],
+      sceneEligibility: {
+        canCreateExperiment: true,
+        robotCount: 1,
+        primaryRobotEntityId: "robot_root",
+        primaryRobotAssetId: "asset_robot_123",
+        robotCandidates: [
+          {
+            entityId: "robot_root",
+            assetId: "asset_robot_123",
+            label: "Robot",
+            sourceKind: "usd",
+          },
+        ],
+      },
     });
 
     expect(result.environment.robotAssetId).toBe("asset_robot_123");
     expect(result.environment.sceneAssetId).toBe("asset_scene_456");
+    expect(result.environment.sceneTerrainType).toBe("usd");
     expect(result.environment.metadata?.compilationTarget).toBe("training");
     expect(result.environment.metadata?.compilationStats).toEqual({ nodeCount: 2 });
+    expect(result.environment.metadata?.primaryRobotEntityId).toBe("robot_root");
+    expect(result.environment.metadata?.robotCount).toBe(1);
+    expect(result.environment.metadata?.sceneTwinMode).toBe("composed_scene_asset");
+    expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).source).toBe("explicit_override");
+    expect(result.environment.controlPolicy).toEqual({
+      mode: "single_agent_primary_robot",
+      primaryRobotEntityId: "robot_root",
+    });
+    expect(result.environment.sourceHints).toBeTruthy();
     expect(result.environment.placements).toBeTruthy();
     expect(result.environment.placements?.length).toBe(2);
 
@@ -113,5 +137,65 @@ describe("buildTrainingEnvironment", () => {
     expect(rotationQuat).toBeTruthy();
     expect(Math.abs((rotationQuat?.[2] ?? 0) - Math.SQRT1_2)).toBeLessThan(1e-9);
     expect(Math.abs((rotationQuat?.[3] ?? 0) - Math.SQRT1_2)).toBeLessThan(1e-9);
+  });
+
+  it("prefers snapshot-attached training scene asset before composition upload", async () => {
+    const snapshot = createEnvironmentSnapshot();
+    snapshot.assets.table_asset.trainingAssetId = "asset_scene_from_snapshot";
+    let composeCalled = false;
+
+    const result = await buildTrainingEnvironment({
+      submit: createSubmitInput(),
+      configValues: {
+        robotAssetId: "asset_robot_123",
+        environment: {},
+      },
+      compiledEnvironment: snapshot,
+      compilationTarget: "training",
+      compilationStats: { nodeCount: 2 },
+      context: {},
+      diagnostics: [],
+      composeAndUploadEnvironmentSceneAssetFn: async () => {
+        composeCalled = true;
+        return null;
+      },
+    });
+
+    expect(result.environment.sceneAssetId).toBe("asset_scene_from_snapshot");
+    expect(result.environment.sceneTerrainType).toBe("usd");
+    expect(composeCalled).toBe(false);
+    expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).source).toBe(
+      "snapshot_training_asset"
+    );
+  });
+
+  it("falls back to composed scene upload when no explicit or snapshot scene asset is available", async () => {
+    const snapshot = createEnvironmentSnapshot();
+    const result = await buildTrainingEnvironment({
+      submit: createSubmitInput(),
+      configValues: {
+        robotAssetId: "asset_robot_123",
+        environment: {},
+      },
+      compiledEnvironment: snapshot,
+      compilationTarget: "training",
+      compilationStats: { nodeCount: 2 },
+      context: {},
+      diagnostics: [],
+      composeAndUploadEnvironmentSceneAssetFn: async () => ({
+        sceneAssetId: "asset_scene_composed",
+        entryPath: "composed_scene.usda",
+        diagnostics: [],
+        sourceCount: 1,
+        entityCount: 1,
+        signature: "sig_123",
+      }),
+    });
+
+    expect(result.environment.sceneAssetId).toBe("asset_scene_composed");
+    expect(result.environment.sceneTerrainType).toBe("usd");
+    expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).source).toBe(
+      "composition_upload"
+    );
   });
 });

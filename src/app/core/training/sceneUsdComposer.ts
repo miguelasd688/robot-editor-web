@@ -151,13 +151,21 @@ export function buildSceneCompositionPlan(environment: EnvironmentDoc): SceneCom
       continue;
     }
 
+    const sourceRole = toText(sourceAssetRaw.role).toLowerCase();
+    if (sourceRole === "robot") {
+      continue;
+    }
+
     const sourceKind = toText(sourceAssetRaw.kind).toLowerCase();
     if (sourceKind !== "usd") {
+      const isGeneratedSource = sourceKind === "generated";
       pushDiagnostic(diagnostics, {
-        code: "CUSTOM_ENV_SCENE_SOURCE_UNSUPPORTED",
-        severity: "error",
+        code: isGeneratedSource ? "CUSTOM_ENV_SCENE_SOURCE_DEFERRED" : "CUSTOM_ENV_SCENE_SOURCE_UNSUPPORTED",
+        severity: isGeneratedSource ? "warning" : "error",
         source: SOURCE_DIAGNOSTIC,
-        message: `Scene source kind '${sourceKind || "unknown"}' is not supported for Isaac Lab scene composition.`,
+        message: isGeneratedSource
+          ? "Generated scene source is deferred to backend scene preparation/runtime compatibility checks."
+          : `Scene source kind '${sourceKind || "unknown"}' is not supported for Isaac Lab scene composition.`,
         context: {
           entityId: entity.id,
           sourceAssetId,

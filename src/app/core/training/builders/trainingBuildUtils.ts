@@ -80,6 +80,7 @@ export function pickEnvironmentOverrides(value: Record<string, unknown>) {
     robotUsdOverridePath: toTextOrEmpty(value.robotUsdOverridePath) || undefined,
     sceneUsdOverridePath: toTextOrEmpty(value.sceneUsdOverridePath) || undefined,
     sceneUsdTypeOverridePath: toTextOrEmpty(value.sceneUsdTypeOverridePath) || undefined,
+    runtimeWorldUsdOverridePath: toTextOrEmpty(value.runtimeWorldUsdOverridePath) || undefined,
     sceneTerrainType: toTextOrEmpty(value.sceneTerrainType) || undefined,
     sceneUsdTypeValue: toTextOrEmpty(value.sceneUsdTypeValue) || undefined,
     controlMode: toTextOrEmpty(value.controlMode) || undefined,

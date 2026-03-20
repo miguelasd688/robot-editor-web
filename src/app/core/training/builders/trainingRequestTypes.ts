@@ -16,6 +16,13 @@ export type CustomTrainingEnvironmentPayload = {
   sourceOfTruth: "project_doc_environment_v1";
   snapshot: EnvironmentDoc | null;
   placements?: CustomTrainingEnvironmentPlacement[];
+  controlPolicy?: {
+    mode: "single_agent_primary_robot" | "future_multi_agent";
+    primaryRobotEntityId?: string;
+    robots?: string[];
+  };
+  sourceHints?: Record<string, unknown>;
+  scenePreparation?: Record<string, unknown>;
   robotAssetId?: string;
   sceneAssetId?: string;
   robotUsdKey?: string | null;
@@ -26,6 +33,7 @@ export type CustomTrainingEnvironmentPayload = {
   robotUsdOverridePath?: string;
   sceneUsdOverridePath?: string;
   sceneUsdTypeOverridePath?: string;
+  runtimeWorldUsdOverridePath?: string;
   baseConstraintMode?: "fix_base" | "source_weld";
   cartpoleJointMap?: Record<string, unknown>;
   controlMode?: string;
@@ -64,6 +72,7 @@ export type CustomTrainingRuntimePayload = {
 };
 
 export type CustomTrainingTaskRequest = {
+  sourcePayloadVersion: "training_task_source_v1" | "training_task_source_v2";
   tenantId?: string;
   experimentName: string;
   seed?: number;

@@ -156,4 +156,35 @@ describe("sceneUsdComposer", () => {
     });
     expect(signatureA).toBe(signatureB);
   });
+
+  it("defers generated terrain compatibility to backend scene prep", () => {
+    const environment = createEnvironmentDocFixture();
+    environment.assets.floor_asset.kind = "generated";
+    environment.assets.floor_asset.workspaceKey = null;
+    const plan = buildSceneCompositionPlan(environment);
+    expect(plan.sources).toHaveLength(2);
+    const deferred = plan.diagnostics.find((item) => item.code === "CUSTOM_ENV_SCENE_SOURCE_DEFERRED");
+    expect(deferred).toBeTruthy();
+    expect(deferred?.severity).toBe("warning");
+    expect(plan.diagnostics.find((item) => item.severity === "error")).toBeFalsy();
+  });
+
+  it("defers generated scene_asset compatibility to backend scene prep", () => {
+    const environment = createEnvironmentDocFixture();
+    environment.assets.table_asset.kind = "generated";
+    environment.assets.table_asset.workspaceKey = null;
+    const plan = buildSceneCompositionPlan(environment);
+    const deferred = plan.diagnostics.find((item) => item.code === "CUSTOM_ENV_SCENE_SOURCE_DEFERRED");
+    expect(deferred).toBeTruthy();
+    expect(deferred?.severity).toBe("warning");
+    expect(plan.diagnostics.find((item) => item.severity === "error")).toBeFalsy();
+  });
+
+  it("ignores scene entities backed by robot-role assets", () => {
+    const environment = createEnvironmentDocFixture();
+    environment.assets.floor_asset.role = "robot";
+    const plan = buildSceneCompositionPlan(environment);
+    expect(plan.nodes.find((item) => item.entityId === "terrain_floor")).toBeFalsy();
+    expect(plan.sources.find((item) => item.sourceAssetId === "floor_asset")).toBeFalsy();
+  });
 });

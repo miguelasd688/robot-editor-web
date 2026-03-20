@@ -122,9 +122,15 @@ describe("IsaacLabEnvironmentManager", () => {
     const buildEnvironmentArgs = buildTrainingEnvironmentMock.mock.calls[0]?.[0] as {
       diagnostics: Array<{ code: string }>;
       compilationTarget: string;
+      sceneEligibility?: {
+        primaryRobotEntityId: string | null;
+        robotCount: number;
+      };
     };
     expect(buildEnvironmentArgs.compilationTarget).toBe("training");
     expect(buildEnvironmentArgs.diagnostics.map((item) => item.code)).toEqual(["CTX_WARN", "DOC_WARN"]);
+    expect(buildEnvironmentArgs.sceneEligibility?.primaryRobotEntityId).toBeNull();
+    expect(buildEnvironmentArgs.sceneEligibility?.robotCount).toBe(0);
 
     expect(buildTrainingAgentMock).toHaveBeenCalledTimes(1);
     expect(buildTrainingRuntimeMock).toHaveBeenCalledTimes(1);
@@ -133,6 +139,7 @@ describe("IsaacLabEnvironmentManager", () => {
       configValues: { dryRun: true, experimentName: "exp-from-config" },
     });
 
+    expect(result.request.sourcePayloadVersion).toBe("training_task_source_v2");
     expect(result.request.tenantId).toBe("tenant-alpha");
     expect(result.request.experimentName).toBe("exp-alpha");
     expect(result.request.seed).toBe(9);
