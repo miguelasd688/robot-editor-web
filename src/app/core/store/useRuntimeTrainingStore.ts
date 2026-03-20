@@ -596,32 +596,40 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       optimisticJobIds.add(localId);
       set((state) => ({ jobs: sortJobs([optimisticJob, ...state.jobs]) }));
 
-      const customTaskBuild = isaacLabEnvironmentManager.buildCustomTaskRequest({
-        submit: {
-          ...input,
-          experimentName,
-          maxSteps,
-        },
-        config: configValues,
-        doc: editorEngine.getDoc(),
-      });
-      const customTaskRequest = customTaskBuild.request;
-      const taskWarnings = customTaskBuild.diagnostics.filter((item) => item.severity === "warning");
-      if (taskWarnings.length > 0) {
-        logWarn("Training request built with environment warnings", {
-          scope: "runtime-training",
-          data: {
-            localId,
-            warnings: taskWarnings.map((warning) => `${warning.code}: ${warning.message}`),
-          },
+      const submissionPromise = Promise.resolve()
+        .then(async () => {
+          const customTaskBuild = await isaacLabEnvironmentManager.buildCustomTaskRequest({
+            submit: {
+              ...input,
+              experimentName,
+              maxSteps,
+            },
+            config: configValues,
+            doc: editorEngine.getDoc(),
+          });
+          const taskWarnings = customTaskBuild.diagnostics.filter((item) => item.severity === "warning");
+          if (taskWarnings.length > 0) {
+            logWarn("Training request built with environment warnings", {
+              scope: "runtime-training",
+              data: {
+                localId,
+                warnings: taskWarnings.map((warning) => `${warning.code}: ${warning.message}`),
+              },
+            });
+          }
+          const taskErrors = customTaskBuild.diagnostics.filter((item) => item.severity === "error");
+          if (taskErrors.length > 0) {
+            throw new Error(
+              taskErrors.map((item) => `${item.code}: ${item.message}`).join(" | ")
+            );
+          }
+          const customTaskRequest = customTaskBuild.request;
+          const taskResponse = await submitTrainingTaskRemote(customTaskRequest);
+          if (!("job" in taskResponse)) {
+            throw new Error("Custom training request returned preview payload during launch");
+          }
+          return taskResponse.job;
         });
-      }
-      const submissionPromise = submitTrainingTaskRemote(customTaskRequest).then((taskResponse) => {
-        if (!("job" in taskResponse)) {
-          throw new Error("Custom training request returned preview payload during launch");
-        }
-        return taskResponse.job;
-      });
 
       void submissionPromise
         .then((remoteJob) => {

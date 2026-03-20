@@ -3,6 +3,12 @@ import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../edito
 import { editorEngine } from "../editor/engineSingleton";
 import { useTrainingImportContextStore } from "../store/useTrainingImportContextStore";
 import { environmentCompilationManager } from "../environment/EnvironmentCompilationManager";
+import { useAssetStore } from "../store/useAssetStore";
+import {
+  composeAndUploadEnvironmentSceneAsset,
+  buildSceneCompositionSignature,
+  buildSceneCompositionPlan,
+} from "./sceneUsdComposer";
 
 type CustomTrainingEnvironmentPayload = {
   id: string;
@@ -13,6 +19,18 @@ type CustomTrainingEnvironmentPayload = {
   robotUsdKey?: string | null;
   terrainUsdKey?: string | null;
   terrainMode?: string;
+  sceneTerrainType?: string;
+  sceneUsdTypeValue?: string;
+  robotUsdOverridePath?: string;
+  sceneUsdOverridePath?: string;
+  sceneUsdTypeOverridePath?: string;
+  baseConstraintMode?: "fix_base" | "source_weld";
+  cartpoleJointMap?: Record<string, unknown>;
+  controlMode?: string;
+  observables?: Array<Record<string, unknown>>;
+  actions?: Array<Record<string, unknown>>;
+  resets?: Array<Record<string, unknown>>;
+  ik?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 };
 
@@ -58,6 +76,8 @@ export type CustomTrainingTaskBuildResult = {
   diagnostics: EnvironmentDiagnostic[];
 };
 
+const sceneCompositionCache = new Map<string, string>();
+
 function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -85,6 +105,14 @@ function toStringArrayOrUndefined(value: unknown): string[] | undefined {
   return next.length > 0 ? next : undefined;
 }
 
+function toArrayOfObjectsOrUndefined(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const next = value
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => item as Record<string, unknown>);
+  return next.length > 0 ? next : undefined;
+}
+
 function normalizeAssetPipelineOrUndefined(value: unknown): { mode: "usd_passthrough" | "mjcf_conversion"; reason?: string } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -100,6 +128,44 @@ function normalizeAssetPipelineOrUndefined(value: unknown): { mode: "usd_passthr
 function cloneEnvironmentSnapshot(snapshot: EnvironmentDoc | null): EnvironmentDoc | null {
   if (!snapshot) return null;
   return JSON.parse(JSON.stringify(snapshot)) as EnvironmentDoc;
+}
+
+function normalizeBaseConstraintMode(value: unknown): "fix_base" | "source_weld" | undefined {
+  const token = toTextOrEmpty(value).toLowerCase();
+  if (token === "fix_base" || token === "source_weld") return token;
+  return undefined;
+}
+
+function toCartpoleJointMapOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  const record = toObjectOrEmpty(value);
+  const cartDofName = toTextOrEmpty(record.cartDofName);
+  const poleDofName = toTextOrEmpty(record.poleDofName);
+  if (!cartDofName || !poleDofName || cartDofName === poleDofName) return undefined;
+  return {
+    cartDofName,
+    poleDofName,
+  };
+}
+
+function pickEnvironmentOverrides(value: Record<string, unknown>) {
+  const baseConstraintMode = normalizeBaseConstraintMode(value.baseConstraintMode);
+  return {
+    robotUsdOverridePath: toTextOrEmpty(value.robotUsdOverridePath) || undefined,
+    sceneUsdOverridePath: toTextOrEmpty(value.sceneUsdOverridePath) || undefined,
+    sceneUsdTypeOverridePath: toTextOrEmpty(value.sceneUsdTypeOverridePath) || undefined,
+    sceneTerrainType: toTextOrEmpty(value.sceneTerrainType) || undefined,
+    sceneUsdTypeValue: toTextOrEmpty(value.sceneUsdTypeValue) || undefined,
+    controlMode: toTextOrEmpty(value.controlMode) || undefined,
+    observables: toArrayOfObjectsOrUndefined(value.observables),
+    actions: toArrayOfObjectsOrUndefined(value.actions),
+    resets: toArrayOfObjectsOrUndefined(value.resets),
+    ik:
+      value.ik && typeof value.ik === "object" && !Array.isArray(value.ik)
+        ? (value.ik as Record<string, unknown>)
+        : undefined,
+    cartpoleJointMap: toCartpoleJointMapOrUndefined(value.cartpoleJointMap),
+    baseConstraintMode,
+  };
 }
 
 function normalizeDiagnostics(value: unknown): EnvironmentDiagnostic[] {
@@ -147,20 +213,21 @@ function mergeDiagnostics(...sources: Array<EnvironmentDiagnostic[]>): Environme
 }
 
 export class IsaacLabEnvironmentManager {
-  buildCustomTaskRequest(input: {
+  async buildCustomTaskRequest(input: {
     submit: SubmitTrainingJobInput;
     config: Record<string, unknown>;
     doc?: ProjectDoc;
-  }): CustomTrainingTaskBuildResult {
+  }): Promise<CustomTrainingTaskBuildResult> {
     const configValues = toObjectOrEmpty(input.config);
     const previewValues = toObjectOrEmpty(configValues.preview);
     const environmentValues = toObjectOrEmpty(configValues.environment);
+    const environmentOverrides = pickEnvironmentOverrides(environmentValues);
     const context = useTrainingImportContextStore.getState();
     const compiled = environmentCompilationManager.compileProjectDoc({
       doc: input.doc ?? editorEngine.getDoc(),
       target: "training",
     });
-    const diagnostics = mergeDiagnostics(
+    let diagnostics = mergeDiagnostics(
       normalizeDiagnostics(context.diagnostics),
       normalizeDiagnostics(compiled.diagnostics)
     );
@@ -168,7 +235,9 @@ export class IsaacLabEnvironmentManager {
       toTextOrEmpty(input.submit.experimentName) || toTextOrEmpty(configValues.experimentName) || input.submit.modelName || "custom-experiment";
     const maxSteps = Math.max(1, Math.round(input.submit.maxSteps ?? input.submit.epochs));
     const robotAssetId = toTextOrEmpty(configValues.robotAssetId);
-    const sceneAssetId = toTextOrEmpty(configValues.sceneAssetId);
+    const sceneAssetId =
+      toTextOrEmpty(configValues.sceneAssetId) ||
+      toTextOrEmpty(environmentValues.sceneAssetId);
     const metadata = toObjectOrEmpty(configValues.userModelMetadata);
     const policy = toObjectOrEmpty(configValues.policy);
     const policyRules = toObjectOrEmpty(configValues.policyRules);
@@ -205,6 +274,18 @@ export class IsaacLabEnvironmentManager {
       robotUsdKey: context.robotUsdKey,
       terrainUsdKey: context.terrainUsdKey,
       terrainMode: context.terrainMode,
+      robotUsdOverridePath: environmentOverrides.robotUsdOverridePath,
+      sceneUsdOverridePath: environmentOverrides.sceneUsdOverridePath,
+      sceneUsdTypeOverridePath: environmentOverrides.sceneUsdTypeOverridePath,
+      sceneTerrainType: environmentOverrides.sceneTerrainType,
+      sceneUsdTypeValue: environmentOverrides.sceneUsdTypeValue,
+      baseConstraintMode: environmentOverrides.baseConstraintMode,
+      cartpoleJointMap: environmentOverrides.cartpoleJointMap,
+      controlMode: environmentOverrides.controlMode,
+      observables: environmentOverrides.observables,
+      actions: environmentOverrides.actions,
+      resets: environmentOverrides.resets,
+      ik: environmentOverrides.ik,
       metadata: {
         ...metadata,
         ...environmentValues,
@@ -222,6 +303,59 @@ export class IsaacLabEnvironmentManager {
       policyRules: Object.keys(policyRules).length > 0 ? policyRules : undefined,
       metadata: toObjectOrEmpty(configValues.agent),
     };
+
+    if (!environment.sceneAssetId && environment.snapshot) {
+      const assets = useAssetStore.getState().assets;
+      const scenePlan = buildSceneCompositionPlan(environment.snapshot);
+      const scenePlanSignature = buildSceneCompositionSignature({
+        nodes: scenePlan.nodes,
+        sources: scenePlan.sources,
+        assets,
+      });
+      const cachedSceneAssetId = sceneCompositionCache.get(scenePlanSignature);
+      if (cachedSceneAssetId) {
+        environment.sceneAssetId = cachedSceneAssetId;
+        environment.terrainMode = "usd";
+        environment.sceneTerrainType = "usd";
+        environment.sceneUsdTypeValue = "usd";
+        environment.metadata = {
+          ...(environment.metadata ?? {}),
+          sceneComposition: {
+            applied: true,
+            fromCache: true,
+            sceneAssetId: cachedSceneAssetId,
+            sourceCount: scenePlan.sources.length,
+            entityCount: scenePlan.nodes.length,
+          },
+        };
+      } else {
+        const sceneComposition = await composeAndUploadEnvironmentSceneAsset({
+          environment: environment.snapshot,
+          assets,
+        });
+        if (sceneComposition) {
+          diagnostics = mergeDiagnostics(diagnostics, sceneComposition.diagnostics);
+          if (sceneComposition.sceneAssetId) {
+            environment.sceneAssetId = sceneComposition.sceneAssetId;
+            environment.terrainMode = "usd";
+            environment.sceneTerrainType = "usd";
+            environment.sceneUsdTypeValue = "usd";
+            environment.metadata = {
+              ...(environment.metadata ?? {}),
+              sceneComposition: {
+                applied: true,
+                fromCache: false,
+                sceneAssetId: sceneComposition.sceneAssetId,
+                sourceCount: sceneComposition.sourceCount,
+                entityCount: sceneComposition.entityCount,
+                entryPath: sceneComposition.entryPath,
+              },
+            };
+            sceneCompositionCache.set(sceneComposition.signature, sceneComposition.sceneAssetId);
+          }
+        }
+      }
+    }
 
     const request: CustomTrainingTaskRequest = {
       tenantId: input.submit.tenantId,

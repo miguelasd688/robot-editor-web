@@ -795,6 +795,70 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function toStageUpAxis(value: unknown): StageUpAxis {
+  const token = String(value ?? "").trim().toUpperCase();
+  if (token === "X" || token === "Y" || token === "Z") return token;
+  return "unknown";
+}
+
+function toPreviewIntrospection(
+  input: unknown
+): TaskAutocompletePreview["introspection"] {
+  const introspection = isPlainRecord(input) ? input : {};
+  const jointsRaw = Array.isArray(introspection.joints) ? introspection.joints : [];
+  const rootBodiesRaw = Array.isArray(introspection.rootBodies) ? introspection.rootBodies : [];
+  const joints = jointsRaw.filter((entry) => isPlainRecord(entry)) as UsdJointInfo[];
+  const rootBodies = rootBodiesRaw.map((entry) => String(entry ?? "").trim()).filter((entry) => entry.length > 0);
+  const jointCountRaw = Number(introspection.jointCount);
+  const jointCount = Number.isFinite(jointCountRaw) ? Math.max(0, Math.round(jointCountRaw)) : joints.length;
+  const stageUpAxis = toStageUpAxis(introspection.stageUpAxis);
+  return {
+    jointCount,
+    joints,
+    rootBodies,
+    stageUpAxis,
+  };
+}
+
+function normalizeCustomDryRunPreview(input: {
+  parsed: Record<string, unknown>;
+  fallbackTaskTemplate: string;
+  fallbackAssetId: string;
+}): TaskAutocompletePreview {
+  const parsed = input.parsed;
+  const fallbackTaskTemplate = String(input.fallbackTaskTemplate ?? "").trim() || "custom_manager";
+  const environmentPreview = isPlainRecord(parsed.environmentPreview)
+    ? parsed.environmentPreview
+    : isPlainRecord(parsed.environment)
+      ? parsed.environment
+      : {};
+  const fallbackAssetIdFromPreview = String((environmentPreview as Record<string, unknown>).robotAssetId ?? "").trim();
+  const assetId =
+    String(parsed.assetId ?? "").trim() ||
+    fallbackAssetIdFromPreview ||
+    String(input.fallbackAssetId ?? "").trim() ||
+    "custom-asset";
+  return {
+    dryRun: true,
+    taskTemplate: String(parsed.taskTemplate ?? fallbackTaskTemplate).trim() || fallbackTaskTemplate,
+    assetId,
+    introspection: toPreviewIntrospection(parsed.introspection),
+    derivedConfig: isPlainRecord(parsed.derivedConfig) ? (parsed.derivedConfig as DerivedTrainingConfig) : {},
+    taskConfig: isPlainRecord(parsed.taskConfig) ? parsed.taskConfig : {},
+    physicsDiagnostics: isPlainRecord(parsed.physicsDiagnostics)
+      ? (parsed.physicsDiagnostics as PhysicsDiagnostics)
+      : undefined,
+    expressionHints: isPlainRecord(parsed.expressionHints)
+      ? (parsed.expressionHints as TrainingExpressionHints)
+      : undefined,
+    environmentPreview,
+    resolvedAgent: isPlainRecord(parsed.resolvedAgent) ? (parsed.resolvedAgent as AgentVariant) : undefined,
+    warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => String(item)) : [],
+    catalogVersion: String(parsed.catalogVersion ?? "").trim() || undefined,
+    message: String(parsed.message ?? "Custom payload validated."),
+  } satisfies TaskAutocompletePreview;
+}
+
 export async function submitTrainingTaskRemote(
   input: TaskAutocompleteRequest | CustomTrainingTaskRequest
 ): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse> {
@@ -821,7 +885,15 @@ export async function submitTrainingTaskRemote(
       headers: buildHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(payload),
     });
-    return await parseJson<CustomTrainingTaskLaunchResponse | TaskAutocompletePreview>(response);
+    const parsed = await parseJson<Record<string, unknown>>(response);
+    if (isPlainRecord(parsed) && parsed.mode === "custom" && parsed.dryRun === true) {
+      return normalizeCustomDryRunPreview({
+        parsed,
+        fallbackTaskTemplate: String((custom.environment as Record<string, unknown>)?.taskTemplate ?? "custom_manager"),
+        fallbackAssetId: String((custom.environment as Record<string, unknown>)?.robotAssetId ?? "custom-asset"),
+      });
+    }
+    return parsed as CustomTrainingTaskLaunchResponse;
   }
 
   const legacy = input as TaskAutocompleteRequest;
@@ -907,24 +979,11 @@ export async function submitTrainingTaskRemote(
   if (parsed && typeof parsed === "object" && "mode" in parsed && parsed.mode === "custom") {
     if ((parsed as { dryRun?: boolean }).dryRun === true) {
       const customPreview = parsed as Record<string, unknown>;
-      return {
-        dryRun: true,
-        taskTemplate: String(customPreview.taskTemplate ?? taskTemplate ?? "custom_manager"),
-        assetId: resolvedRobotAssetId || "custom-asset",
-        introspection: {
-          jointCount: 0,
-          joints: [],
-          rootBodies: [],
-          stageUpAxis: "unknown",
-        },
-        derivedConfig: {},
-        taskConfig: {},
-        environmentPreview:
-          customPreview.environmentPreview && typeof customPreview.environmentPreview === "object"
-            ? (customPreview.environmentPreview as Record<string, unknown>)
-            : {},
-        message: String(customPreview.message ?? "Custom payload validated."),
-      } satisfies TaskAutocompletePreview;
+      return normalizeCustomDryRunPreview({
+        parsed: customPreview,
+        fallbackTaskTemplate: taskTemplate || "custom_manager",
+        fallbackAssetId: resolvedRobotAssetId || "custom-asset",
+      });
     }
     if ("job" in parsed) {
       const customLaunch = parsed as CustomTrainingTaskLaunchResponse & Record<string, unknown>;
