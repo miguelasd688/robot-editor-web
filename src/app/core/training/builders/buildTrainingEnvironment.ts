@@ -20,6 +20,7 @@ import {
 import type {
   CustomTrainingEnvironmentPayload,
   CustomTrainingRobotRuntimeSemantics,
+  TerrainLaunchPlan,
 } from "./trainingRequestTypes";
 import type { SceneTrainingEligibility } from "../sceneTrainingEligibility";
 
@@ -33,6 +34,7 @@ type BuildTrainingEnvironmentInput = {
     robotUsdKey?: string | null;
     terrainUsdKey?: string | null;
     terrainMode?: string;
+    terrainLaunchPlan?: TerrainLaunchPlan | null;
   };
   diagnostics: EnvironmentDiagnostic[];
   assets?: Record<string, AssetEntry>;
@@ -365,6 +367,7 @@ export async function buildTrainingEnvironment(
     robotUsdKey: input.context.robotUsdKey,
     terrainUsdKey: input.context.terrainUsdKey,
     terrainMode: input.context.terrainMode,
+    ...(input.context.terrainLaunchPlan ? { terrainLaunchPlan: input.context.terrainLaunchPlan } : {}),
     robotUsdOverridePath: environmentOverrides.robotUsdOverridePath,
     sceneUsdOverridePath: environmentOverrides.sceneUsdOverridePath,
     sceneUsdTypeOverridePath: environmentOverrides.sceneUsdTypeOverridePath,

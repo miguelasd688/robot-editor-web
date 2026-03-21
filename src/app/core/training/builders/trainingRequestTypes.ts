@@ -1,6 +1,17 @@
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
 
+export type TerrainLaunchStrategy = "template_default" | "runtime_world_overlay" | "blocked";
+
+export type TerrainLaunchPlan = {
+  strategy: TerrainLaunchStrategy;
+  reasonCode: string;
+  warningMessage?: string;
+  blockerMessage?: string;
+  overlayAssetId?: string;
+  overlayAssetPath?: string;
+};
+
 export type CustomTrainingActuatorSemantic = {
   jointId: string;
   jointName: string;
@@ -78,6 +89,7 @@ export type CustomTrainingEnvironmentPayload = {
   resets?: Array<Record<string, unknown>>;
   ik?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  terrainLaunchPlan?: TerrainLaunchPlan;
 };
 
 export type CustomTrainingAgentPayload = {
