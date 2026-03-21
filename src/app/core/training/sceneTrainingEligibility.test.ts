@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentDoc } from "../editor/document/types";
-import { deriveSceneTrainingEligibility } from "./sceneTrainingEligibility";
+import type { TemplateRuntimeRequirements } from "@runtime-plugins/catalog/types";
+import { deriveSceneTrainingEligibility, deriveTemplateReadiness } from "./sceneTrainingEligibility";
 
 function createEnvironment(input?: Partial<EnvironmentDoc>): EnvironmentDoc {
   return {
@@ -126,6 +127,117 @@ describe("deriveSceneTrainingEligibility", () => {
     const result = deriveSceneTrainingEligibility(environment);
     expect(result.primaryRobotEntityId).toBe("robot_top");
     expect(result.primaryRobotAssetId).toBe("asset_top");
+  });
+
+  it("returns launchable when robot is present and template requires one", () => {
+    const environment = createEnvironment({
+      assets: {
+        robot_asset: { id: "robot_asset", kind: "usd", role: "robot", trainingAssetId: "asset_robot_a" },
+      },
+      entities: {
+        robot_a: {
+          id: "robot_a",
+          name: "Robot A",
+          kind: "robot",
+          parentId: null,
+          children: [],
+          sourceAssetId: "robot_asset",
+        },
+      },
+      roots: ["robot_a"],
+    });
+    const eligibility = deriveSceneTrainingEligibility(environment);
+    const requirements: TemplateRuntimeRequirements = {
+      managerMode: "manager",
+      robotRequired: true,
+      terrainRequired: false,
+      requiredManagerGroups: {
+        observationManagers: { required: true },
+        actionManagers: { required: true },
+        commandManagers: { required: false },
+        rewardManagers: { required: true },
+        eventManagers: { required: true },
+        curriculumManagers: { required: false },
+      },
+      sceneSupport: {
+        usdPassthrough: true,
+        mjcfConvertedRobot: true,
+        customSceneAssets: true,
+        runtimeOverlay: true,
+      },
+    };
+    const readiness = deriveTemplateReadiness(eligibility, requirements);
+    expect(readiness.status).toBe("launchable");
+    expect(readiness.blockers).toHaveLength(0);
+  });
+
+  it("returns blocked when no robot found but template requires one", () => {
+    const eligibility = deriveSceneTrainingEligibility(createEnvironment());
+    const requirements: TemplateRuntimeRequirements = {
+      managerMode: "manager",
+      robotRequired: true,
+      terrainRequired: false,
+      requiredManagerGroups: {
+        observationManagers: { required: true },
+        actionManagers: { required: true },
+        commandManagers: { required: false },
+        rewardManagers: { required: true },
+        eventManagers: { required: true },
+        curriculumManagers: { required: false },
+      },
+      sceneSupport: {
+        usdPassthrough: true,
+        mjcfConvertedRobot: true,
+        customSceneAssets: true,
+        runtimeOverlay: true,
+      },
+    };
+    const readiness = deriveTemplateReadiness(eligibility, requirements);
+    expect(readiness.status).toBe("blocked");
+    expect(readiness.blockers.length).toBeGreaterThan(0);
+  });
+
+  it("returns warning when terrain is required but not blocking scene eligibility", () => {
+    const environment = createEnvironment({
+      assets: {
+        robot_asset: { id: "robot_asset", kind: "usd", role: "robot", trainingAssetId: "asset_r" },
+      },
+      entities: {
+        robot_a: {
+          id: "robot_a",
+          name: "Robot A",
+          kind: "robot",
+          parentId: null,
+          children: [],
+          sourceAssetId: "robot_asset",
+        },
+      },
+      roots: ["robot_a"],
+    });
+    const eligibility = deriveSceneTrainingEligibility(environment);
+    const requirements: TemplateRuntimeRequirements = {
+      managerMode: "manager",
+      robotRequired: true,
+      terrainRequired: true,
+      requiredManagerGroups: {
+        observationManagers: { required: true },
+        actionManagers: { required: true },
+        commandManagers: { required: true },
+        rewardManagers: { required: true },
+        eventManagers: { required: true },
+        curriculumManagers: { required: false },
+      },
+      sceneSupport: {
+        usdPassthrough: true,
+        mjcfConvertedRobot: true,
+        customSceneAssets: true,
+        runtimeOverlay: true,
+      },
+    };
+    const readiness = deriveTemplateReadiness(eligibility, requirements);
+    // Robot is present → not blocked, but terrain warning expected
+    expect(readiness.status).toBe("launchable");
+    expect(readiness.warnings.length).toBeGreaterThan(0);
   });
 
   it("falls back to lexical entity id when all robots are nested", () => {

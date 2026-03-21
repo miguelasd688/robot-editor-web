@@ -1,5 +1,6 @@
 import type { EnvironmentAsset, EnvironmentDoc, EnvironmentEntity } from "../editor/document/types";
 import type { CompiledEnvironmentSnapshot } from "../environment/EnvironmentCompilationManager";
+import type { TemplateRuntimeRequirements } from "@runtime-plugins/catalog/types";
 
 export type SceneTrainingRobotSourceKind = "usd" | "mjcf" | "urdf" | "unknown";
 
@@ -104,6 +105,38 @@ function resolveEnvironmentSnapshot(input: CompiledEnvironmentSnapshot | Environ
     return environment ?? null;
   }
   return input;
+}
+
+export type TemplateReadinessStatus = {
+  status: "launchable" | "blocked";
+  blockers: string[];
+  warnings: string[];
+};
+
+export function deriveTemplateReadiness(
+  eligibility: SceneTrainingEligibility,
+  requirements: TemplateRuntimeRequirements
+): TemplateReadinessStatus {
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  if (requirements.robotRequired && !eligibility.canCreateExperiment) {
+    blockers.push(eligibility.reason ?? "No robot found in the scene");
+  }
+
+  if (requirements.terrainRequired === true) {
+    warnings.push("Template requires terrain — ensure a terrain asset is configured before launch");
+  }
+
+  if (!requirements.sceneSupport.mjcfConvertedRobot && !requirements.sceneSupport.usdPassthrough) {
+    blockers.push("Template does not support any robot asset pipeline (usdPassthrough or mjcfConvertedRobot required)");
+  }
+
+  return {
+    status: blockers.length > 0 ? "blocked" : "launchable",
+    blockers,
+    warnings,
+  };
 }
 
 export function deriveSceneTrainingEligibility(
