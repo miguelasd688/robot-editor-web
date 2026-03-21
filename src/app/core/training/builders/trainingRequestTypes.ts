@@ -90,6 +90,17 @@ export type CustomTrainingEnvironmentPayload = {
   ik?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   terrainLaunchPlan?: TerrainLaunchPlan;
+  resolvedLaunchPlan?: {
+    recipeId: string;
+    envId: string;
+    terrainPlan: TerrainLaunchPlan;
+    overlayPlan: {
+      emitWorldUsdOverride: boolean;
+      hydraKey?: string;
+      envVarName?: string;
+    };
+  };
+  sceneInjectionMode?: string;
 };
 
 export type CustomTrainingAgentPayload = {

@@ -93,6 +93,11 @@ export function pickEnvironmentOverrides(value: Record<string, unknown>) {
         : undefined,
     cartpoleJointMap: toCartpoleJointMapOrUndefined(value.cartpoleJointMap),
     baseConstraintMode,
+    resolvedLaunchPlan:
+      value.resolvedLaunchPlan && typeof value.resolvedLaunchPlan === "object" && !Array.isArray(value.resolvedLaunchPlan)
+        ? (value.resolvedLaunchPlan as Record<string, unknown>)
+        : undefined,
+    sceneInjectionMode: toTextOrEmpty(value.sceneInjectionMode) || undefined,
   };
 }
 

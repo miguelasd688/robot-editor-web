@@ -353,6 +353,15 @@ export async function buildTrainingEnvironment(
   });
 
   let diagnostics = input.diagnostics;
+  // When resolvedLaunchPlan is present and emitWorldUsdOverride=false, suppress
+  // legacy overlay fields so the runner uses resolvedLaunchPlan as the sole authority.
+  const resolvedLaunchPlan = environmentOverrides.resolvedLaunchPlan as
+    | { overlayPlan?: { emitWorldUsdOverride?: boolean } }
+    | undefined;
+  const resolvedPlanSuppressesOverlay =
+    resolvedLaunchPlan !== undefined &&
+    resolvedLaunchPlan?.overlayPlan?.emitWorldUsdOverride === false;
+
   const environment: CustomTrainingEnvironmentPayload = {
     id:
       toTextOrEmpty(input.submit.envId) ||
@@ -368,10 +377,16 @@ export async function buildTrainingEnvironment(
     terrainUsdKey: input.context.terrainUsdKey,
     terrainMode: input.context.terrainMode,
     ...(input.context.terrainLaunchPlan ? { terrainLaunchPlan: input.context.terrainLaunchPlan } : {}),
+    ...(resolvedLaunchPlan ? { resolvedLaunchPlan: resolvedLaunchPlan as CustomTrainingEnvironmentPayload["resolvedLaunchPlan"] } : {}),
     robotUsdOverridePath: environmentOverrides.robotUsdOverridePath,
     sceneUsdOverridePath: environmentOverrides.sceneUsdOverridePath,
     sceneUsdTypeOverridePath: environmentOverrides.sceneUsdTypeOverridePath,
-    runtimeWorldUsdOverridePath: environmentOverrides.runtimeWorldUsdOverridePath,
+    // Suppress runtimeWorldUsdOverridePath when resolvedLaunchPlan governs overlay.
+    runtimeWorldUsdOverridePath: resolvedPlanSuppressesOverlay ? undefined : environmentOverrides.runtimeWorldUsdOverridePath,
+    // Suppress sceneInjectionMode when resolvedLaunchPlan governs overlay.
+    ...((!resolvedPlanSuppressesOverlay && environmentOverrides.sceneInjectionMode)
+      ? { sceneInjectionMode: environmentOverrides.sceneInjectionMode }
+      : {}),
     sceneTerrainType: environmentOverrides.sceneTerrainType,
     sceneUsdTypeValue: environmentOverrides.sceneUsdTypeValue,
     baseConstraintMode: environmentOverrides.baseConstraintMode,
