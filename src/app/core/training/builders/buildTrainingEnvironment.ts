@@ -20,7 +20,6 @@ import {
 import type {
   CustomTrainingEnvironmentPayload,
   CustomTrainingRobotRuntimeSemantics,
-  TerrainLaunchPlan,
 } from "./trainingRequestTypes";
 import type { SceneTrainingEligibility } from "../sceneTrainingEligibility";
 
@@ -34,7 +33,6 @@ type BuildTrainingEnvironmentInput = {
     robotUsdKey?: string | null;
     terrainUsdKey?: string | null;
     terrainMode?: string;
-    terrainLaunchPlan?: TerrainLaunchPlan | null;
   };
   diagnostics: EnvironmentDiagnostic[];
   assets?: Record<string, AssetEntry>;
@@ -353,20 +351,12 @@ export async function buildTrainingEnvironment(
   });
 
   let diagnostics = input.diagnostics;
-  // When resolvedLaunchPlan is present and emitWorldUsdOverride=false, suppress
-  // legacy overlay fields so the runner uses resolvedLaunchPlan as the sole authority.
   const resolvedLaunchPlan = environmentOverrides.resolvedLaunchPlan as
     | { terrainPlan?: { strategy?: string }; overlayPlan?: { emitWorldUsdOverride?: boolean } }
     | undefined;
-  const resolvedPlanSuppressesOverlay =
-    resolvedLaunchPlan !== undefined &&
-    resolvedLaunchPlan?.overlayPlan?.emitWorldUsdOverride === false;
+  const resolvedPlanSuppressesOverlay = resolvedLaunchPlan?.overlayPlan?.emitWorldUsdOverride === false;
 
-  // Compute effective scene policy to decide whether to forward sceneAssetId to the runner.
-  // For V2 payloads with template_default terrain, sceneAssetId must not be forwarded
-  // as an authoritative launch input — the runner uses the template's built-in terrain.
-  const terrainStrategyFromPlan = resolvedLaunchPlan?.terrainPlan?.strategy ?? "";
-  const ignoreSceneAssetForLaunch = terrainStrategyFromPlan === "template_default";
+  const ignoreSceneAssetForLaunch = resolvedLaunchPlan?.terrainPlan?.strategy === "template_default";
 
   const environment: CustomTrainingEnvironmentPayload = {
     id:
@@ -378,13 +368,10 @@ export async function buildTrainingEnvironment(
     snapshot,
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
-    // When ignoreSceneAssetForLaunch (template_default V2), suppress sceneAssetId so
-    // the runner does not treat it as a required launch input.
     sceneAssetId: ignoreSceneAssetForLaunch ? undefined : (resolvedSceneAssetId || undefined),
     robotUsdKey: input.context.robotUsdKey,
     terrainUsdKey: input.context.terrainUsdKey,
     terrainMode: input.context.terrainMode,
-    ...(input.context.terrainLaunchPlan ? { terrainLaunchPlan: input.context.terrainLaunchPlan } : {}),
     ...(resolvedLaunchPlan ? { resolvedLaunchPlan: resolvedLaunchPlan as CustomTrainingEnvironmentPayload["resolvedLaunchPlan"] } : {}),
     robotUsdOverridePath: environmentOverrides.robotUsdOverridePath,
     sceneUsdOverridePath: environmentOverrides.sceneUsdOverridePath,

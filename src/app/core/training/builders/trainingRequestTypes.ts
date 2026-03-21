@@ -89,7 +89,6 @@ export type CustomTrainingEnvironmentPayload = {
   resets?: Array<Record<string, unknown>>;
   ik?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  terrainLaunchPlan?: TerrainLaunchPlan;
   resolvedLaunchPlan?: {
     recipeId: string;
     envId: string;
@@ -131,7 +130,7 @@ export type CustomTrainingRuntimePayload = {
 };
 
 export type CustomTrainingTaskRequest = {
-  sourcePayloadVersion: "training_task_source_v1" | "training_task_source_v2";
+  sourcePayloadVersion: "training_task_source_v2";
   tenantId?: string;
   experimentName: string;
   seed?: number;
