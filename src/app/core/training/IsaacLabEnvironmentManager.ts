@@ -76,6 +76,11 @@ export class IsaacLabEnvironmentManager {
       agent,
       runtime,
       dryRun: configValues.dryRun === true,
+      profileId: builtEnvironment.environment.profileId,
+      baseTaskId: builtEnvironment.environment.baseTaskId,
+      agentPresetId: builtEnvironment.environment.agentPresetId,
+      adapterId: builtEnvironment.environment.adapterId,
+      editorSceneContract: builtEnvironment.environment.editorSceneContract,
     };
     return {
       request,

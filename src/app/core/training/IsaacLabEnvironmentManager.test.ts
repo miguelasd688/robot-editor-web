@@ -92,6 +92,41 @@ describe("IsaacLabEnvironmentManager", () => {
         id: "custom_environment",
         sourceOfTruth: "project_doc_environment_v1",
         snapshot: null,
+        profileId: "ant",
+        baseTaskId: "isaaclab.ant.manager.v1",
+        agentPresetId: "rsl_rl_ppo",
+        adapterId: "legacy_template_bridge.v1",
+        editorSceneContract: {
+          contractVersion: "v1",
+          profileId: "ant",
+          baseTaskId: "isaaclab.ant.manager.v1",
+          taskTemplate: "ant_manager",
+          task: "Isaac-Ant-v0",
+          robotAssetId: "robot_asset",
+          primaryRobot: {
+            entityId: "robot_root",
+            name: "Robot",
+            assetId: "robot_asset",
+            sourceKind: "usd",
+          },
+          sceneAssetId: "scene_asset",
+          placements: [],
+          terrain: {
+            mode: "usd",
+            sourceKind: "usd",
+            assetId: "scene_asset",
+            entityCount: 0,
+          },
+          sceneEntitiesSummary: {},
+          sourceKinds: {},
+          sourcePipeline: {},
+          resolvedLaunchPlan: {},
+          effectiveScenePolicy: {},
+          sourceHints: {},
+          scenePreparation: {},
+          sceneInjectionMode: "scene_driven",
+          generatedAt: new Date().toISOString(),
+        },
       },
       diagnostics: [{ code: "ENV_WARN", severity: "warning", source: "training", message: "env warning" }],
     });
@@ -148,6 +183,41 @@ describe("IsaacLabEnvironmentManager", () => {
       id: "custom_environment",
       sourceOfTruth: "project_doc_environment_v1",
       snapshot: null,
+      profileId: "ant",
+      baseTaskId: "isaaclab.ant.manager.v1",
+      agentPresetId: "rsl_rl_ppo",
+      adapterId: "legacy_template_bridge.v1",
+      editorSceneContract: {
+        contractVersion: "v1",
+        profileId: "ant",
+        baseTaskId: "isaaclab.ant.manager.v1",
+        taskTemplate: "ant_manager",
+        task: "Isaac-Ant-v0",
+        robotAssetId: "robot_asset",
+        primaryRobot: {
+          entityId: "robot_root",
+          name: "Robot",
+          assetId: "robot_asset",
+          sourceKind: "usd",
+        },
+        sceneAssetId: "scene_asset",
+        placements: [],
+        terrain: {
+          mode: "usd",
+          sourceKind: "usd",
+          assetId: "scene_asset",
+          entityCount: 0,
+        },
+        sceneEntitiesSummary: {},
+        sourceKinds: {},
+        sourcePipeline: {},
+        resolvedLaunchPlan: {},
+        effectiveScenePolicy: {},
+        sourceHints: {},
+        scenePreparation: {},
+        sceneInjectionMode: "scene_driven",
+        generatedAt: result.request.environment.editorSceneContract.generatedAt,
+      },
     });
     expect(result.request.agent).toEqual({
       trainer: "rsl_rl",
@@ -157,6 +227,12 @@ describe("IsaacLabEnvironmentManager", () => {
       backend: "isaac_lab",
       maxSteps: 500,
     });
+    expect(result.request.profileId).toBe("ant");
+    expect(result.request.baseTaskId).toBe("isaaclab.ant.manager.v1");
+    expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
+    expect(result.request.adapterId).toBe("legacy_template_bridge.v1");
+    expect(result.request.editorSceneContract?.profileId).toBe("ant");
+    expect(result.request.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.diagnostics.map((item) => item.code)).toEqual(["ENV_WARN"]);
   });
 });

@@ -9,6 +9,9 @@ import {
 } from "../sceneUsdComposer";
 import { useAssetStore } from "../../store/useAssetStore";
 import { getCachedSceneCompositionAssetId, setCachedSceneCompositionAssetId } from "../services/sceneCompositionCache";
+import { compileEditorSceneContract } from "../editorScene";
+import { resolveTaskTemplateCatalogEntry } from "@runtime-plugins/catalog";
+import { resolveTrainingProfileMetadata } from "../profiles";
 import {
   buildTrainingPlacementsFromSnapshot,
   cloneEnvironmentSnapshot,
@@ -323,6 +326,19 @@ export async function buildTrainingEnvironment(
   const snapshot = cloneEnvironmentSnapshot(input.compiledEnvironment);
   const placements = buildTrainingPlacementsFromSnapshot(snapshot);
   const templateId = toTextOrEmpty(configValues.templateId) || toTextOrEmpty(environmentValues.templateId);
+  const template = resolveTaskTemplateCatalogEntry({
+    templateId,
+    taskTemplate: toTextOrEmpty(configValues.taskTemplate) || toTextOrEmpty(environmentValues.taskTemplate),
+  });
+  const profileMetadata = resolveTrainingProfileMetadata(template, toTextOrEmpty(configValues.agentPresetId) || toTextOrEmpty(configValues.agentId));
+  const profileId = toTextOrEmpty(configValues.profileId) || profileMetadata.profileId;
+  const baseTaskId = toTextOrEmpty(configValues.baseTaskId) || profileMetadata.baseTaskId;
+  const adapterId = toTextOrEmpty(configValues.adapterId) || profileMetadata.adapterId;
+  const agentPresetId =
+    toTextOrEmpty(configValues.agentPresetId) ||
+    toTextOrEmpty(configValues.agentId) ||
+    profileMetadata.agentPresetId ||
+    "";
   const robotAssetId = toTextOrEmpty(configValues.robotAssetId) || toTextOrEmpty(environmentValues.robotAssetId);
   const explicitSceneAssetId =
     toTextOrEmpty(configValues.sceneAssetId) || toTextOrEmpty(environmentValues.sceneAssetId);
@@ -365,6 +381,10 @@ export async function buildTrainingEnvironment(
       "custom_environment",
     sourceOfTruth: "project_doc_environment_v1",
     templateId: templateId || undefined,
+    profileId: profileId || undefined,
+    baseTaskId: baseTaskId || undefined,
+    agentPresetId: agentPresetId || undefined,
+    adapterId: adapterId || undefined,
     snapshot,
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
@@ -394,6 +414,10 @@ export async function buildTrainingEnvironment(
     metadata: {
       ...userModelMetadata,
       ...environmentMetadata,
+      ...(profileId ? { profileId } : {}),
+      ...(baseTaskId ? { baseTaskId } : {}),
+      ...(agentPresetId ? { agentPresetId } : {}),
+      ...(adapterId ? { adapterId } : {}),
       ...(resolvedPrimaryRobotEntityId ? { primaryRobotEntityId: resolvedPrimaryRobotEntityId } : {}),
       robotCount: resolvedRobotCount,
       ...(resolvedPrimaryRobotEntityId ? { primaryRobotSelection: "auto" } : {}),
@@ -513,6 +537,15 @@ export async function buildTrainingEnvironment(
     sceneTwinMode: environment.sceneAssetId ? "composed_scene_asset" : "robot_only",
     sceneAssetResolution,
   };
+
+  environment.editorSceneContract = compileEditorSceneContract({
+    environment,
+    profileId,
+    baseTaskId,
+    taskTemplate: toTextOrEmpty(configValues.taskTemplate) || toTextOrEmpty(environmentValues.taskTemplate),
+    task: toTextOrEmpty(configValues.task) || toTextOrEmpty(environmentValues.task) || input.submit.modelName || "",
+    generatedAt: new Date().toISOString(),
+  });
 
   return {
     environment,

@@ -6,8 +6,10 @@ export function buildTrainingAgent(input: {
 }): CustomTrainingAgentPayload {
   const policy = toObjectOrEmpty(input.configValues.policy);
   const policyRules = toObjectOrEmpty(input.configValues.policyRules);
+  const agentPresetId = toTextOrEmpty(input.configValues.agentPresetId);
   return {
     agentId: toTextOrEmpty(input.configValues.agentId) || undefined,
+    agentPresetId: agentPresetId || undefined,
     trainer: toTextOrEmpty(policy.trainer) || undefined,
     algorithm: toTextOrEmpty(policy.algorithm) || undefined,
     preset: toTextOrEmpty(policy.preset) || undefined,

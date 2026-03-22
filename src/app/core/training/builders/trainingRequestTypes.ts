@@ -1,5 +1,6 @@
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
+import type { EditorSceneContract } from "../editorScene";
 
 export type TerrainLaunchStrategy = "template_default" | "runtime_world_overlay" | "blocked";
 
@@ -61,6 +62,10 @@ export type CustomTrainingEnvironmentPayload = {
   id: string;
   sourceOfTruth: "project_doc_environment_v1";
   templateId?: string;
+  profileId?: string;
+  baseTaskId?: string;
+  agentPresetId?: string;
+  adapterId?: string;
   snapshot: EnvironmentDoc | null;
   placements?: CustomTrainingEnvironmentPlacement[];
   controlPolicy?: {
@@ -101,10 +106,15 @@ export type CustomTrainingEnvironmentPayload = {
     };
   };
   sceneInjectionMode?: string;
+  editorSceneContract?: EditorSceneContract;
+  experimentTaskSpec?: ExperimentTaskSpec;
+  taskFingerprint?: string;
+  experimentTaskId?: string;
 };
 
 export type CustomTrainingAgentPayload = {
   agentId?: string;
+  agentPresetId?: string;
   trainer?: string;
   algorithm?: string;
   preset?: string;
@@ -139,6 +149,28 @@ export type CustomTrainingTaskRequest = {
   environment: CustomTrainingEnvironmentPayload;
   agent: CustomTrainingAgentPayload;
   runtime: CustomTrainingRuntimePayload;
+  profileId?: string;
+  baseTaskId?: string;
+  agentPresetId?: string;
+  adapterId?: string;
+  editorSceneContract?: EditorSceneContract;
+  experimentTaskSpec?: ExperimentTaskSpec;
+  taskFingerprint?: string;
+  experimentTaskId?: string;
+};
+
+export type ExperimentTaskSpec = {
+  experimentTaskId: string;
+  derivedTaskId: string;
+  profileId: string;
+  agentPresetId: string;
+  adapterId: string;
+  baseTaskId: string;
+  taskFingerprint: string;
+  editorSceneContract: EditorSceneContract;
+  adapterPayload: Record<string, unknown>;
+  envCfgPatch: Record<string, unknown>;
+  lifecycle: Record<string, unknown>;
 };
 
 export type CustomTrainingTaskBuildResult = {
