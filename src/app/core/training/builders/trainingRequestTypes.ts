@@ -60,6 +60,7 @@ export type CustomTrainingEnvironmentPlacement = {
 export type CustomTrainingEnvironmentPayload = {
   id: string;
   sourceOfTruth: "project_doc_environment_v1";
+  templateId?: string;
   snapshot: EnvironmentDoc | null;
   placements?: CustomTrainingEnvironmentPlacement[];
   controlPolicy?: {

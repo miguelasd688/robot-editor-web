@@ -20,9 +20,9 @@
     }
   },
   "trainingDefaults": {
-    "templateId": "isaaclab.ant.manager.v1",
-    "recipeId": "isaaclab.ant.manager.v1",
-    "taskTemplate": "ant_manager",
+    "templateId": "isaaclab.ant.scene_driven.v1",
+    "recipeId": "isaaclab.ant.scene_driven.v1",
+    "taskTemplate": "ant_scene_driven",
     "task": "Isaac-Ant-v0"
   },
   "variants": [

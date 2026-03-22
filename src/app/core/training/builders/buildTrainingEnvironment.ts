@@ -322,6 +322,7 @@ export async function buildTrainingEnvironment(
   const environmentOverrides = pickEnvironmentOverrides(environmentValues);
   const snapshot = cloneEnvironmentSnapshot(input.compiledEnvironment);
   const placements = buildTrainingPlacementsFromSnapshot(snapshot);
+  const templateId = toTextOrEmpty(configValues.templateId) || toTextOrEmpty(environmentValues.templateId);
   const robotAssetId = toTextOrEmpty(configValues.robotAssetId) || toTextOrEmpty(environmentValues.robotAssetId);
   const explicitSceneAssetId =
     toTextOrEmpty(configValues.sceneAssetId) || toTextOrEmpty(environmentValues.sceneAssetId);
@@ -356,8 +357,6 @@ export async function buildTrainingEnvironment(
     | undefined;
   const resolvedPlanSuppressesOverlay = resolvedLaunchPlan?.overlayPlan?.emitWorldUsdOverride === false;
 
-  const ignoreSceneAssetForLaunch = resolvedLaunchPlan?.terrainPlan?.strategy === "template_default";
-
   const environment: CustomTrainingEnvironmentPayload = {
     id:
       toTextOrEmpty(input.submit.envId) ||
@@ -365,10 +364,11 @@ export async function buildTrainingEnvironment(
       input.submit.dataset ||
       "custom_environment",
     sourceOfTruth: "project_doc_environment_v1",
+    templateId: templateId || undefined,
     snapshot,
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
-    sceneAssetId: ignoreSceneAssetForLaunch ? undefined : (resolvedSceneAssetId || undefined),
+    sceneAssetId: resolvedSceneAssetId || undefined,
     robotUsdKey: input.context.robotUsdKey,
     terrainUsdKey: input.context.terrainUsdKey,
     terrainMode: input.context.terrainMode,
@@ -410,7 +410,7 @@ export async function buildTrainingEnvironment(
           }
         : undefined,
   };
-  if (environment.sceneAssetId && !ignoreSceneAssetForLaunch) {
+  if (environment.sceneAssetId) {
     applyUsdSceneExecutionDefaults(environment);
   }
 

@@ -57,10 +57,10 @@
       },
       "section": "robots",
       "trainingDefaults": {
-        "recipeId": "isaaclab.ant.manager.v1",
+        "recipeId": "isaaclab.ant.scene_driven.v1",
         "task": "Isaac-Ant-v0",
-        "taskTemplate": "ant_manager",
-        "templateId": "isaaclab.ant.manager.v1"
+        "taskTemplate": "ant_scene_driven",
+        "templateId": "isaaclab.ant.scene_driven.v1"
       },
       "variants": [
         {
