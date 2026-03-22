@@ -52,7 +52,6 @@ function createEnvironment() {
     },
     effectiveScenePolicy: {
       terrainStrategy: "runtime_world_overlay",
-      sceneOwnership: "editor",
       sceneAssetAllowed: true,
       sceneAssetRequired: true,
       ignoreSceneAssetForLaunch: false,
@@ -60,7 +59,6 @@ function createEnvironment() {
     },
     terrainMode: "usd",
     sceneTerrainType: "usd",
-    sceneInjectionMode: "scene_driven",
     scenePreparation: {
       sceneAssetId: "scene_asset",
     },
@@ -92,6 +90,5 @@ describe("editor scene contract compilation", () => {
     expect(contract.sourceKinds.robot).toBe("usd");
     expect(contract.sourceKinds.scene).toBe("usd");
     expect(contract.sourcePipeline.placementSource).toBe("project_doc_environment_v1");
-    expect(contract.sceneInjectionMode).toBe("scene_driven");
   });
 });

@@ -195,14 +195,11 @@ describe("buildTrainingEnvironment", () => {
     const result = await buildTrainingEnvironment({
       submit: createSubmitInput(),
       configValues: {
-        templateId: "isaaclab.ant.scene_driven.v1",
-        taskTemplate: "ant_scene_driven",
+        taskTemplate: "ant_manager",
         agentPresetId: "rsl_rl_ppo",
         robotAssetId: "asset_robot_123",
         sceneAssetId: "asset_scene_456",
         environment: {
-          templateId: "isaaclab.ant.scene_driven.v1",
-          sceneInjectionMode: "scene_driven",
           sceneAssetId: "asset_scene_456",
         },
         userModelMetadata: {
@@ -235,13 +232,10 @@ describe("buildTrainingEnvironment", () => {
     });
 
     expect(result.environment.robotAssetId).toBe("asset_robot_123");
-    expect(result.environment.templateId).toBe("isaaclab.ant.scene_driven.v1");
     expect(result.environment.profileId).toBe("ant");
     expect(result.environment.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.environment.agentPresetId).toBe("rsl_rl_ppo");
-    expect(result.environment.adapterId).toBe("legacy_template_bridge.v1");
     expect(result.environment.sceneAssetId).toBe("asset_scene_456");
-    expect(result.environment.sceneInjectionMode).toBe("scene_driven");
     expect(result.environment.sceneTerrainType).toBe("usd");
     expect(result.environment.editorSceneContract?.profileId).toBe("ant");
     expect(result.environment.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
@@ -251,7 +245,6 @@ describe("buildTrainingEnvironment", () => {
     expect(result.environment.metadata?.profileId).toBe("ant");
     expect(result.environment.metadata?.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.environment.metadata?.agentPresetId).toBe("rsl_rl_ppo");
-    expect(result.environment.metadata?.adapterId).toBe("legacy_template_bridge.v1");
     expect(result.environment.metadata?.primaryRobotEntityId).toBe("robot_root");
     expect(result.environment.metadata?.robotCount).toBe(1);
     expect(result.environment.metadata?.sceneTwinMode).toBe("composed_scene_asset");

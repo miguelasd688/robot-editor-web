@@ -333,7 +333,7 @@ export async function buildTrainingEnvironment(
   const profileMetadata = resolveTrainingProfileMetadata(template, toTextOrEmpty(configValues.agentPresetId) || toTextOrEmpty(configValues.agentId));
   const profileId = toTextOrEmpty(configValues.profileId) || profileMetadata.profileId;
   const baseTaskId = toTextOrEmpty(configValues.baseTaskId) || profileMetadata.baseTaskId;
-  const adapterId = toTextOrEmpty(configValues.adapterId) || profileMetadata.adapterId;
+  const adapterId = toTextOrEmpty(configValues.adapterId);
   const agentPresetId =
     toTextOrEmpty(configValues.agentPresetId) ||
     toTextOrEmpty(configValues.agentId) ||
@@ -380,11 +380,10 @@ export async function buildTrainingEnvironment(
       input.submit.dataset ||
       "custom_environment",
     sourceOfTruth: "project_doc_environment_v1",
-    templateId: templateId || undefined,
     profileId: profileId || undefined,
     baseTaskId: baseTaskId || undefined,
     agentPresetId: agentPresetId || undefined,
-    adapterId: adapterId || undefined,
+    ...(adapterId ? { adapterId } : {}),
     snapshot,
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
@@ -398,10 +397,6 @@ export async function buildTrainingEnvironment(
     sceneUsdTypeOverridePath: environmentOverrides.sceneUsdTypeOverridePath,
     // Suppress runtimeWorldUsdOverridePath when resolvedLaunchPlan governs overlay.
     runtimeWorldUsdOverridePath: resolvedPlanSuppressesOverlay ? undefined : environmentOverrides.runtimeWorldUsdOverridePath,
-    // Suppress sceneInjectionMode when resolvedLaunchPlan governs overlay.
-    ...((!resolvedPlanSuppressesOverlay && environmentOverrides.sceneInjectionMode)
-      ? { sceneInjectionMode: environmentOverrides.sceneInjectionMode }
-      : {}),
     sceneTerrainType: environmentOverrides.sceneTerrainType,
     sceneUsdTypeValue: environmentOverrides.sceneUsdTypeValue,
     baseConstraintMode: environmentOverrides.baseConstraintMode,

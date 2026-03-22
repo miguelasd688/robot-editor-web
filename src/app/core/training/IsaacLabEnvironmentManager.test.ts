@@ -95,7 +95,6 @@ describe("IsaacLabEnvironmentManager", () => {
         profileId: "ant",
         baseTaskId: "isaaclab.ant.manager.v1",
         agentPresetId: "rsl_rl_ppo",
-        adapterId: "legacy_template_bridge.v1",
         editorSceneContract: {
           contractVersion: "v1",
           profileId: "ant",
@@ -124,7 +123,6 @@ describe("IsaacLabEnvironmentManager", () => {
           effectiveScenePolicy: {},
           sourceHints: {},
           scenePreparation: {},
-          sceneInjectionMode: "scene_driven",
           generatedAt: new Date().toISOString(),
         },
       },
@@ -186,7 +184,6 @@ describe("IsaacLabEnvironmentManager", () => {
       profileId: "ant",
       baseTaskId: "isaaclab.ant.manager.v1",
       agentPresetId: "rsl_rl_ppo",
-      adapterId: "legacy_template_bridge.v1",
       editorSceneContract: {
         contractVersion: "v1",
         profileId: "ant",
@@ -215,7 +212,6 @@ describe("IsaacLabEnvironmentManager", () => {
         effectiveScenePolicy: {},
         sourceHints: {},
         scenePreparation: {},
-        sceneInjectionMode: "scene_driven",
         generatedAt: result.request.environment.editorSceneContract.generatedAt,
       },
     });
@@ -230,7 +226,6 @@ describe("IsaacLabEnvironmentManager", () => {
     expect(result.request.profileId).toBe("ant");
     expect(result.request.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
-    expect(result.request.adapterId).toBe("legacy_template_bridge.v1");
     expect(result.request.editorSceneContract?.profileId).toBe("ant");
     expect(result.request.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.diagnostics.map((item) => item.code)).toEqual(["ENV_WARN"]);

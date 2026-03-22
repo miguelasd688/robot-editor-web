@@ -2,7 +2,7 @@ import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
 import type { EditorSceneContract } from "../editorScene";
 
-export type TerrainLaunchStrategy = "template_default" | "runtime_world_overlay" | "blocked";
+export type TerrainLaunchStrategy = "runtime_world_overlay" | "blocked";
 
 export type TerrainLaunchPlan = {
   strategy: TerrainLaunchStrategy;
@@ -61,7 +61,6 @@ export type CustomTrainingEnvironmentPlacement = {
 export type CustomTrainingEnvironmentPayload = {
   id: string;
   sourceOfTruth: "project_doc_environment_v1";
-  templateId?: string;
   profileId?: string;
   baseTaskId?: string;
   agentPresetId?: string;
@@ -105,7 +104,6 @@ export type CustomTrainingEnvironmentPayload = {
       envVarName?: string;
     };
   };
-  sceneInjectionMode?: string;
   editorSceneContract?: EditorSceneContract;
   experimentTaskSpec?: ExperimentTaskSpec;
   taskFingerprint?: string;

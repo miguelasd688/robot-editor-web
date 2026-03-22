@@ -13,10 +13,7 @@ describe("training profile metadata", () => {
     expect(metadata.profileId).toBe("ant");
     expect(metadata.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(metadata.agentPresetId).toBe("rsl_rl_ppo");
-    expect(metadata.adapterId).toBe("legacy_template_bridge.v1");
-    expect(metadata.compatibilityTemplateId).toBe("isaaclab.ant.scene_driven.v1");
     expect(catalogMetadata.profileId).toBe(metadata.profileId);
     expect(catalogMetadata.baseTaskId).toBe(metadata.baseTaskId);
-    expect(catalogMetadata.adapterId).toBe(metadata.adapterId);
   });
 });

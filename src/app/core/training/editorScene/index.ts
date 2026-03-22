@@ -38,7 +38,6 @@ export type EditorSceneContract = {
   effectiveScenePolicy: Record<string, unknown>;
   sourceHints: Record<string, unknown>;
   scenePreparation: Record<string, unknown>;
-  sceneInjectionMode: string;
   generatedAt: string;
 };
 
@@ -164,7 +163,6 @@ export function compileEditorSceneContract(input: {
     effectiveScenePolicy: cloneJson(effectiveScenePolicy),
     sourceHints: cloneJson(sourceHints),
     scenePreparation: cloneJson(scenePreparation),
-    sceneInjectionMode: toText(environment.sceneInjectionMode, ""),
     generatedAt: toText(input.generatedAt, new Date().toISOString()),
   };
 }

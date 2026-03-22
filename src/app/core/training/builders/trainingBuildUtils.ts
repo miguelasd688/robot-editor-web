@@ -97,7 +97,6 @@ export function pickEnvironmentOverrides(value: Record<string, unknown>) {
       value.resolvedLaunchPlan && typeof value.resolvedLaunchPlan === "object" && !Array.isArray(value.resolvedLaunchPlan)
         ? (value.resolvedLaunchPlan as Record<string, unknown>)
         : undefined,
-    sceneInjectionMode: toTextOrEmpty(value.sceneInjectionMode) || undefined,
   };
 }
 
