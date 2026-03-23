@@ -32,6 +32,8 @@ export type TrainingJobSummary = {
   failureReason?: string | null;
   tenantId?: string;
   experimentName?: string;
+  experimentId?: string | null;
+  experimentRevisionId?: string | null;
   envId?: string;
   maxSteps?: number;
   launchContext?: Record<string, unknown>;

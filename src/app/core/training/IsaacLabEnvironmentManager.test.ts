@@ -93,7 +93,9 @@ describe("IsaacLabEnvironmentManager", () => {
         sourceOfTruth: "project_doc_environment_v1",
         snapshot: null,
         profileId: "ant",
+        profileVersion: "v1",
         baseTaskId: "isaaclab.ant.manager.v1",
+        registrationId: "ant_manager",
         agentPresetId: "rsl_rl_ppo",
         editorSceneContract: {
           contractVersion: "v1",
@@ -182,7 +184,9 @@ describe("IsaacLabEnvironmentManager", () => {
       sourceOfTruth: "project_doc_environment_v1",
       snapshot: null,
       profileId: "ant",
+      profileVersion: "v1",
       baseTaskId: "isaaclab.ant.manager.v1",
+      registrationId: "ant_manager",
       agentPresetId: "rsl_rl_ppo",
       editorSceneContract: {
         contractVersion: "v1",
@@ -224,7 +228,9 @@ describe("IsaacLabEnvironmentManager", () => {
       maxSteps: 500,
     });
     expect(result.request.profileId).toBe("ant");
+    expect(result.request.profileVersion).toBe("v1");
     expect(result.request.baseTaskId).toBe("isaaclab.ant.manager.v1");
+    expect(result.request.registrationId).toBe("ant_manager");
     expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.request.editorSceneContract?.profileId).toBe("ant");
     expect(result.request.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");

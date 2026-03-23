@@ -233,7 +233,9 @@ describe("buildTrainingEnvironment", () => {
 
     expect(result.environment.robotAssetId).toBe("asset_robot_123");
     expect(result.environment.profileId).toBe("ant");
+    expect(result.environment.profileVersion).toBe("v1");
     expect(result.environment.baseTaskId).toBe("isaaclab.ant.manager.v1");
+    expect(result.environment.registrationId).toBe("ant_manager");
     expect(result.environment.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.environment.sceneAssetId).toBe("asset_scene_456");
     expect(result.environment.sceneTerrainType).toBe("usd");
@@ -243,7 +245,9 @@ describe("buildTrainingEnvironment", () => {
     expect(result.environment.metadata?.compilationTarget).toBe("training");
     expect(result.environment.metadata?.compilationStats).toEqual({ nodeCount: 2 });
     expect(result.environment.metadata?.profileId).toBe("ant");
+    expect(result.environment.metadata?.profileVersion).toBe("v1");
     expect(result.environment.metadata?.baseTaskId).toBe("isaaclab.ant.manager.v1");
+    expect(result.environment.metadata?.registrationId).toBe("ant_manager");
     expect(result.environment.metadata?.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.environment.metadata?.primaryRobotEntityId).toBe("robot_root");
     expect(result.environment.metadata?.robotCount).toBe(1);

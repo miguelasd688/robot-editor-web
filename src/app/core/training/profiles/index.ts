@@ -3,6 +3,7 @@ import type { TaskTemplateCatalogEntry } from "@runtime-plugins/catalog/types";
 export type TrainingProfileMetadata = {
   profileId: string;
   baseTaskId: string;
+  registrationId: string;
   agentPresetId?: string;
   profileVersion: string;
   displayName: string;
@@ -34,6 +35,7 @@ export function resolveTrainingProfileMetadata(
   return {
     profileId: resolveProfileIdForTaskTemplate(template),
     baseTaskId: String(template.recipeId ?? template.id ?? "").trim(),
+    registrationId: String(template.environmentId ?? template.id ?? template.recipeId ?? "").trim(),
     ...(String(agentPresetId ?? "").trim() ? { agentPresetId: String(agentPresetId ?? "").trim() } : {}),
     profileVersion: "v1",
     displayName: String(template.title ?? "").trim() || String(template.taskTemplate ?? "").trim() || "Profile",

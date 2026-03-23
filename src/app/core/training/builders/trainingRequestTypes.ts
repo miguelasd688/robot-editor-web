@@ -62,7 +62,9 @@ export type CustomTrainingEnvironmentPayload = {
   id: string;
   sourceOfTruth: "project_doc_environment_v1";
   profileId?: string;
+  profileVersion?: string;
   baseTaskId?: string;
+  registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
   snapshot: EnvironmentDoc | null;
@@ -148,22 +150,29 @@ export type CustomTrainingTaskRequest = {
   agent: CustomTrainingAgentPayload;
   runtime: CustomTrainingRuntimePayload;
   profileId?: string;
+  profileVersion?: string;
   baseTaskId?: string;
+  registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
   editorSceneContract?: EditorSceneContract;
   experimentTaskSpec?: ExperimentTaskSpec;
   taskFingerprint?: string;
   experimentTaskId?: string;
+  experimentId?: string;
+  experimentRevisionId?: string;
+  compatibilitySignature?: Record<string, unknown>;
 };
 
 export type ExperimentTaskSpec = {
   experimentTaskId: string;
   derivedTaskId: string;
   profileId: string;
+  profileVersion: string;
   agentPresetId: string;
   adapterId: string;
   baseTaskId: string;
+  registrationId: string;
   taskFingerprint: string;
   editorSceneContract: EditorSceneContract;
   adapterPayload: Record<string, unknown>;

@@ -212,13 +212,18 @@ export type CustomTrainingTaskRequest = {
   agent: Record<string, unknown>;
   runtime: Record<string, unknown>;
   profileId?: string;
+  profileVersion?: string;
   baseTaskId?: string;
+  registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
   editorSceneContract?: Record<string, unknown>;
   experimentTaskSpec?: Record<string, unknown>;
   taskFingerprint?: string;
   experimentTaskId?: string;
+  experimentId?: string;
+  experimentRevisionId?: string;
+  compatibilitySignature?: Record<string, unknown>;
 };
 
 export type TaskAutocompletePreview = {
@@ -228,13 +233,20 @@ export type TaskAutocompletePreview = {
   taskSpecId?: string;
   taskSpec?: Record<string, unknown>;
   profileId?: string;
+  profileVersion?: string;
   baseTaskId?: string;
+  registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  experimentId?: string;
+  experimentRevisionId?: string;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentTaskSpec?: Record<string, unknown>;
   editorSceneContract?: Record<string, unknown>;
+  compatibilitySignature?: Record<string, unknown>;
+  experiment?: Record<string, unknown> | null;
+  experimentRevision?: Record<string, unknown> | null;
   taskTemplate: string;
   assetId: string;
   introspection: {
@@ -307,13 +319,20 @@ export type CustomTrainingTaskLaunchResponse = {
   mode: "custom";
   job: TrainingJobSummary;
   profileId?: string;
+  profileVersion?: string;
   baseTaskId?: string;
+  registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  experimentId?: string;
+  experimentRevisionId?: string;
   experimentTaskId?: string;
   taskFingerprint?: string;
   experimentTaskSpec?: Record<string, unknown>;
   editorSceneContract?: Record<string, unknown>;
+  compatibilitySignature?: Record<string, unknown>;
+  experiment?: Record<string, unknown> | null;
+  experimentRevision?: Record<string, unknown> | null;
   warnings?: string[];
   diagnostics?: Array<{ code: string; severity: "warning" | "error"; message: string; context?: Record<string, unknown> }>;
   compatibility?: Array<{ category: string; code: string; severity: "info" | "warning" | "error"; message: string }>;
@@ -914,13 +933,22 @@ function normalizeCustomDryRunPreview(input: {
   return {
     dryRun: true,
     profileId: String(parsed.profileId ?? "").trim() || undefined,
+    profileVersion: String(parsed.profileVersion ?? "").trim() || undefined,
     baseTaskId: String(parsed.baseTaskId ?? "").trim() || undefined,
+    registrationId: String(parsed.registrationId ?? "").trim() || undefined,
     agentPresetId: String(parsed.agentPresetId ?? "").trim() || undefined,
     adapterId: String(parsed.adapterId ?? "").trim() || undefined,
+    experimentId: String(parsed.experimentId ?? "").trim() || undefined,
+    experimentRevisionId: String(parsed.experimentRevisionId ?? "").trim() || undefined,
     taskFingerprint: String(parsed.taskFingerprint ?? "").trim() || undefined,
     experimentTaskId: String(parsed.experimentTaskId ?? "").trim() || undefined,
     experimentTaskSpec: isPlainRecord(parsed.experimentTaskSpec) ? parsed.experimentTaskSpec : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
+    compatibilitySignature: isPlainRecord(parsed.compatibilitySignature)
+      ? parsed.compatibilitySignature
+      : undefined,
+    experiment: isPlainRecord(parsed.experiment) ? parsed.experiment : undefined,
+    experimentRevision: isPlainRecord(parsed.experimentRevision) ? parsed.experimentRevision : undefined,
     taskTemplate: String(parsed.taskTemplate ?? fallbackTaskTemplate).trim() || fallbackTaskTemplate,
     assetId,
     introspection: toPreviewIntrospection(parsed.introspection),
@@ -1009,12 +1037,20 @@ export async function submitTrainingTaskRemote(
     if (custom.dryRun === true) payload.dryRun = true;
     const profileId = String(custom.profileId ?? "").trim();
     if (profileId) payload.profileId = profileId;
+    const profileVersion = String(custom.profileVersion ?? "").trim();
+    if (profileVersion) payload.profileVersion = profileVersion;
     const baseTaskId = String(custom.baseTaskId ?? "").trim();
     if (baseTaskId) payload.baseTaskId = baseTaskId;
+    const registrationId = String(custom.registrationId ?? "").trim();
+    if (registrationId) payload.registrationId = registrationId;
     const agentPresetId = String(custom.agentPresetId ?? "").trim();
     if (agentPresetId) payload.agentPresetId = agentPresetId;
     const adapterId = String(custom.adapterId ?? "").trim();
     if (adapterId) payload.adapterId = adapterId;
+    const experimentId = String(custom.experimentId ?? "").trim();
+    if (experimentId) payload.experimentId = experimentId;
+    const experimentRevisionId = String(custom.experimentRevisionId ?? "").trim();
+    if (experimentRevisionId) payload.experimentRevisionId = experimentRevisionId;
     const taskFingerprint = String(custom.taskFingerprint ?? "").trim();
     if (taskFingerprint) payload.taskFingerprint = taskFingerprint;
     const experimentTaskId = String(custom.experimentTaskId ?? "").trim();
@@ -1024,6 +1060,9 @@ export async function submitTrainingTaskRemote(
     }
     if (custom.experimentTaskSpec && typeof custom.experimentTaskSpec === "object") {
       payload.experimentTaskSpec = custom.experimentTaskSpec;
+    }
+    if (custom.compatibilitySignature && typeof custom.compatibilitySignature === "object") {
+      payload.compatibilitySignature = custom.compatibilitySignature;
     }
 
     const response = await fetch(buildUrl("/v1/training/tasks"), {
@@ -1134,11 +1173,16 @@ export async function submitTrainingTaskRemote(
     if ("job" in parsed) {
       const customLaunch = parsed as CustomTrainingTaskLaunchResponse & Record<string, unknown>;
       return {
+        mode: "custom",
         job: customLaunch.job,
         profileId: String(customLaunch.profileId ?? "").trim() || undefined,
+        profileVersion: String(customLaunch.profileVersion ?? "").trim() || undefined,
         baseTaskId: String(customLaunch.baseTaskId ?? "").trim() || undefined,
+        registrationId: String(customLaunch.registrationId ?? "").trim() || undefined,
         agentPresetId: String(customLaunch.agentPresetId ?? "").trim() || undefined,
         adapterId: String(customLaunch.adapterId ?? "").trim() || undefined,
+        experimentId: String(customLaunch.experimentId ?? "").trim() || undefined,
+        experimentRevisionId: String(customLaunch.experimentRevisionId ?? "").trim() || undefined,
         experimentTaskId: String(customLaunch.experimentTaskId ?? "").trim() || undefined,
         taskFingerprint: String(customLaunch.taskFingerprint ?? "").trim() || undefined,
         experimentTaskSpec: isPlainRecord(customLaunch.experimentTaskSpec)
@@ -1147,6 +1191,15 @@ export async function submitTrainingTaskRemote(
         editorSceneContract: isPlainRecord(customLaunch.editorSceneContract)
           ? customLaunch.editorSceneContract
           : undefined,
+        compatibilitySignature: isPlainRecord(customLaunch.compatibilitySignature)
+          ? customLaunch.compatibilitySignature
+          : undefined,
+        experiment: isPlainRecord(customLaunch.experiment)
+          ? customLaunch.experiment
+          : null,
+        experimentRevision: isPlainRecord(customLaunch.experimentRevision)
+          ? customLaunch.experimentRevision
+          : null,
         task: String(customLaunch.task ?? task ?? taskTemplate ?? "custom_manager"),
         policy:
           legacy.policy && typeof legacy.policy === "object"
@@ -1166,7 +1219,7 @@ export async function submitTrainingTaskRemote(
           },
           derivedConfig: {},
         },
-      } satisfies TaskAutocompleteLaunchResponse;
+      } as CustomTrainingTaskLaunchResponse;
     }
   }
   return parsed;

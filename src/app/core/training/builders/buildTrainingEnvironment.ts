@@ -333,6 +333,8 @@ export async function buildTrainingEnvironment(
   const profileMetadata = resolveTrainingProfileMetadata(template, toTextOrEmpty(configValues.agentPresetId) || toTextOrEmpty(configValues.agentId));
   const profileId = toTextOrEmpty(configValues.profileId) || profileMetadata.profileId;
   const baseTaskId = toTextOrEmpty(configValues.baseTaskId) || profileMetadata.baseTaskId;
+  const profileVersion = toTextOrEmpty(configValues.profileVersion) || profileMetadata.profileVersion;
+  const registrationId = toTextOrEmpty(configValues.registrationId) || profileMetadata.registrationId;
   const adapterId = toTextOrEmpty(configValues.adapterId);
   const agentPresetId =
     toTextOrEmpty(configValues.agentPresetId) ||
@@ -381,7 +383,9 @@ export async function buildTrainingEnvironment(
       "custom_environment",
     sourceOfTruth: "project_doc_environment_v1",
     profileId: profileId || undefined,
+    profileVersion: profileVersion || undefined,
     baseTaskId: baseTaskId || undefined,
+    registrationId: registrationId || undefined,
     agentPresetId: agentPresetId || undefined,
     ...(adapterId ? { adapterId } : {}),
     snapshot,
@@ -410,7 +414,9 @@ export async function buildTrainingEnvironment(
       ...userModelMetadata,
       ...environmentMetadata,
       ...(profileId ? { profileId } : {}),
+      ...(profileVersion ? { profileVersion } : {}),
       ...(baseTaskId ? { baseTaskId } : {}),
+      ...(registrationId ? { registrationId } : {}),
       ...(agentPresetId ? { agentPresetId } : {}),
       ...(adapterId ? { adapterId } : {}),
       ...(resolvedPrimaryRobotEntityId ? { primaryRobotEntityId: resolvedPrimaryRobotEntityId } : {}),
