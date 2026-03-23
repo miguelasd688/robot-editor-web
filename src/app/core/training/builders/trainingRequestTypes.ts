@@ -2,7 +2,7 @@ import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
 import type { EditorSceneContract } from "../editorScene";
 
-export type TerrainLaunchStrategy = "runtime_world_overlay" | "blocked";
+export type TerrainLaunchStrategy = "runtime_world_overlay" | "scene_driven_adapter" | "blocked";
 
 export type TerrainLaunchPlan = {
   strategy: TerrainLaunchStrategy;
@@ -104,6 +104,19 @@ export type CustomTrainingEnvironmentPayload = {
       emitWorldUsdOverride: boolean;
       hydraKey?: string;
       envVarName?: string;
+      sceneUsdOverridePath?: string;
+      sceneUsdTypeOverridePath?: string;
+    };
+    sceneActivation?: {
+      mode: "runtime_world_overlay" | "scene_driven_adapter" | "blocked";
+      reasonCode: string;
+      runtimeOverlayAllowed: boolean;
+      adapterId?: string;
+      sceneDrivenTemplateId?: string;
+      sceneDrivenTaskTemplate?: string;
+      sceneDrivenTask?: string;
+      blockerMessage?: string;
+      warningMessage?: string;
     };
   };
   editorSceneContract?: EditorSceneContract;
@@ -175,6 +188,17 @@ export type ExperimentTaskSpec = {
   registrationId: string;
   taskFingerprint: string;
   editorSceneContract: EditorSceneContract;
+  sceneActivation: {
+    mode: "runtime_world_overlay" | "scene_driven_adapter" | "blocked";
+    reasonCode: string;
+    runtimeOverlayAllowed: boolean;
+    adapterId?: string;
+    sceneDrivenTemplateId?: string;
+    sceneDrivenTaskTemplate?: string;
+    sceneDrivenTask?: string;
+    blockerMessage?: string;
+    warningMessage?: string;
+  };
   adapterPayload: Record<string, unknown>;
   envCfgPatch: Record<string, unknown>;
   lifecycle: Record<string, unknown>;
