@@ -238,6 +238,10 @@ describe("buildTrainingEnvironment", () => {
     expect(result.environment.registrationId).toBe("ant_manager");
     expect(result.environment.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.environment.sceneAssetId).toBe("asset_scene_456");
+    expect(result.environment.scenePreparation).toMatchObject({
+      source: "explicit_override",
+      sceneAssetId: "asset_scene_456",
+    });
     expect(result.environment.sceneTerrainType).toBe("usd");
     expect(result.environment.editorSceneContract?.profileId).toBe("ant");
     expect(result.environment.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
@@ -287,9 +291,18 @@ describe("buildTrainingEnvironment", () => {
       compilationStats: { nodeCount: 2 },
       context: {},
       diagnostics: [],
-      composeAndUploadEnvironmentSceneAssetFn: async () => {
+      prepareEditorSceneForTrainingFn: async () => {
         composeCalled = true;
-        return null;
+        return {
+          status: "ready",
+          sceneAssetId: "asset_scene_from_snapshot",
+          scenePreparation: {
+            source: "snapshot_training_asset",
+            sceneAssetId: "asset_scene_from_snapshot",
+          },
+          cacheHit: false,
+          diagnostics: [],
+        };
       },
     });
 
@@ -314,13 +327,19 @@ describe("buildTrainingEnvironment", () => {
       compilationStats: { nodeCount: 2 },
       context: {},
       diagnostics: [],
-      composeAndUploadEnvironmentSceneAssetFn: async () => ({
+      prepareEditorSceneForTrainingFn: async () => ({
+        status: "ready",
         sceneAssetId: "asset_scene_composed",
-        entryPath: "composed_scene.usda",
+        scenePreparation: {
+          source: "composition_upload",
+          sceneAssetId: "asset_scene_composed",
+          sourceCount: 1,
+          entityCount: 1,
+          entryPath: "composed_scene.usda",
+        },
+        fingerprint: "sig_123",
+        cacheHit: false,
         diagnostics: [],
-        sourceCount: 1,
-        entityCount: 1,
-        signature: "sig_123",
       }),
     });
 
@@ -328,6 +347,9 @@ describe("buildTrainingEnvironment", () => {
     expect(result.environment.sceneTerrainType).toBe("usd");
     expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).source).toBe(
       "composition_upload"
+    );
+    expect((result.environment.metadata?.sceneAssetResolution as Record<string, unknown>).fingerprint).toBe(
+      "sig_123"
     );
   });
 

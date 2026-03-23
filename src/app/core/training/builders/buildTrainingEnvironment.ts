@@ -2,13 +2,9 @@ import type { AssetEntry } from "../../assets/assetRegistryTypes";
 import type { ActuatorDescriptor } from "../../physics/mujoco/ActuatorRegistry";
 import type { EnvironmentDiagnostic, EnvironmentDoc, SceneNode } from "../../editor/document/types";
 import type { SubmitTrainingJobInput } from "../../plugins/types";
-import {
-  buildSceneCompositionPlan,
-  buildSceneCompositionSignature,
-  composeAndUploadEnvironmentSceneAsset,
-} from "../sceneUsdComposer";
 import { useAssetStore } from "../../store/useAssetStore";
-import { getCachedSceneCompositionAssetId, setCachedSceneCompositionAssetId } from "../services/sceneCompositionCache";
+import { buildSourceHints } from "../services/sceneAssetResolution";
+import { prepareEditorSceneForTraining } from "../services/editorScenePreparationService";
 import { compileEditorSceneContract } from "../editorScene";
 import { resolveTaskTemplateCatalogEntry } from "@runtime-plugins/catalog";
 import { resolveTrainingProfileMetadata } from "../profiles";
@@ -39,136 +35,11 @@ type BuildTrainingEnvironmentInput = {
   };
   diagnostics: EnvironmentDiagnostic[];
   assets?: Record<string, AssetEntry>;
-  buildSceneCompositionPlanFn?: typeof buildSceneCompositionPlan;
-  buildSceneCompositionSignatureFn?: typeof buildSceneCompositionSignature;
-  composeAndUploadEnvironmentSceneAssetFn?: typeof composeAndUploadEnvironmentSceneAsset;
-  getCachedSceneAssetIdFn?: (signature: string) => string | undefined;
-  setCachedSceneAssetIdFn?: (signature: string, sceneAssetId: string) => void;
+  prepareEditorSceneForTrainingFn?: typeof prepareEditorSceneForTraining;
   sceneEligibility?: SceneTrainingEligibility | null;
   sourceSceneNodes?: Record<string, SceneNode>;
   actuatorRegistryByRobot?: Record<string, ActuatorDescriptor[]>;
 };
-
-type SnapshotSceneTrainingAssetResolution = {
-  sceneAssetId: string;
-  sourceAssetId: string;
-  entityId: string;
-};
-
-function buildSourceHints(snapshot: EnvironmentDoc | null): Record<string, unknown> {
-  if (!snapshot) {
-    return {
-      assets: {},
-      entities: {},
-    };
-  }
-  const assets = toObjectOrEmpty(snapshot.assets) as Record<string, Record<string, unknown>>;
-  const entities = toObjectOrEmpty(snapshot.entities) as Record<string, Record<string, unknown>>;
-  const assetHints: Record<string, unknown> = {};
-  const entityHints: Record<string, unknown> = {};
-
-  for (const [assetId, rawAsset] of Object.entries(assets)) {
-    const sourceKind = toTextOrEmpty(rawAsset.kind).toLowerCase() || "unknown";
-    assetHints[assetId] = {
-      kind: sourceKind,
-      role: toTextOrEmpty(rawAsset.role) || undefined,
-      trainingAssetId: toTextOrEmpty(rawAsset.trainingAssetId) || undefined,
-      workspaceKey: toTextOrEmpty(rawAsset.workspaceKey) || undefined,
-      isDirty:
-        typeof rawAsset.isDirty === "boolean"
-          ? rawAsset.isDirty
-          : sourceKind === "usd"
-            ? false
-            : true,
-    };
-  }
-
-  for (const [entityId, rawEntity] of Object.entries(entities)) {
-    const sourceAssetId = toTextOrEmpty(rawEntity.sourceAssetId);
-    entityHints[entityId] = {
-      id: toTextOrEmpty(rawEntity.id) || entityId,
-      kind: toTextOrEmpty(rawEntity.kind) || "unknown",
-      sourceAssetId: sourceAssetId || undefined,
-    };
-  }
-
-  return {
-    assets: assetHints,
-    entities: entityHints,
-  };
-}
-
-function hasSceneKind(kind: unknown): boolean {
-  const token = toTextOrEmpty(kind).toLowerCase();
-  return token === "terrain" || token === "scene_asset";
-}
-
-function selectTopLevelSceneEntities(snapshot: EnvironmentDoc): Array<Record<string, unknown>> {
-  const entitiesRaw = toObjectOrEmpty(snapshot.entities);
-  const entities = entitiesRaw as Record<string, Record<string, unknown>>;
-  const topLevelSceneEntities: Array<Record<string, unknown>> = [];
-  for (const rawEntity of Object.values(entities)) {
-    if (!rawEntity || typeof rawEntity !== "object") continue;
-    if (!hasSceneKind(rawEntity.kind)) continue;
-    const parentId = toTextOrEmpty(rawEntity.parentId);
-    const parent = parentId ? entities[parentId] : null;
-    if (!parent || !hasSceneKind(parent.kind)) {
-      topLevelSceneEntities.push(rawEntity);
-      continue;
-    }
-    const parentSourceAssetId = toTextOrEmpty(parent.sourceAssetId);
-    const sourceAssetId = toTextOrEmpty(rawEntity.sourceAssetId);
-    if (!parentSourceAssetId || !sourceAssetId || parentSourceAssetId !== sourceAssetId) {
-      topLevelSceneEntities.push(rawEntity);
-    }
-  }
-  return topLevelSceneEntities;
-}
-
-function resolveSceneAssetIdFromSnapshotTrainingAsset(
-  snapshot: EnvironmentDoc | null
-): SnapshotSceneTrainingAssetResolution | null {
-  if (!snapshot) return null;
-  const assets = toObjectOrEmpty(snapshot.assets) as Record<string, Record<string, unknown>>;
-  const roots = Array.isArray(snapshot.roots) ? snapshot.roots.map((item) => toTextOrEmpty(item)) : [];
-  const rootOrder = new Map<string, number>();
-  roots.forEach((rootId, index) => {
-    if (!rootId) return;
-    rootOrder.set(rootId, index);
-  });
-  const candidates = selectTopLevelSceneEntities(snapshot)
-    .map((entity) => {
-      const entityId = toTextOrEmpty(entity.id);
-      const sourceAssetId = toTextOrEmpty(entity.sourceAssetId);
-      const sourceAsset = sourceAssetId ? assets[sourceAssetId] : null;
-      const sourceRole = toTextOrEmpty(sourceAsset?.role).toLowerCase();
-      if (sourceRole === "robot") return null;
-      const sceneAssetId = toTextOrEmpty(sourceAsset?.trainingAssetId);
-      if (!entityId || !sourceAssetId || !sceneAssetId) return null;
-      return {
-        entityId,
-        sourceAssetId,
-        sceneAssetId,
-      };
-    })
-    .filter(
-      (item): item is { entityId: string; sourceAssetId: string; sceneAssetId: string } => item !== null
-    )
-    .sort((a, b) => {
-      const aRoot = rootOrder.has(a.entityId) ? (rootOrder.get(a.entityId) as number) : Number.MAX_SAFE_INTEGER;
-      const bRoot = rootOrder.has(b.entityId) ? (rootOrder.get(b.entityId) as number) : Number.MAX_SAFE_INTEGER;
-      if (aRoot !== bRoot) return aRoot - bRoot;
-      return a.entityId.localeCompare(b.entityId);
-    });
-
-  if (candidates.length === 0) return null;
-  const selected = candidates[0];
-  return {
-    sceneAssetId: selected.sceneAssetId,
-    sourceAssetId: selected.sourceAssetId,
-    entityId: selected.entityId,
-  };
-}
 
 function applyUsdSceneExecutionDefaults(environment: CustomTrainingEnvironmentPayload): void {
   environment.terrainMode = "usd";
@@ -342,12 +213,6 @@ export async function buildTrainingEnvironment(
     profileMetadata.agentPresetId ||
     "";
   const robotAssetId = toTextOrEmpty(configValues.robotAssetId) || toTextOrEmpty(environmentValues.robotAssetId);
-  const explicitSceneAssetId =
-    toTextOrEmpty(configValues.sceneAssetId) || toTextOrEmpty(environmentValues.sceneAssetId);
-  const sceneAssetIdFromSnapshot = !explicitSceneAssetId
-    ? resolveSceneAssetIdFromSnapshotTrainingAsset(snapshot)
-    : null;
-  const resolvedSceneAssetId = explicitSceneAssetId || sceneAssetIdFromSnapshot?.sceneAssetId || "";
   const sceneEligibility = input.sceneEligibility ?? null;
   const environmentMetadata = toObjectOrEmpty(environmentValues.metadata);
   const userModelMetadata = toObjectOrEmpty(configValues.userModelMetadata);
@@ -391,7 +256,6 @@ export async function buildTrainingEnvironment(
     snapshot,
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
-    sceneAssetId: resolvedSceneAssetId || undefined,
     robotUsdKey: input.context.robotUsdKey,
     terrainUsdKey: input.context.terrainUsdKey,
     terrainMode: input.context.terrainMode,
@@ -435,103 +299,53 @@ export async function buildTrainingEnvironment(
           }
         : undefined,
   };
-  if (environment.sceneAssetId) {
+  const prepareEditorSceneForTrainingFn = input.prepareEditorSceneForTrainingFn ?? prepareEditorSceneForTraining;
+  const preparedScene = await prepareEditorSceneForTrainingFn({
+    snapshot: environment.snapshot,
+    assets: input.assets ?? useAssetStore.getState().assets,
+    sceneAssetId: toTextOrEmpty(configValues.sceneAssetId) || toTextOrEmpty(environmentValues.sceneAssetId),
+    existingScenePreparation: toObjectOrEmpty(environmentValues.scenePreparation),
+    placements,
+    profileId,
+    baseTaskId,
+    taskTemplate: toTextOrEmpty(configValues.taskTemplate) || toTextOrEmpty(environmentValues.taskTemplate),
+    task: toTextOrEmpty(configValues.task) || toTextOrEmpty(environmentValues.task) || input.submit.modelName || "",
+    recipeId: baseTaskId,
+    envId:
+      toTextOrEmpty(input.submit.envId) ||
+      toTextOrEmpty(configValues.taskTemplate) ||
+      input.submit.dataset ||
+      "custom_environment",
+  });
+  diagnostics = mergeDiagnostics(
+    diagnostics,
+    preparedScene.diagnostics
+      .filter((item) => item.severity !== "info")
+      .map((item) => ({
+        code: item.code,
+        message: item.message,
+        severity: item.severity === "error" ? "error" : "warning",
+        source: "training" as const,
+      }))
+  );
+  if (preparedScene.scenePreparation) {
+    environment.scenePreparation = preparedScene.scenePreparation;
+  }
+  if (preparedScene.sceneAssetId) {
+    environment.sceneAssetId = preparedScene.sceneAssetId;
     applyUsdSceneExecutionDefaults(environment);
   }
 
-  let sceneAssetResolution: Record<string, unknown> = {
-    source: "none",
+  const scenePreparationRecord = toObjectOrEmpty(preparedScene.scenePreparation);
+  const sceneAssetResolution: Record<string, unknown> = {
+    source: toTextOrEmpty(scenePreparationRecord.source) || "none",
     sceneAssetId: environment.sceneAssetId ?? null,
+    ...(preparedScene.fingerprint ? { fingerprint: preparedScene.fingerprint } : {}),
+    ...(typeof scenePreparationRecord.sourceCount === "number" ? { sourceCount: scenePreparationRecord.sourceCount } : {}),
+    ...(typeof scenePreparationRecord.entityCount === "number" ? { entityCount: scenePreparationRecord.entityCount } : {}),
+    ...(toTextOrEmpty(scenePreparationRecord.entryPath) ? { entryPath: scenePreparationRecord.entryPath } : {}),
+    ...(preparedScene.cacheHit ? { cacheHit: true } : {}),
   };
-  if (explicitSceneAssetId) {
-    sceneAssetResolution = {
-      source: "explicit_override",
-      sceneAssetId: explicitSceneAssetId,
-    };
-  } else if (sceneAssetIdFromSnapshot?.sceneAssetId) {
-    sceneAssetResolution = {
-      source: "snapshot_training_asset",
-      sceneAssetId: sceneAssetIdFromSnapshot.sceneAssetId,
-      sourceAssetId: sceneAssetIdFromSnapshot.sourceAssetId,
-      entityId: sceneAssetIdFromSnapshot.entityId,
-    };
-  }
-
-  if (!environment.sceneAssetId && environment.snapshot) {
-    const assets = input.assets ?? useAssetStore.getState().assets;
-    const buildSceneCompositionPlanFn = input.buildSceneCompositionPlanFn ?? buildSceneCompositionPlan;
-    const buildSceneCompositionSignatureFn =
-      input.buildSceneCompositionSignatureFn ?? buildSceneCompositionSignature;
-    const composeAndUploadEnvironmentSceneAssetFn =
-      input.composeAndUploadEnvironmentSceneAssetFn ?? composeAndUploadEnvironmentSceneAsset;
-    const getCachedSceneAssetIdFn = input.getCachedSceneAssetIdFn ?? getCachedSceneCompositionAssetId;
-    const setCachedSceneAssetIdFn = input.setCachedSceneAssetIdFn ?? setCachedSceneCompositionAssetId;
-
-    const scenePlan = buildSceneCompositionPlanFn(environment.snapshot);
-    const scenePlanSignature = buildSceneCompositionSignatureFn({
-      nodes: scenePlan.nodes,
-      sources: scenePlan.sources,
-      assets,
-    });
-    const cachedSceneAssetId = getCachedSceneAssetIdFn(scenePlanSignature);
-    if (cachedSceneAssetId) {
-      environment.sceneAssetId = cachedSceneAssetId;
-      applyUsdSceneExecutionDefaults(environment);
-      environment.metadata = {
-        ...(environment.metadata ?? {}),
-        sceneAssetResolution: {
-          source: "composition_cache",
-          sceneAssetId: cachedSceneAssetId,
-        },
-        sceneComposition: {
-          applied: true,
-          fromCache: true,
-          sceneAssetId: cachedSceneAssetId,
-          sourceCount: scenePlan.sources.length,
-          entityCount: scenePlan.nodes.length,
-        },
-      };
-      sceneAssetResolution = {
-        source: "composition_cache",
-        sceneAssetId: cachedSceneAssetId,
-      };
-    } else {
-      const sceneComposition = await composeAndUploadEnvironmentSceneAssetFn({
-        environment: environment.snapshot,
-        assets,
-      });
-      if (sceneComposition) {
-        diagnostics = mergeDiagnostics(diagnostics, sceneComposition.diagnostics);
-        if (sceneComposition.sceneAssetId) {
-          environment.sceneAssetId = sceneComposition.sceneAssetId;
-          applyUsdSceneExecutionDefaults(environment);
-          environment.metadata = {
-            ...(environment.metadata ?? {}),
-            sceneAssetResolution: {
-              source: "composition_upload",
-              sceneAssetId: sceneComposition.sceneAssetId,
-              sourceCount: sceneComposition.sourceCount,
-              entityCount: sceneComposition.entityCount,
-              entryPath: sceneComposition.entryPath,
-            },
-            sceneComposition: {
-              applied: true,
-              fromCache: false,
-              sceneAssetId: sceneComposition.sceneAssetId,
-              sourceCount: sceneComposition.sourceCount,
-              entityCount: sceneComposition.entityCount,
-              entryPath: sceneComposition.entryPath,
-            },
-          };
-          sceneAssetResolution = {
-            source: "composition_upload",
-            sceneAssetId: sceneComposition.sceneAssetId,
-          };
-          setCachedSceneAssetIdFn(sceneComposition.signature, sceneComposition.sceneAssetId);
-        }
-      }
-    }
-  }
 
   environment.metadata = {
     ...(toObjectOrEmpty(environment.metadata) ?? {}),
