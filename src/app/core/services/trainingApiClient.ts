@@ -279,9 +279,15 @@ export type CustomTrainingTaskRequest = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  adapterVersion?: string;
   editorRobotModel?: EditorRobotModel;
   editorSceneContract?: Record<string, unknown>;
   experimentTaskSpec?: Record<string, unknown>;
+  experimentTaskRegistration?: Record<string, unknown> | null;
+  adapterSelection?: Record<string, unknown> | null;
+  experimentContext?: Record<string, unknown> | null;
+  sceneActivation?: Record<string, unknown> | null;
+  robotEmbodimentSpec?: Record<string, unknown> | null;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentId?: string;
@@ -349,6 +355,7 @@ export type TaskAutocompletePreview = {
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  launchParityTrace?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
   launchReadiness?: {
     status: "prepared" | "missing_but_preparable" | "blocked";
@@ -429,6 +436,7 @@ export type CustomTrainingTaskLaunchResponse = {
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  launchParityTrace?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
 };
 
@@ -1199,6 +1207,9 @@ function normalizeCustomDryRunPreview(input: {
     robotEmbodimentSpec: isPlainRecord(parsed.robotEmbodimentSpec)
       ? parsed.robotEmbodimentSpec
       : null,
+    launchParityTrace: isPlainRecord(parsed.launchParityTrace)
+      ? parsed.launchParityTrace
+      : null,
     scenePreparation: isPlainRecord(parsed.scenePreparation)
       ? parsed.scenePreparation
       : null,
@@ -1260,6 +1271,8 @@ export async function submitTrainingTaskRemote(
     if (agentPresetId) payload.agentPresetId = agentPresetId;
     const adapterId = String(custom.adapterId ?? "").trim();
     if (adapterId) payload.adapterId = adapterId;
+    const adapterVersion = String(custom.adapterVersion ?? "").trim();
+    if (adapterVersion) payload.adapterVersion = adapterVersion;
     const experimentId = String(custom.experimentId ?? "").trim();
     if (experimentId) payload.experimentId = experimentId;
     const experimentRevisionId = String(custom.experimentRevisionId ?? "").trim();
@@ -1276,6 +1289,21 @@ export async function submitTrainingTaskRemote(
     }
     if (custom.experimentTaskSpec && typeof custom.experimentTaskSpec === "object") {
       payload.experimentTaskSpec = custom.experimentTaskSpec;
+    }
+    if (custom.experimentTaskRegistration && typeof custom.experimentTaskRegistration === "object") {
+      payload.experimentTaskRegistration = custom.experimentTaskRegistration;
+    }
+    if (custom.adapterSelection && typeof custom.adapterSelection === "object") {
+      payload.adapterSelection = custom.adapterSelection;
+    }
+    if (custom.experimentContext && typeof custom.experimentContext === "object") {
+      payload.experimentContext = custom.experimentContext;
+    }
+    if (custom.sceneActivation && typeof custom.sceneActivation === "object") {
+      payload.sceneActivation = custom.sceneActivation;
+    }
+    if (custom.robotEmbodimentSpec && typeof custom.robotEmbodimentSpec === "object") {
+      payload.robotEmbodimentSpec = custom.robotEmbodimentSpec;
     }
     if (custom.compatibilitySignature && typeof custom.compatibilitySignature === "object") {
       payload.compatibilitySignature = custom.compatibilitySignature;
@@ -1422,6 +1450,9 @@ export async function submitTrainingTaskRemote(
           : undefined,
         robotEmbodimentSpec: isPlainRecord(customLaunch.robotEmbodimentSpec)
           ? customLaunch.robotEmbodimentSpec
+          : null,
+        launchParityTrace: isPlainRecord(customLaunch.launchParityTrace)
+          ? customLaunch.launchParityTrace
           : null,
         experiment: isPlainRecord(customLaunch.experiment)
           ? customLaunch.experiment

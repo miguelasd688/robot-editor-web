@@ -86,8 +86,36 @@ export class IsaacLabEnvironmentManager {
       registrationId: builtEnvironment.environment.registrationId,
       agentPresetId: builtEnvironment.environment.agentPresetId,
       ...(builtEnvironment.environment.adapterId ? { adapterId: builtEnvironment.environment.adapterId } : {}),
+      ...(configValues.adapterVersion ? { adapterVersion: String(configValues.adapterVersion) } : {}),
       ...(editorRobotModel ? { editorRobotModel } : {}),
       editorSceneContract: builtEnvironment.environment.editorSceneContract,
+      // Pass canonical compiled artifacts from dry-run preview when present in configValues.
+      // These become the launch authority for registrationId / taskFingerprint / embodiment.
+      ...(configValues.experimentTaskRegistration && typeof configValues.experimentTaskRegistration === "object"
+        ? { experimentTaskRegistration: configValues.experimentTaskRegistration as Record<string, unknown> }
+        : {}),
+      ...(configValues.experimentTaskSpec && typeof configValues.experimentTaskSpec === "object"
+        ? { experimentTaskSpec: configValues.experimentTaskSpec as Record<string, unknown> }
+        : {}),
+      ...(configValues.adapterSelection && typeof configValues.adapterSelection === "object"
+        ? { adapterSelection: configValues.adapterSelection as Record<string, unknown> }
+        : {}),
+      ...(configValues.experimentContext && typeof configValues.experimentContext === "object"
+        ? { experimentContext: configValues.experimentContext as Record<string, unknown> }
+        : {}),
+      ...(configValues.sceneActivation && typeof configValues.sceneActivation === "object"
+        ? { sceneActivation: configValues.sceneActivation as Record<string, unknown> }
+        : {}),
+      ...(configValues.robotEmbodimentSpec && typeof configValues.robotEmbodimentSpec === "object"
+        ? { robotEmbodimentSpec: configValues.robotEmbodimentSpec as Record<string, unknown> }
+        : {}),
+      ...(configValues.taskFingerprint ? { taskFingerprint: String(configValues.taskFingerprint) } : {}),
+      ...(configValues.experimentTaskId ? { experimentTaskId: String(configValues.experimentTaskId) } : {}),
+      ...(configValues.experimentId ? { experimentId: String(configValues.experimentId) } : {}),
+      ...(configValues.experimentRevisionId ? { experimentRevisionId: String(configValues.experimentRevisionId) } : {}),
+      ...(configValues.compatibilitySignature && typeof configValues.compatibilitySignature === "object"
+        ? { compatibilitySignature: configValues.compatibilitySignature as Record<string, unknown> }
+        : {}),
     };
     return {
       request,

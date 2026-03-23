@@ -169,9 +169,15 @@ export type CustomTrainingTaskRequest = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  adapterVersion?: string;
   editorRobotModel?: EditorRobotModel;
   editorSceneContract?: EditorSceneContract;
   experimentTaskSpec?: ExperimentTaskSpec;
+  experimentTaskRegistration?: Record<string, unknown>;
+  adapterSelection?: Record<string, unknown>;
+  experimentContext?: Record<string, unknown>;
+  sceneActivation?: Record<string, unknown>;
+  robotEmbodimentSpec?: Record<string, unknown>;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentId?: string;
