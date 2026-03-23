@@ -19,6 +19,13 @@ type TrainingJobEventListResponse = {
   items: TrainingJobEventSummary[];
 };
 
+type TrainingValidationError = {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+  status?: number;
+};
+
 export type TrainingRunnerAssetMeta = {
   assetId: string;
   filename: string;
@@ -238,12 +245,17 @@ export type TaskAutocompletePreview = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  adapterVersion?: string;
+  adapterSelection?: Record<string, unknown> | null;
+  adapterCompatibility?: Record<string, unknown> | null;
   experimentId?: string;
   experimentRevisionId?: string;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentTaskSpec?: Record<string, unknown>;
+  experimentTaskRegistration?: Record<string, unknown> | null;
   editorSceneContract?: Record<string, unknown>;
+  sceneActivation?: Record<string, unknown> | null;
   compatibilitySignature?: Record<string, unknown>;
   experiment?: Record<string, unknown> | null;
   experimentRevision?: Record<string, unknown> | null;
@@ -262,6 +274,7 @@ export type TaskAutocompletePreview = {
   environmentPreview: Record<string, unknown>;
   resolvedAgent?: AgentVariant;
   warnings?: string[];
+  validationErrors?: TrainingValidationError[];
   compatibility?: Array<{
     category: string;
     code: string;
@@ -278,6 +291,11 @@ export type TaskAutocompletePreview = {
     context?: Record<string, unknown>;
   }>;
   scenePreparation?: Record<string, unknown> | null;
+  launchReadiness?: {
+    status: "prepared" | "missing_but_preparable" | "blocked";
+    blockers: string[];
+    warnings: string[];
+  } | null;
   catalogVersion?: string;
   message: string;
 };
@@ -324,16 +342,21 @@ export type CustomTrainingTaskLaunchResponse = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  adapterVersion?: string;
+  adapterSelection?: Record<string, unknown> | null;
+  adapterCompatibility?: Record<string, unknown> | null;
   experimentId?: string;
   experimentRevisionId?: string;
   experimentTaskId?: string;
   taskFingerprint?: string;
   experimentTaskSpec?: Record<string, unknown>;
+  experimentTaskRegistration?: Record<string, unknown> | null;
   editorSceneContract?: Record<string, unknown>;
   compatibilitySignature?: Record<string, unknown>;
   experiment?: Record<string, unknown> | null;
   experimentRevision?: Record<string, unknown> | null;
   warnings?: string[];
+  validationErrors?: TrainingValidationError[];
   diagnostics?: Array<{ code: string; severity: "warning" | "error"; message: string; context?: Record<string, unknown> }>;
   compatibility?: Array<{ category: string; code: string; severity: "info" | "warning" | "error"; message: string }>;
   featureCoverage?: Array<{
@@ -938,12 +961,19 @@ function normalizeCustomDryRunPreview(input: {
     registrationId: String(parsed.registrationId ?? "").trim() || undefined,
     agentPresetId: String(parsed.agentPresetId ?? "").trim() || undefined,
     adapterId: String(parsed.adapterId ?? "").trim() || undefined,
+    adapterVersion: String(parsed.adapterVersion ?? "").trim() || undefined,
+    adapterSelection: isPlainRecord(parsed.adapterSelection) ? parsed.adapterSelection : undefined,
+    adapterCompatibility: isPlainRecord(parsed.adapterCompatibility) ? parsed.adapterCompatibility : undefined,
     experimentId: String(parsed.experimentId ?? "").trim() || undefined,
     experimentRevisionId: String(parsed.experimentRevisionId ?? "").trim() || undefined,
     taskFingerprint: String(parsed.taskFingerprint ?? "").trim() || undefined,
     experimentTaskId: String(parsed.experimentTaskId ?? "").trim() || undefined,
     experimentTaskSpec: isPlainRecord(parsed.experimentTaskSpec) ? parsed.experimentTaskSpec : undefined,
+    experimentTaskRegistration: isPlainRecord(parsed.experimentTaskRegistration)
+      ? parsed.experimentTaskRegistration
+      : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
+    sceneActivation: isPlainRecord(parsed.sceneActivation) ? parsed.sceneActivation : null,
     compatibilitySignature: isPlainRecord(parsed.compatibilitySignature)
       ? parsed.compatibilitySignature
       : undefined,
@@ -963,6 +993,20 @@ function normalizeCustomDryRunPreview(input: {
     environmentPreview,
     resolvedAgent: isPlainRecord(parsed.resolvedAgent) ? (parsed.resolvedAgent as AgentVariant) : undefined,
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => String(item)) : [],
+    validationErrors: Array.isArray(parsed.validationErrors)
+      ? parsed.validationErrors
+          .filter((item) => isPlainRecord(item))
+          .map((item) => ({
+            code: String((item as Record<string, unknown>).code ?? "").trim() || "unknown",
+            message: String((item as Record<string, unknown>).message ?? "").trim() || "validation",
+            ...(isPlainRecord((item as Record<string, unknown>).details)
+              ? { details: (item as Record<string, unknown>).details as Record<string, unknown> }
+              : {}),
+            ...(Number.isFinite(Number((item as Record<string, unknown>).status))
+              ? { status: Math.max(0, Math.round(Number((item as Record<string, unknown>).status))) }
+              : {}),
+          }))
+      : [],
     compatibility: Array.isArray(parsed.compatibility)
       ? parsed.compatibility
           .filter((item) => isPlainRecord(item))
@@ -1007,6 +1051,25 @@ function normalizeCustomDryRunPreview(input: {
       : [],
     scenePreparation: isPlainRecord(parsed.scenePreparation)
       ? parsed.scenePreparation
+      : null,
+    launchReadiness: isPlainRecord(parsed.launchReadiness)
+      ? {
+          status: (() => {
+            const launchReadinessRecord = parsed.launchReadiness as Record<string, unknown>;
+            const rawStatus = String(launchReadinessRecord.status ?? "").trim();
+            if (rawStatus === "launchable") return "prepared";
+            if (rawStatus === "prepared" || rawStatus === "missing_but_preparable" || rawStatus === "blocked") {
+              return rawStatus as "prepared" | "missing_but_preparable" | "blocked";
+            }
+            return "blocked";
+          })(),
+          blockers: Array.isArray((parsed.launchReadiness as Record<string, unknown>).blockers)
+            ? ((parsed.launchReadiness as Record<string, unknown>).blockers as unknown[]).map((item: unknown) => String(item))
+            : [],
+          warnings: Array.isArray((parsed.launchReadiness as Record<string, unknown>).warnings)
+            ? ((parsed.launchReadiness as Record<string, unknown>).warnings as unknown[]).map((item: unknown) => String(item))
+            : [],
+        }
       : null,
     catalogVersion: String(parsed.catalogVersion ?? "").trim() || undefined,
     message: String(parsed.message ?? "Custom payload validated."),
@@ -1181,12 +1244,22 @@ export async function submitTrainingTaskRemote(
         registrationId: String(customLaunch.registrationId ?? "").trim() || undefined,
         agentPresetId: String(customLaunch.agentPresetId ?? "").trim() || undefined,
         adapterId: String(customLaunch.adapterId ?? "").trim() || undefined,
+        adapterVersion: String(customLaunch.adapterVersion ?? "").trim() || undefined,
+        adapterSelection: isPlainRecord(customLaunch.adapterSelection)
+          ? customLaunch.adapterSelection
+          : undefined,
+        adapterCompatibility: isPlainRecord(customLaunch.adapterCompatibility)
+          ? customLaunch.adapterCompatibility
+          : undefined,
         experimentId: String(customLaunch.experimentId ?? "").trim() || undefined,
         experimentRevisionId: String(customLaunch.experimentRevisionId ?? "").trim() || undefined,
         experimentTaskId: String(customLaunch.experimentTaskId ?? "").trim() || undefined,
         taskFingerprint: String(customLaunch.taskFingerprint ?? "").trim() || undefined,
         experimentTaskSpec: isPlainRecord(customLaunch.experimentTaskSpec)
           ? customLaunch.experimentTaskSpec
+          : undefined,
+        experimentTaskRegistration: isPlainRecord(customLaunch.experimentTaskRegistration)
+          ? customLaunch.experimentTaskRegistration
           : undefined,
         editorSceneContract: isPlainRecord(customLaunch.editorSceneContract)
           ? customLaunch.editorSceneContract
@@ -1208,6 +1281,21 @@ export async function submitTrainingTaskRemote(
         taskTemplate: String(customLaunch.taskTemplate ?? taskTemplate ?? "custom_manager"),
         warnings: Array.isArray(customLaunch.warnings)
           ? customLaunch.warnings.map((item) => String(item))
+          : [],
+        validationErrors: Array.isArray(customLaunch.validationErrors)
+          ? customLaunch.validationErrors
+              .filter((item) => isPlainRecord(item))
+              .map((item) => {
+                const record = item as Record<string, unknown>;
+                return {
+                  code: String(record.code ?? "").trim() || "unknown",
+                  message: String(record.message ?? "").trim() || "validation",
+                  ...(isPlainRecord(record.details) ? { details: record.details } : {}),
+                  ...(Number.isFinite(Number(record.status))
+                    ? { status: Math.max(0, Math.round(Number(record.status))) }
+                    : {}),
+                };
+              })
           : [],
         autoConfig: {
           assetId: resolvedRobotAssetId || "custom-asset",

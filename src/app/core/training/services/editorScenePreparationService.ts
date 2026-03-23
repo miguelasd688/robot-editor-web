@@ -347,7 +347,7 @@ export async function prepareEditorSceneForTraining(
       ...sceneComposition.diagnostics.map((item) => ({
         code: item.code,
         message: item.message,
-        severity: item.severity === "error" ? "error" : "warning",
+        severity: item.severity === "error" ? ("error" as const) : ("warning" as const),
       })),
     ],
   };
