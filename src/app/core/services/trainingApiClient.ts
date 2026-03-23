@@ -348,6 +348,7 @@ export type TaskAutocompletePreview = {
   }>;
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
+  robotEmbodimentSpec?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
   launchReadiness?: {
     status: "prepared" | "missing_but_preparable" | "blocked";
@@ -427,6 +428,7 @@ export type CustomTrainingTaskLaunchResponse = {
   }>;
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
+  robotEmbodimentSpec?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
 };
 
@@ -678,7 +680,36 @@ function buildHeaders(headers: Record<string, string> = {}) {
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Training API ${response.status}: ${text || response.statusText}`);
+    const fallback = `Training API ${response.status}: ${text || response.statusText}`;
+    if (!text) {
+      throw new Error(fallback);
+    }
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(fallback);
+    }
+    if (isPlainRecord(parsed)) {
+      const code = String(parsed.code ?? "").trim();
+      const message = String(parsed.message ?? "").trim() || response.statusText;
+      const details = isPlainRecord(parsed.details) ? parsed.details : null;
+      const persistence = details && isPlainRecord(details.persistence) ? details.persistence : null;
+      if (persistence) {
+        const field = String(persistence.field ?? "").trim();
+        const path = String(persistence.path ?? "").trim();
+        const reason = String(persistence.reason ?? "").trim();
+        const segments = [field];
+        if (path && path !== field) segments.push(path);
+        if (reason) segments.push(reason);
+        const suffix = segments.filter(Boolean).join(" | ");
+        throw new Error(
+          `Training API ${response.status}: ${code || "ERROR"}: ${message}${suffix ? ` (${suffix})` : ""}`
+        );
+      }
+      throw new Error(`Training API ${response.status}: ${code || "ERROR"}: ${message}`);
+    }
+    throw new Error(fallback);
   }
   return (await response.json()) as T;
 }
@@ -1115,6 +1146,9 @@ function normalizeCustomDryRunPreview(input: {
     robotDiagnosticsTrace: isPlainRecord(parsed.robotDiagnosticsTrace)
       ? (parsed.robotDiagnosticsTrace as RobotDiagnosticsTrace)
       : null,
+    robotEmbodimentSpec: isPlainRecord(parsed.robotEmbodimentSpec)
+      ? parsed.robotEmbodimentSpec
+      : null,
     scenePreparation: isPlainRecord(parsed.scenePreparation)
       ? parsed.scenePreparation
       : null,
@@ -1336,6 +1370,9 @@ export async function submitTrainingTaskRemote(
         compatibilitySignature: isPlainRecord(customLaunch.compatibilitySignature)
           ? customLaunch.compatibilitySignature
           : undefined,
+        robotEmbodimentSpec: isPlainRecord(customLaunch.robotEmbodimentSpec)
+          ? customLaunch.robotEmbodimentSpec
+          : null,
         experiment: isPlainRecord(customLaunch.experiment)
           ? customLaunch.experiment
           : null,
