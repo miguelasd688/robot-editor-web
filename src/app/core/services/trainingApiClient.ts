@@ -534,6 +534,48 @@ export type AgentCatalogResponse = {
   runnerCapabilities?: Record<string, unknown>;
 };
 
+export type TrainingProfileCatalogRegistration = {
+  registrationId: string;
+  profileId: string;
+  adapterId: string;
+  baseTaskId: string;
+  taskTemplate: string;
+  task: string;
+  title?: string;
+  description?: string;
+  defaultAgentPresetId?: string;
+  supportedAgentPresetIds?: string[];
+  defaults?: Record<string, unknown>;
+  policyTermsStatus?: "full" | "partial" | "none";
+  policyTerms?: PolicyTerm[];
+  expressionHints?: TrainingExpressionHints;
+  launchCapabilities?: Record<string, unknown>;
+};
+
+export type TrainingProfileCatalogProfile = {
+  profileId: string;
+  profileVersion: string;
+  displayName: string;
+  description?: string;
+  taskFamily?: string;
+  baseTaskId: string;
+  defaultAdapterId?: string;
+  supports?: Record<string, unknown>;
+  launchCapabilities?: Record<string, unknown>;
+  agentPresets: AgentVariant[];
+  registrations: TrainingProfileCatalogRegistration[];
+  sample?: Record<string, unknown>;
+  match?: Record<string, unknown>;
+};
+
+export type TrainingProfileCatalogResponse = {
+  schemaVersion: string;
+  catalogVersion: string;
+  generatedAt: string;
+  profiles: TrainingProfileCatalogProfile[];
+  adapters?: Record<string, unknown>[];
+};
+
 export type TrainingRunnerStatus = {
   runnerMode: string;
   requiresRunner: boolean;
@@ -980,6 +1022,14 @@ export async function listAgentCatalogRemote(): Promise<AgentCatalogResponse> {
     headers: buildHeaders({ accept: "application/json" }),
   });
   return await parseJson<AgentCatalogResponse>(response);
+}
+
+export async function listTrainingProfileCatalogRemote(): Promise<TrainingProfileCatalogResponse> {
+  const response = await fetch(buildUrl("/v1/training/profiles/catalog"), {
+    method: "GET",
+    headers: buildHeaders({ accept: "application/json" }),
+  });
+  return await parseJson<TrainingProfileCatalogResponse>(response);
 }
 
 export async function resolveAgentRemote(input: AgentResolveRequest): Promise<AgentResolveResponse> {
