@@ -1,5 +1,6 @@
 import type { SubmitTrainingJobInput } from "../../plugins/types";
 import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
+import type { EditorRobotModel } from "../../services/trainingApiClient";
 import type { EditorSceneContract } from "../editorScene";
 
 export type TerrainLaunchStrategy = "runtime_world_overlay" | "scene_driven_adapter" | "blocked";
@@ -168,6 +169,7 @@ export type CustomTrainingTaskRequest = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  editorRobotModel?: EditorRobotModel;
   editorSceneContract?: EditorSceneContract;
   experimentTaskSpec?: ExperimentTaskSpec;
   taskFingerprint?: string;

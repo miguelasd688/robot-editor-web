@@ -66,6 +66,10 @@ export class IsaacLabEnvironmentManager {
       configValues,
     });
     const sourcePayloadVersion: CustomTrainingTaskRequest["sourcePayloadVersion"] = "training_task_source_v2";
+    const editorRobotModel =
+      configValues.editorRobotModel && typeof configValues.editorRobotModel === "object"
+        ? (configValues.editorRobotModel as CustomTrainingTaskRequest["editorRobotModel"])
+        : undefined;
 
     const request: CustomTrainingTaskRequest = {
       sourcePayloadVersion,
@@ -82,6 +86,7 @@ export class IsaacLabEnvironmentManager {
       registrationId: builtEnvironment.environment.registrationId,
       agentPresetId: builtEnvironment.environment.agentPresetId,
       ...(builtEnvironment.environment.adapterId ? { adapterId: builtEnvironment.environment.adapterId } : {}),
+      ...(editorRobotModel ? { editorRobotModel } : {}),
       editorSceneContract: builtEnvironment.environment.editorSceneContract,
     };
     return {

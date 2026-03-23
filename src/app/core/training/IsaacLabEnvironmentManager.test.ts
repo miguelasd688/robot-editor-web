@@ -145,7 +145,20 @@ describe("IsaacLabEnvironmentManager", () => {
     const submit = createSubmitInput();
     const result = await manager.buildCustomTaskRequest({
       submit,
-      config: { dryRun: true, experimentName: "exp-from-config" },
+      config: {
+        dryRun: true,
+        experimentName: "exp-from-config",
+        editorRobotModel: {
+          contractVersion: "editor_robot_model_v1",
+          robotId: "robot_root",
+          robotName: "Robot",
+          actuatorCount: 8,
+          dofCount: 8,
+          jointCount: 8,
+          actuators: [],
+          joints: [],
+        },
+      },
     });
 
     expect(compileProjectDocMock).toHaveBeenCalledTimes(1);
@@ -232,6 +245,16 @@ describe("IsaacLabEnvironmentManager", () => {
     expect(result.request.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.request.registrationId).toBe("ant_manager");
     expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
+    expect(result.request.editorRobotModel).toEqual({
+      contractVersion: "editor_robot_model_v1",
+      robotId: "robot_root",
+      robotName: "Robot",
+      actuatorCount: 8,
+      dofCount: 8,
+      jointCount: 8,
+      actuators: [],
+      joints: [],
+    });
     expect(result.request.editorSceneContract?.profileId).toBe("ant");
     expect(result.request.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.diagnostics.map((item) => item.code)).toEqual(["ENV_WARN"]);

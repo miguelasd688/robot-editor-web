@@ -145,6 +145,61 @@ export type DerivedTrainingConfig = {
   dof_count?: number;
 };
 
+export type EditorRobotModelJoint = {
+  jointId: string;
+  jointName: string;
+  jointType: string;
+  axis?: [number, number, number] | null;
+  axisLabel?: string;
+  rangeLabel?: string;
+  actuated: boolean;
+  note?: string;
+};
+
+export type EditorRobotModelActuator = {
+  jointId: string;
+  jointName: string;
+  type?: string;
+  actuatorType?: "position" | "velocity" | "torque" | "muscle";
+  actuatorName?: string;
+  enabled?: boolean;
+  sourceType?: string;
+  stiffness?: number | null;
+  damping?: number | null;
+  initialPosition?: number | null;
+};
+
+export type EditorRobotModel = {
+  contractVersion: "editor_robot_model_v1";
+  robotId: string;
+  robotName: string;
+  actuatorCount: number;
+  dofCount: number;
+  jointCount: number;
+  freeAxisCount?: number;
+  actuatedFreeAxisCount?: number;
+  passiveCount?: number;
+  rootBodies?: string[] | null;
+  actuators: EditorRobotModelActuator[];
+  joints: EditorRobotModelJoint[];
+};
+
+export type RobotDiagnosticsTrace = {
+  canonicalSourceKind?: string | null;
+  canonicalityReason?: string | null;
+  evidenceChainId?: string | null;
+  editorRobotModel?: {
+    status?: "missing" | "accepted" | "malformed";
+    sent?: boolean;
+    accepted?: boolean;
+    reason?: string | null;
+    actuatorCount?: number | null;
+    dofCount?: number | null;
+    jointCount?: number | null;
+    rootBodyCount?: number | null;
+  } | null;
+};
+
 export type ConfigDerivationPreview = {
   assetId: string;
   introspection: {
@@ -224,6 +279,7 @@ export type CustomTrainingTaskRequest = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  editorRobotModel?: EditorRobotModel;
   editorSceneContract?: Record<string, unknown>;
   experimentTaskSpec?: Record<string, unknown>;
   taskFingerprint?: string;
@@ -290,6 +346,8 @@ export type TaskAutocompletePreview = {
     message: string;
     context?: Record<string, unknown>;
   }>;
+  robotDiagnostics?: Record<string, unknown> | null;
+  robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   scenePreparation?: Record<string, unknown> | null;
   launchReadiness?: {
     status: "prepared" | "missing_but_preparable" | "blocked";
@@ -367,6 +425,8 @@ export type CustomTrainingTaskLaunchResponse = {
     message: string;
     context?: Record<string, unknown>;
   }>;
+  robotDiagnostics?: Record<string, unknown> | null;
+  robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   scenePreparation?: Record<string, unknown> | null;
 };
 
@@ -1049,6 +1109,12 @@ function normalizeCustomDryRunPreview(input: {
             };
           })
       : [],
+    robotDiagnostics: isPlainRecord(parsed.robotDiagnostics)
+      ? parsed.robotDiagnostics
+      : null,
+    robotDiagnosticsTrace: isPlainRecord(parsed.robotDiagnosticsTrace)
+      ? (parsed.robotDiagnosticsTrace as RobotDiagnosticsTrace)
+      : null,
     scenePreparation: isPlainRecord(parsed.scenePreparation)
       ? parsed.scenePreparation
       : null,
@@ -1118,6 +1184,9 @@ export async function submitTrainingTaskRemote(
     if (taskFingerprint) payload.taskFingerprint = taskFingerprint;
     const experimentTaskId = String(custom.experimentTaskId ?? "").trim();
     if (experimentTaskId) payload.experimentTaskId = experimentTaskId;
+    if (custom.editorRobotModel && typeof custom.editorRobotModel === "object") {
+      payload.editorRobotModel = custom.editorRobotModel;
+    }
     if (custom.editorSceneContract && typeof custom.editorSceneContract === "object") {
       payload.editorSceneContract = custom.editorSceneContract;
     }
