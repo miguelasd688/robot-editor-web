@@ -271,10 +271,11 @@ async function syncRemoteJobsOnce() {
       const existingById = new Map(current.jobs.map((job) => [job.id, job] as const));
       const remoteWithContext = remoteJobs.map((job) => {
         const existing = existingById.get(job.id);
-        if (!existing?.launchContext) return job;
+        const launchContext = mergeLaunchContexts(existing?.launchContext, job.launchContext);
+        if (!launchContext) return job;
         return {
           ...job,
-          launchContext: existing.launchContext,
+          launchContext,
         };
       });
       const persistedLocal = current.jobs.filter((job) => !optimisticJobIds.has(job.id));
@@ -319,10 +320,11 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
     const existingById = new Map(current.jobs.map((job) => [job.id, job] as const));
     const cachedWithContext = cachedJobs.map((job) => {
       const existing = existingById.get(job.id);
-      if (!existing?.launchContext) return job;
+      const launchContext = mergeLaunchContexts(existing?.launchContext, job.launchContext);
+      if (!launchContext) return job;
       return {
         ...job,
-        launchContext: existing.launchContext,
+        launchContext,
       };
     });
     const mergedJobs = sortJobs([...cachedWithContext, ...optimistic]);
@@ -479,6 +481,36 @@ function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mergeLaunchContexts(
+  existingValue: unknown,
+  incomingValue: unknown
+): Record<string, unknown> | undefined {
+  const existing = toObjectOrEmpty(existingValue);
+  const incoming = toObjectOrEmpty(incomingValue);
+  if (Object.keys(existing).length === 0 && Object.keys(incoming).length === 0) return undefined;
+  const merged: Record<string, unknown> = {
+    ...existing,
+    ...incoming,
+  };
+  const existingLaunchDiagnostics = toObjectOrEmpty(existing.launchDiagnostics);
+  const incomingLaunchDiagnostics = toObjectOrEmpty(incoming.launchDiagnostics);
+  if (Object.keys(existingLaunchDiagnostics).length > 0 || Object.keys(incomingLaunchDiagnostics).length > 0) {
+    merged.launchDiagnostics = {
+      ...existingLaunchDiagnostics,
+      ...incomingLaunchDiagnostics,
+    };
+  }
+  const existingLaunchDispatchTrace = toObjectOrEmpty(existing.launchDispatchTrace);
+  const incomingLaunchDispatchTrace = toObjectOrEmpty(incoming.launchDispatchTrace);
+  if (Object.keys(existingLaunchDispatchTrace).length > 0 || Object.keys(incomingLaunchDispatchTrace).length > 0) {
+    merged.launchDispatchTrace = {
+      ...existingLaunchDispatchTrace,
+      ...incomingLaunchDispatchTrace,
+    };
+  }
+  return merged;
+}
+
 function isOptimisticLocalJobId(jobId: string) {
   return jobId.startsWith("local_job_");
 }
@@ -514,6 +546,9 @@ function buildLaunchContextFromInput(
     "policyRules",
     "extraArgs",
     "userModelMetadata",
+    "launchDiagnostics",
+    "launchDispatchTrace",
+    "launchTraceId",
   ];
   for (const key of keysToCopy) {
     const value = configValues[key];
@@ -636,7 +671,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           unmarkTrainingJobDeleted(remoteJob);
           optimisticJobIds.delete(localId);
           const launchContextWithSource = {
-            ...launchContext,
+            ...mergeLaunchContexts(remoteJob.launchContext, launchContext),
             sourceLocalJobId: localId,
           };
           const enrichedRemoteJob: TrainingJobSummary = {
@@ -672,6 +707,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
                 ? {
                     ...job,
                     status: "failed",
+                    failureReason: error instanceof Error ? error.message : String(error),
                     updatedAt: Date.now(),
                   }
                 : job

@@ -317,6 +317,7 @@ export type TaskAutocompletePreview = {
   experimentTaskSpec?: Record<string, unknown>;
   experimentTaskRegistration?: Record<string, unknown> | null;
   editorSceneContract?: Record<string, unknown>;
+  resolvedLaunchPlan?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   compatibilitySignature?: Record<string, unknown>;
   experiment?: Record<string, unknown> | null;
@@ -356,6 +357,7 @@ export type TaskAutocompletePreview = {
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   launchParityTrace?: Record<string, unknown> | null;
+  launchDiagnostics?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
   launchReadiness?: {
     status: "prepared" | "missing_but_preparable" | "blocked";
@@ -437,6 +439,7 @@ export type CustomTrainingTaskLaunchResponse = {
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   launchParityTrace?: Record<string, unknown> | null;
+  launchDiagnostics?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
 };
 
@@ -582,6 +585,7 @@ export type TrainingProfileCatalogResponse = {
   generatedAt: string;
   profiles: TrainingProfileCatalogProfile[];
   adapters?: Record<string, unknown>[];
+  issues?: Array<{ code: string; message: string }>;
 };
 
 export type TrainingRunnerStatus = {
@@ -727,6 +731,20 @@ function buildHeaders(headers: Record<string, string> = {}) {
   return next;
 }
 
+function formatLaunchErrorSuffix(details: Record<string, unknown> | null): string {
+  if (!details) return "";
+  const launchDiagnostics =
+    isPlainRecord(details.launchDiagnostics) ? details.launchDiagnostics : null;
+  const phase =
+    String(details.launchPhase ?? launchDiagnostics?.currentPhase ?? "").trim();
+  const traceId =
+    String(details.launchTraceId ?? launchDiagnostics?.traceId ?? "").trim();
+  const parts = [];
+  if (phase) parts.push(`phase ${phase}`);
+  if (traceId) parts.push(`trace ${traceId}`);
+  return parts.length > 0 ? ` (${parts.join(" | ")})` : "";
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -744,6 +762,7 @@ async function parseJson<T>(response: Response): Promise<T> {
       const code = String(parsed.code ?? "").trim();
       const message = String(parsed.message ?? "").trim() || response.statusText;
       const details = isPlainRecord(parsed.details) ? parsed.details : null;
+      const launchSuffix = formatLaunchErrorSuffix(details);
       const persistence = details && isPlainRecord(details.persistence) ? details.persistence : null;
       if (persistence) {
         const field = String(persistence.field ?? "").trim();
@@ -754,10 +773,10 @@ async function parseJson<T>(response: Response): Promise<T> {
         if (reason) segments.push(reason);
         const suffix = segments.filter(Boolean).join(" | ");
         throw new Error(
-          `Training API ${response.status}: ${code || "ERROR"}: ${message}${suffix ? ` (${suffix})` : ""}`
+          `Training API ${response.status}: ${code || "ERROR"}: ${message}${suffix ? ` (${suffix})` : ""}${launchSuffix}`
         );
       }
-      throw new Error(`Training API ${response.status}: ${code || "ERROR"}: ${message}`);
+      throw new Error(`Training API ${response.status}: ${code || "ERROR"}: ${message}${launchSuffix}`);
     }
     throw new Error(fallback);
   }
@@ -1122,6 +1141,7 @@ function normalizeCustomDryRunPreview(input: {
       ? parsed.experimentTaskRegistration
       : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
+    resolvedLaunchPlan: isPlainRecord(parsed.resolvedLaunchPlan) ? parsed.resolvedLaunchPlan : null,
     sceneActivation: isPlainRecord(parsed.sceneActivation) ? parsed.sceneActivation : null,
     compatibilitySignature: isPlainRecord(parsed.compatibilitySignature)
       ? parsed.compatibilitySignature
@@ -1209,6 +1229,9 @@ function normalizeCustomDryRunPreview(input: {
       : null,
     launchParityTrace: isPlainRecord(parsed.launchParityTrace)
       ? parsed.launchParityTrace
+      : null,
+    launchDiagnostics: isPlainRecord(parsed.launchDiagnostics)
+      ? parsed.launchDiagnostics
       : null,
     scenePreparation: isPlainRecord(parsed.scenePreparation)
       ? parsed.scenePreparation
@@ -1453,6 +1476,9 @@ export async function submitTrainingTaskRemote(
           : null,
         launchParityTrace: isPlainRecord(customLaunch.launchParityTrace)
           ? customLaunch.launchParityTrace
+          : null,
+        launchDiagnostics: isPlainRecord(customLaunch.launchDiagnostics)
+          ? customLaunch.launchDiagnostics
           : null,
         experiment: isPlainRecord(customLaunch.experiment)
           ? customLaunch.experiment
