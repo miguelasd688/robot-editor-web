@@ -12,7 +12,7 @@ import type {
 import {
   cancelTrainingJobRemote,
   getTrainingRunnerLogsRemote,
-  submitTrainingTaskRemote,
+  submitTrainingTaskRemoteWithResponse,
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
   listTrainingJobsRemote,
@@ -55,7 +55,7 @@ let trainingJobCounter = 0;
 let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
-const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["queued", "provisioning", "running"]);
+const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["submitting", "queued", "provisioning", "running"]);
 const MAX_JOB_HISTORY_ITEMS = 20_000;
 const MAX_EVENT_HISTORY_ITEMS = 20_000;
 let localJobsHydrationPromise: Promise<void> | null = null;
@@ -180,58 +180,116 @@ function buildLocalArtifacts(job: TrainingJobSummary): TrainingArtifactSummary[]
   return artifacts;
 }
 
-function buildLocalEvents(job: TrainingJobSummary): TrainingJobEventSummary[] {
+export function buildLocalEvents(job: TrainingJobSummary): TrainingJobEventSummary[] {
   const baseTime = job.startedAt;
   const updatedTime = job.updatedAt;
-  const items: TrainingJobEventSummary[] = [
-    {
-      id: `evt-queued-${job.id}`,
-      jobId: job.id,
-      eventType: "job.queued",
-      payload: {
-        status: "queued",
-      },
-      createdAt: new Date(baseTime).toISOString(),
-    },
-  ];
-
-  if (job.status !== "queued") {
+  const launchContext = toObjectOrEmpty(job.launchContext);
+  const submissionStatus = String(launchContext.launchSubmissionStatus ?? "").trim();
+  const submissionFailed = job.status === "failed" && submissionStatus === "submit_failed";
+  const items: TrainingJobEventSummary[] = [];
+  const pushEvent = (
+    eventType: string,
+    payload: Record<string, unknown>,
+    createdAtMs: number
+  ) => {
     items.push({
-      id: `evt-running-${job.id}`,
+      id: `evt-${eventType.replace(/[^a-z0-9]+/gi, "_")}-${job.id}`,
       jobId: job.id,
-      eventType: "job.running",
-      payload: {
-        status: job.status === "provisioning" ? "provisioning" : "running",
-      },
-      createdAt: new Date(Math.max(baseTime + 300, Math.min(updatedTime, baseTime + 1000))).toISOString(),
+      eventType,
+      payload,
+      createdAt: new Date(createdAtMs).toISOString(),
     });
+  };
+
+  if (
+    job.status === "submitting" ||
+    job.status === "queued" ||
+    job.status === "provisioning" ||
+    job.status === "running" ||
+    job.status === "completed" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
+    pushEvent(
+      "job.submitting",
+      {
+        status: "submitting",
+      },
+      baseTime
+    );
   }
 
-  if (job.currentEpoch > 0) {
-    items.push({
-      id: `evt-metrics-${job.id}`,
-      jobId: job.id,
-      eventType: "job.metrics",
-      payload: {
+  if (
+    job.status === "queued" ||
+    job.status === "provisioning" ||
+    job.status === "running" ||
+    job.status === "completed" ||
+    (job.status === "failed" && !submissionFailed) ||
+    job.status === "cancelled"
+  ) {
+    pushEvent(
+      "job.queued",
+      {
+        status: "queued",
+      },
+      baseTime + 120
+    );
+  }
+
+  if (
+    job.status === "provisioning" ||
+    job.status === "running" ||
+    job.status === "completed" ||
+    (job.status === "failed" && !submissionFailed) ||
+    job.status === "cancelled"
+  ) {
+    pushEvent(
+      "job.provisioning",
+      {
+        status: "provisioning",
+      },
+      Math.max(baseTime + 300, Math.min(updatedTime, baseTime + 1000))
+    );
+  }
+
+  if (job.status === "running" || job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+    if (submissionFailed) {
+      // A submission failure never reaches provisioning/running.
+    } else {
+      pushEvent(
+        "job.running",
+        {
+          status: "running",
+        },
+        Math.max(baseTime + 600, Math.min(updatedTime, baseTime + 1400))
+      );
+    }
+  }
+
+  if (job.currentEpoch > 0 && !submissionFailed) {
+    pushEvent(
+      "job.metrics",
+      {
         currentEpoch: job.currentEpoch,
         progress: job.progress,
         loss: job.loss,
       },
-      createdAt: new Date(updatedTime).toISOString(),
-    });
+      updatedTime
+    );
   }
 
   if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
-    items.push({
-      id: `evt-terminal-${job.id}`,
-      jobId: job.id,
-      eventType: `job.${job.status}`,
-      payload: {
+    const terminalEventType =
+      submissionFailed ? "job.submit_failed" : `job.${job.status}`;
+    pushEvent(
+      terminalEventType,
+      {
         status: job.status,
-        failureReason: job.failureReason ?? undefined,
+        ...(job.failureReason ? { failureReason: job.failureReason } : {}),
+        ...(submissionStatus ? { launchSubmissionStatus: submissionStatus } : {}),
       },
-      createdAt: new Date(updatedTime).toISOString(),
-    });
+      updatedTime
+    );
   }
 
   return items
@@ -549,6 +607,9 @@ function buildLaunchContextFromInput(
     "launchDiagnostics",
     "launchDispatchTrace",
     "launchTraceId",
+    "launchSubmissionStatus",
+    "launchSubmissionError",
+    "launchSubmissionResponseStatus",
   ];
   for (const key of keysToCopy) {
     const value = configValues[key];
@@ -619,13 +680,16 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         modelName,
         dataset,
         epochs,
-        status: "queued",
+        status: "submitting",
         progress: 0,
         currentEpoch: 0,
         loss: null,
         startedAt: now,
         updatedAt: now,
-        launchContext,
+        launchContext: {
+          ...launchContext,
+          launchSubmissionStatus: "submitting",
+        },
       };
 
       optimisticJobIds.add(localId);
@@ -659,11 +723,14 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             );
           }
           const customTaskRequest = customTaskBuild.request;
-          const taskResponse = await submitTrainingTaskRemote(customTaskRequest);
-          if (!("job" in taskResponse)) {
-            throw new Error("Custom training request returned preview payload during launch");
+          const taskResponse = await submitTrainingTaskRemoteWithResponse(customTaskRequest);
+          if (taskResponse.status !== 202) {
+            throw new Error(`Training API ${taskResponse.status}: launch was not accepted.`);
           }
-          return taskResponse.job;
+          if (!taskResponse.response || typeof taskResponse.response !== "object" || !("job" in taskResponse.response)) {
+            throw new Error("Custom training request returned an invalid launch payload.");
+          }
+          return taskResponse.response.job;
         });
 
       void submissionPromise
@@ -673,9 +740,12 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           const launchContextWithSource = {
             ...mergeLaunchContexts(remoteJob.launchContext, launchContext),
             sourceLocalJobId: localId,
+            launchSubmissionStatus: "accepted",
+            launchSubmissionResponseStatus: 202,
           };
           const enrichedRemoteJob: TrainingJobSummary = {
             ...remoteJob,
+            status: "queued",
             launchContext: launchContextWithSource,
           };
           set((state) => {
@@ -700,6 +770,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         })
         .catch((error) => {
           optimisticJobIds.delete(localId);
+          const message = error instanceof Error ? error.message : String(error);
           set((state) => ({
             trainingTokens: state.trainingTokens + state.trainingTokenCost,
             jobs: state.jobs.map((job) =>
@@ -707,7 +778,12 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
                 ? {
                     ...job,
                     status: "failed",
-                    failureReason: error instanceof Error ? error.message : String(error),
+                    failureReason: message,
+                    launchContext: {
+                      ...toObjectOrEmpty(job.launchContext),
+                      launchSubmissionStatus: "submit_failed",
+                      launchSubmissionError: message,
+                    },
                     updatedAt: Date.now(),
                   }
                 : job
@@ -715,7 +791,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           }));
           logError("Training job submission failed", {
             scope: "runtime-training",
-            data: error,
+            data: { localId, error: message },
           });
         });
 

@@ -301,6 +301,7 @@ export type TaskAutocompletePreview = {
   executionMode?: TrainingExecutionMode;
   taskSpecId?: string;
   taskSpec?: Record<string, unknown>;
+  task?: string;
   profileId?: string;
   profileVersion?: string;
   baseTaskId?: string;
@@ -317,6 +318,7 @@ export type TaskAutocompletePreview = {
   experimentTaskSpec?: Record<string, unknown>;
   experimentTaskRegistration?: Record<string, unknown> | null;
   editorSceneContract?: Record<string, unknown>;
+  experimentContext?: Record<string, unknown> | null;
   resolvedLaunchPlan?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   compatibilitySignature?: Record<string, unknown>;
@@ -790,6 +792,41 @@ export async function submitTrainingJobRemote(input: SubmitTrainingJobInput): Pr
     body: JSON.stringify(input),
   });
   return await parseJson<TrainingJobSummary>(response);
+}
+
+export async function submitTrainingJobRemoteWithResponse(
+  input: SubmitTrainingJobInput
+): Promise<{ status: number; job: TrainingJobSummary }> {
+  const response = await fetch(buildUrl("/v1/training/jobs"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  const job = await parseJson<TrainingJobSummary>(response);
+  return {
+    status: response.status,
+    job,
+  };
+}
+
+export async function submitTrainingTaskRemoteWithResponse(
+  input: TaskAutocompleteRequest | CustomTrainingTaskRequest
+): Promise<{
+  status: number;
+  response: TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse;
+}> {
+  const response = await fetch(buildUrl("/v1/training/tasks"), {
+    method: "POST",
+    headers: buildHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  const parsed = await parseJson<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse>(
+    response
+  );
+  return {
+    status: response.status,
+    response: parsed,
+  };
 }
 
 export async function listTrainingJobsRemote(): Promise<TrainingJobSummary[]> {
