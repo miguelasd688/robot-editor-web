@@ -1158,6 +1158,7 @@ function normalizeCustomDryRunPreview(input: {
       ? parsed.environment
       : {};
   const fallbackAssetIdFromPreview = String((environmentPreview as Record<string, unknown>).robotAssetId ?? "").trim();
+  const experimentTaskSpec = isPlainRecord(parsed.experimentTaskSpec) ? parsed.experimentTaskSpec : undefined;
   const assetId =
     String(parsed.assetId ?? "").trim() ||
     fallbackAssetIdFromPreview ||
@@ -1184,8 +1185,8 @@ function normalizeCustomDryRunPreview(input: {
       : undefined,
     authoredProfileContract: isPlainRecord(parsed.authoredProfileContract)
       ? parsed.authoredProfileContract
-      : isPlainRecord(parsed.experimentTaskSpec?.authoredProfileContract)
-        ? (parsed.experimentTaskSpec.authoredProfileContract as Record<string, unknown>)
+      : isPlainRecord(experimentTaskSpec?.authoredProfileContract)
+        ? (experimentTaskSpec.authoredProfileContract as Record<string, unknown>)
         : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
     resolvedLaunchPlan: isPlainRecord(parsed.resolvedLaunchPlan) ? parsed.resolvedLaunchPlan : null,

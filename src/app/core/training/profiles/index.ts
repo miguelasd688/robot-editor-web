@@ -11,6 +11,15 @@ export type TrainingProfileMetadata = {
   task: string;
 };
 
+export type TrainingProfileAuthoredTrace = {
+  source: string;
+  registrationId: string;
+  observableCount: number;
+  actionCount: number;
+  resetCount: number;
+  terminationCount: number;
+};
+
 function normalizeToken(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -58,5 +67,28 @@ export function resolveTrainingProfileMetadata(
       "Profile",
     taskTemplate: String(template.taskTemplate ?? "").trim(),
     task: String(template.task ?? "").trim(),
+  };
+}
+
+export function buildTrainingProfileAuthoredTrace(
+  template: TaskTemplateCatalogEntry
+): TrainingProfileAuthoredTrace {
+  const authoredProfileContract = template.authoredProfileContract && typeof template.authoredProfileContract === "object" && !Array.isArray(template.authoredProfileContract)
+    ? (template.authoredProfileContract as Record<string, unknown>)
+    : {};
+  const toCount = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  return {
+    source: String(authoredProfileContract.sourceMode ?? template.profileSourceMode ?? "profile_example").trim() || "profile_example",
+    registrationId: String(
+      authoredProfileContract.registrationId ??
+        template.registrationId ??
+        template.environmentId ??
+        template.id ??
+        ""
+    ).trim(),
+    observableCount: toCount(authoredProfileContract.authoredObservables),
+    actionCount: toCount(authoredProfileContract.authoredActions),
+    resetCount: toCount(authoredProfileContract.authoredResets),
+    terminationCount: toCount(authoredProfileContract.authoredTerminations),
   };
 }

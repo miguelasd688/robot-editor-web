@@ -174,6 +174,7 @@ export type CustomTrainingTaskRequest = {
   editorSceneContract?: EditorSceneContract;
   experimentTaskSpec?: ExperimentTaskSpec;
   experimentTaskRegistration?: Record<string, unknown>;
+  authoredProfileContract?: Record<string, unknown>;
   adapterSelection?: Record<string, unknown>;
   experimentContext?: Record<string, unknown>;
   sceneActivation?: Record<string, unknown>;

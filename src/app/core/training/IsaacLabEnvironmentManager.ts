@@ -95,7 +95,9 @@ export class IsaacLabEnvironmentManager {
         ? { experimentTaskRegistration: configValues.experimentTaskRegistration as Record<string, unknown> }
         : {}),
       ...(configValues.experimentTaskSpec && typeof configValues.experimentTaskSpec === "object"
-        ? { experimentTaskSpec: configValues.experimentTaskSpec as Record<string, unknown> }
+        ? {
+            experimentTaskSpec: configValues.experimentTaskSpec as CustomTrainingTaskRequest["experimentTaskSpec"],
+          }
         : {}),
       ...(configValues.adapterSelection && typeof configValues.adapterSelection === "object"
         ? { adapterSelection: configValues.adapterSelection as Record<string, unknown> }
