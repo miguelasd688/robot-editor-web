@@ -37,6 +37,8 @@ export type TrainingJobSummary = {
   envId?: string;
   maxSteps?: number;
   launchContext?: Record<string, unknown>;
+  episodeTruthSummary?: Record<string, unknown> | null;
+  episodeTruthMissing?: Record<string, unknown> | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";

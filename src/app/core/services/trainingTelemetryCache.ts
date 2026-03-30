@@ -203,13 +203,15 @@ export async function appendCachedMetricEvent(input: {
   runnerJobId?: string | null;
   step: number;
   metrics: Record<string, unknown>;
+  source?: string | null;
   occurredAt?: string;
 }): Promise<void> {
   const safeStep = Math.max(0, Math.round(Number(input.step) || 0));
   if (safeStep <= 0) return;
   if (safeStep > 5 && safeStep % METRIC_CACHE_STEP_INTERVAL !== 0) return;
   const occurredAtMs = parseCreatedAtMs(input.occurredAt, Date.now());
-  const eventId = `sse_metric_${String(input.runnerJobId ?? "none")}_${safeStep}_${occurredAtMs}`;
+  const sourceToken = String(input.source ?? "").trim() || "none";
+  const eventId = `sse_metric_${sourceToken}_${String(input.runnerJobId ?? "none")}_${safeStep}_${occurredAtMs}`;
   const event: TrainingJobEventSummary = {
     id: eventId,
     jobId: input.jobId,
@@ -218,6 +220,7 @@ export async function appendCachedMetricEvent(input: {
       runnerJobId: input.runnerJobId ?? null,
       step: safeStep,
       metrics: isRecord(input.metrics) ? input.metrics : {},
+      source: input.source ?? null,
     },
     createdAt: new Date(occurredAtMs).toISOString(),
   };

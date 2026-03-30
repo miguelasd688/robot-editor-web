@@ -700,6 +700,7 @@ export type TrainingMetricsSseEvent = {
   runnerJobId?: string | null;
   step: number;
   metrics: Record<string, unknown>;
+  source?: string | null;
   occurredAt?: string;
 };
 
