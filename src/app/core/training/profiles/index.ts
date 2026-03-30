@@ -15,7 +15,9 @@ export type TrainingProfileMetadata = {
 export type TrainingProfileAuthoredTrace = {
   source: string;
   authoringSurfaceSource: "canonical_profile_catalog" | "compatibility_backfill" | "template_defaults";
+  profileId: string;
   registrationId: string;
+  catalogVersion: string | null;
   policyTermsStatus: string;
   sourceFilesUsed: string[];
   observableCount: number;
@@ -82,7 +84,9 @@ export function buildTrainingProfileAuthoredTrace(
   return {
     source: surface.source,
     authoringSurfaceSource: surface.authoringSurfaceSource,
+    profileId: surface.profileId,
     registrationId: surface.registrationId,
+    catalogVersion: surface.catalogVersion,
     policyTermsStatus: surface.policyTermsStatus,
     sourceFilesUsed: surface.sourceFilesUsed,
     observableCount: surface.observables,

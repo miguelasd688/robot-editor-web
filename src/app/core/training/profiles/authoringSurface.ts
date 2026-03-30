@@ -15,6 +15,9 @@ export type TrainingProfileAuthoringSurfaceDiagnostics =
 export type TrainingProfileAuthoringSurfaceTrace = TrainingProfileAuthoringSurfaceCounts & {
   source: string;
   authoringSurfaceSource: "canonical_profile_catalog" | "compatibility_backfill" | "template_defaults";
+  profileId: string;
+  registrationId: string;
+  catalogVersion: string | null;
   policyTermsStatus: string;
   sourceFilesUsed: string[];
   diagnostics: TrainingProfileAuthoringSurfaceDiagnostics[];
@@ -46,6 +49,7 @@ type AuthoringSurfaceTemplate = {
   profileId?: string;
   profileVersion?: string;
   registrationId?: string;
+  catalogVersion?: string | null;
   baseTaskId?: string;
   taskTemplate?: string;
   task?: string;
@@ -53,6 +57,9 @@ type AuthoringSurfaceTemplate = {
   policyTermsStatus?: string;
   authoredProfileContract?: PlainRecord | null;
   authoringSurface?: {
+    profileId?: string;
+    registrationId?: string;
+    catalogVersion?: string | null;
     sourceFilesUsed?: unknown[];
     diagnostics?: unknown[];
     observableCount?: number;
@@ -90,13 +97,8 @@ function toTextArray(value: unknown): string[] {
   return value.map((item) => asText(item, "")).filter((item) => item.length > 0);
 }
 
-function normalizeRuleList(
-  primary: unknown,
-  fallback: AuthoredRuleDraft[] = []
-): AuthoredRuleDraft[] {
-  const normalizedPrimary = normalizeRuleItems(primary);
-  if (normalizedPrimary.length > 0) return normalizedPrimary;
-  return normalizeRuleItems(fallback);
+function normalizeRuleList(primary: unknown): AuthoredRuleDraft[] {
+  return normalizeRuleItems(primary);
 }
 
 function normalizeRuleItems(items: unknown): AuthoredRuleDraft[] {
@@ -181,6 +183,7 @@ export function materializeTrainingProfileAuthoringSurface(
     authoredRecord.registrationId,
     asText(template.registrationId, template.registrationId ?? "")
   );
+  const catalogVersion = asText(authoredRecord.catalogVersion, asText(template.catalogVersion, "")) || null;
   const baseTaskId = asText(authoredRecord.baseTaskId, asText(template.baseTaskId, "")) || null;
   const taskTemplate = asText(authoredRecord.taskTemplate, asText(template.taskTemplate, "")) || null;
   const task = asText(authoredRecord.task, asText(template.task, "")) || null;
@@ -191,10 +194,10 @@ export function materializeTrainingProfileAuthoringSurface(
     resets: countRules(authoredRecord.authoredResets),
     terminations: countRules(authoredRecord.authoredTerminations),
   };
-  const observables = normalizeRuleList(authoredRecord.authoredObservables, template.defaults?.environment?.observables ?? []);
-  const actions = normalizeRuleList(authoredRecord.authoredActions, template.defaults?.environment?.actions ?? []);
-  const resets = normalizeRuleList(authoredRecord.authoredResets, template.defaults?.environment?.resets ?? []);
-  const terminations = normalizeRuleList(authoredRecord.authoredTerminations, template.defaults?.environment?.terminations ?? []);
+  const observables = normalizeRuleList(authoredRecord.authoredObservables);
+  const actions = normalizeRuleList(authoredRecord.authoredActions);
+  const resets = normalizeRuleList(authoredRecord.authoredResets);
+  const terminations = normalizeRuleList(authoredRecord.authoredTerminations);
   const materializedCounts: TrainingProfileAuthoringSurfaceCounts = {
     observables: observables.length,
     actions: actions.length,
@@ -202,25 +205,12 @@ export function materializeTrainingProfileAuthoringSurface(
     terminations: terminations.length,
   };
   const sourceFilesUsed = normalizeSourceFilesUsed(template);
+  const hasCanonicalAuthoredSource =
+    Object.keys(authoredRecord).length > 0 ||
+    Object.keys(authoringSurfaceRecord).length > 0 ||
+    sourceFilesUsed.length > 0;
   const authoringSurfaceSource =
-    canonicalCounts.observables > 0 ||
-    canonicalCounts.actions > 0 ||
-    canonicalCounts.resets > 0 ||
-    canonicalCounts.terminations > 0
-      ? "canonical_profile_catalog"
-      : (
-            Number(authoringSurfaceRecord.observableCount ?? 0) > 0 ||
-            Number(authoringSurfaceRecord.actionCount ?? 0) > 0 ||
-            Number(authoringSurfaceRecord.resetCount ?? 0) > 0 ||
-            Number(authoringSurfaceRecord.terminationCount ?? 0) > 0
-          )
-        ? "canonical_profile_catalog"
-      : materializedCounts.observables > 0 ||
-          materializedCounts.actions > 0 ||
-          materializedCounts.resets > 0 ||
-          materializedCounts.terminations > 0
-        ? "compatibility_backfill"
-        : "template_defaults";
+    hasCanonicalAuthoredSource ? "canonical_profile_catalog" : "template_defaults";
   const diagnostics = summarizeDiagnostics({
     profileId,
     sourceMode,
@@ -231,6 +221,9 @@ export function materializeTrainingProfileAuthoringSurface(
   return {
     source: authoringSurfaceSource,
     authoringSurfaceSource,
+    profileId,
+    registrationId,
+    catalogVersion,
     policyTermsStatus: asText(template.policyTermsStatus, "none") || "none",
     sourceFilesUsed,
     diagnostics,
@@ -243,9 +236,7 @@ export function materializeTrainingProfileAuthoringSurface(
       materializedCounts.actions > 0 &&
       materializedCounts.resets > 0 &&
       materializedCounts.terminations > 0,
-    profileId,
     profileVersion,
-    registrationId,
     baseTaskId,
     taskTemplate,
     task,

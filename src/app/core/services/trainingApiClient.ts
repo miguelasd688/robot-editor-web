@@ -570,6 +570,9 @@ export type TrainingProfileCatalogRegistration = {
   authoringSurface?: {
     source?: string;
     authoringSurfaceSource?: "canonical_profile_catalog" | "compatibility_backfill" | "template_defaults";
+    profileId?: string;
+    registrationId?: string;
+    catalogVersion?: string | null;
     policyTermsStatus?: "full" | "partial" | "none" | string;
     sourceFilesUsed?: string[];
     observableCount?: number;
