@@ -35,6 +35,24 @@ export type EvaluationArtifactReasonCode =
   | "CANDIDATE_VIDEO_MISSING"
   | "CHECKPOINT_NOT_READY"
   | "EVAL_NOT_RUN";
+export type TaskRealizationReasonCode =
+  | "FULL_EXPERIMENT_REALIZATION"
+  | "PARTIAL_EXPERIMENT_REALIZATION"
+  | "CANONICAL_TASK_ONLY"
+  | "MISSING_RUNTIME_BINDING"
+  | "TASK_REALIZATION_UNCLEAR";
+export type ManagerParityReasonCode =
+  | "FULL_PARITY"
+  | "EXPECTED_EXPERIMENT_DELTAS_ONLY"
+  | "UNEXPECTED_MANAGER_DRIFT"
+  | "CANONICAL_SAMPLE_NOT_RESOLVED"
+  | "PARITY_EVAL_NOT_RUN";
+export type RuntimeConfigArtifactReasonCode =
+  | "CONFIG_ARTIFACTS_READY"
+  | "TASK_CONFIG_MISSING"
+  | "MANAGER_CONFIG_MISSING"
+  | "CANONICAL_COMPARISON_MISSING"
+  | "ARTIFACT_WRITE_FAILED";
 
 export type LearningHealthSummary = {
   metricsSource: string;
@@ -92,6 +110,45 @@ export type EvaluationArtifactSummary = {
   reasonCode: EvaluationArtifactReasonCode;
 };
 
+export type TaskRealizationSummary = {
+  taskName: string;
+  recipeId: string;
+  registrationId: string;
+  adapterId: string;
+  realizationMode: string;
+  sceneApplicationMode: string;
+  sceneApplicationTarget: string;
+  robotBindingApplied: boolean;
+  terrainBindingApplied: boolean;
+  managerBindingApplied: boolean;
+  reasonCode: TaskRealizationReasonCode;
+};
+
+export type ManagerParitySummary = {
+  taskParity: boolean;
+  observationParity: boolean;
+  actionParity: boolean;
+  rewardParity: boolean;
+  terminationParity: boolean;
+  commandParity: boolean;
+  resetParity: boolean;
+  sceneBindingParity: boolean;
+  diffDomains: string[];
+  reasonCode: ManagerParityReasonCode;
+};
+
+export type RuntimeConfigArtifactSummary = {
+  effectiveTaskConfigPath: string;
+  effectiveManagerConfigPath: string;
+  effectiveLaunchSpecPath: string;
+  canonicalComparisonPath: string;
+  taskRealizationSummaryPath: string;
+  managerParitySummaryPath: string;
+  runtimeConfigArtifactSummaryPath: string;
+  artifactsReady: boolean;
+  reasonCode: RuntimeConfigArtifactReasonCode;
+};
+
 export type SubmitTrainingJobInput = {
   modelName: string;
   dataset: string;
@@ -133,6 +190,9 @@ export type TrainingJobSummary = {
   metricsIngestionSummary?: MetricsIngestionSummary | null;
   policyProgressSummary?: PolicyProgressSummary | null;
   evaluationArtifactSummary?: EvaluationArtifactSummary | null;
+  taskRealizationSummary?: TaskRealizationSummary | null;
+  managerParitySummary?: ManagerParitySummary | null;
+  runtimeConfigArtifactSummary?: RuntimeConfigArtifactSummary | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
