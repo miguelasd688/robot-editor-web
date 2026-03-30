@@ -17,6 +17,24 @@ export type AgentArtifactReasonCode =
   | "CHECKPOINT_MANIFEST_MISSING"
   | "COMPATIBILITY_SIGNATURE_MISSING"
   | "ARTIFACT_PATH_MISSING";
+export type MetricsIngestionReasonCode =
+  | "ADVANCING_SERIES"
+  | "STALLED_SERIES"
+  | "REPEATED_IDENTITY"
+  | "FIELDS_MISSING"
+  | "PARSE_REJECTED";
+export type PolicyProgressReasonCode =
+  | "VISIBLE_POLICY_DELTA"
+  | "NO_VISIBLE_DELTA"
+  | "EVAL_NOT_RUN"
+  | "CHECKPOINT_MISSING"
+  | "METRICS_TRUST_REQUIRED";
+export type EvaluationArtifactReasonCode =
+  | "COMPARISON_READY"
+  | "BASELINE_VIDEO_MISSING"
+  | "CANDIDATE_VIDEO_MISSING"
+  | "CHECKPOINT_NOT_READY"
+  | "EVAL_NOT_RUN";
 
 export type LearningHealthSummary = {
   metricsSource: string;
@@ -46,6 +64,32 @@ export type AgentArtifactSummary = {
   adapterId?: string | null;
   backend?: string | null;
   algorithm?: string | null;
+};
+
+export type MetricsIngestionSummary = {
+  lastAcceptedStep: number;
+  lastAcceptedTimestamp?: string | null;
+  acceptedCount: number;
+  dedupedCount: number;
+  rejectedCount: number;
+  reasonCode: MetricsIngestionReasonCode;
+};
+
+export type PolicyProgressSummary = {
+  baselineCheckpointStep: number;
+  candidateCheckpointStep: number;
+  evaluationMode: string;
+  behaviorDeltaObserved: boolean;
+  reasonCode: PolicyProgressReasonCode;
+};
+
+export type EvaluationArtifactSummary = {
+  baselineCheckpointStep: number;
+  candidateCheckpointStep: number;
+  baselineVideoPath?: string | null;
+  candidateVideoPath?: string | null;
+  comparisonReady: boolean;
+  reasonCode: EvaluationArtifactReasonCode;
 };
 
 export type SubmitTrainingJobInput = {
@@ -86,6 +130,9 @@ export type TrainingJobSummary = {
   structuredMetricsTelemetry?: Record<string, unknown> | null;
   learningHealthSummary?: LearningHealthSummary | null;
   agentArtifactSummary?: AgentArtifactSummary | null;
+  metricsIngestionSummary?: MetricsIngestionSummary | null;
+  policyProgressSummary?: PolicyProgressSummary | null;
+  evaluationArtifactSummary?: EvaluationArtifactSummary | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
