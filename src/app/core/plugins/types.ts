@@ -3,6 +3,50 @@ import type React from "react";
 
 export type TrainingJobStatus = "submitting" | "queued" | "provisioning" | "running" | "completed" | "failed" | "cancelled";
 export type TrainingTrainer = "rsl_rl" | "rllib" | "sb3";
+export type LearningTrend = "improving" | "flat" | "degrading" | "unknown";
+export type LearningHealthReasonCode =
+  | "LEARNING_SIGNAL_PRESENT"
+  | "INSUFFICIENT_TRAINING_WINDOW"
+  | "REWARD_FLAT"
+  | "EPISODE_LENGTH_FLAT"
+  | "METRICS_INCOMPLETE"
+  | "CHECKPOINT_NOT_OBSERVED";
+export type AgentArtifactReasonCode =
+  | "CHECKPOINT_READY"
+  | "CHECKPOINT_NOT_OBSERVED"
+  | "CHECKPOINT_MANIFEST_MISSING"
+  | "COMPATIBILITY_SIGNATURE_MISSING"
+  | "ARTIFACT_PATH_MISSING";
+
+export type LearningHealthSummary = {
+  metricsSource: string;
+  firstMetricStep: number;
+  latestMetricStep: number;
+  rewardTrend: LearningTrend;
+  episodeLengthTrend: LearningTrend;
+  valueLossTrend: LearningTrend;
+  isLearningSignalPresent: boolean;
+  reasonCode: LearningHealthReasonCode;
+};
+
+export type AgentArtifactSummary = {
+  checkpointObserved: boolean;
+  latestCheckpointStep: number;
+  checkpointManifestPresent: boolean;
+  compatibilitySignaturePresent: boolean;
+  artifactReady: boolean;
+  reasonCode: AgentArtifactReasonCode;
+  artifactUri?: string | null;
+  checkpointManifestPath?: string | null;
+  experimentRevisionId?: string | null;
+  registrationId?: string | null;
+  taskFingerprint?: string | null;
+  profileId?: string | null;
+  agentPresetId?: string | null;
+  adapterId?: string | null;
+  backend?: string | null;
+  algorithm?: string | null;
+};
 
 export type SubmitTrainingJobInput = {
   modelName: string;
@@ -40,6 +84,8 @@ export type TrainingJobSummary = {
   episodeTruthSummary?: Record<string, unknown> | null;
   episodeTruthMissing?: Record<string, unknown> | null;
   structuredMetricsTelemetry?: Record<string, unknown> | null;
+  learningHealthSummary?: LearningHealthSummary | null;
+  agentArtifactSummary?: AgentArtifactSummary | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
