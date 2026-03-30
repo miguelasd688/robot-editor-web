@@ -567,6 +567,18 @@ export type TrainingProfileCatalogRegistration = {
   expressionHints?: TrainingExpressionHints;
   launchCapabilities?: Record<string, unknown>;
   authoredProfileContract?: Record<string, unknown> | null;
+  authoringSurface?: {
+    source?: string;
+    authoringSurfaceSource?: "canonical_profile_catalog" | "compatibility_backfill" | "template_defaults";
+    policyTermsStatus?: "full" | "partial" | "none" | string;
+    sourceFilesUsed?: string[];
+    observableCount?: number;
+    actionCount?: number;
+    resetCount?: number;
+    terminationCount?: number;
+    diagnostics?: string[];
+    complete?: boolean;
+  } | null;
 };
 
 export type TrainingProfileCatalogProfile = {

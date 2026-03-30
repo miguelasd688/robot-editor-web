@@ -1,4 +1,5 @@
 import type { TaskTemplateCatalogEntry } from "@runtime-plugins/catalog/types";
+import { materializeTrainingProfileAuthoringSurface } from "./authoringSurface";
 
 export type TrainingProfileMetadata = {
   profileId: string;
@@ -13,11 +14,15 @@ export type TrainingProfileMetadata = {
 
 export type TrainingProfileAuthoredTrace = {
   source: string;
+  authoringSurfaceSource: "canonical_profile_catalog" | "compatibility_backfill" | "template_defaults";
   registrationId: string;
+  policyTermsStatus: string;
+  sourceFilesUsed: string[];
   observableCount: number;
   actionCount: number;
   resetCount: number;
   terminationCount: number;
+  diagnostics: string[];
 };
 
 function normalizeToken(value: unknown): string {
@@ -73,22 +78,17 @@ export function resolveTrainingProfileMetadata(
 export function buildTrainingProfileAuthoredTrace(
   template: TaskTemplateCatalogEntry
 ): TrainingProfileAuthoredTrace {
-  const authoredProfileContract = template.authoredProfileContract && typeof template.authoredProfileContract === "object" && !Array.isArray(template.authoredProfileContract)
-    ? (template.authoredProfileContract as Record<string, unknown>)
-    : {};
-  const toCount = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  const surface = materializeTrainingProfileAuthoringSurface(template);
   return {
-    source: String(authoredProfileContract.sourceMode ?? template.profileSourceMode ?? "profile_example").trim() || "profile_example",
-    registrationId: String(
-      authoredProfileContract.registrationId ??
-        template.registrationId ??
-        template.environmentId ??
-        template.id ??
-        ""
-    ).trim(),
-    observableCount: toCount(authoredProfileContract.authoredObservables),
-    actionCount: toCount(authoredProfileContract.authoredActions),
-    resetCount: toCount(authoredProfileContract.authoredResets),
-    terminationCount: toCount(authoredProfileContract.authoredTerminations),
+    source: surface.source,
+    authoringSurfaceSource: surface.authoringSurfaceSource,
+    registrationId: surface.registrationId,
+    policyTermsStatus: surface.policyTermsStatus,
+    sourceFilesUsed: surface.sourceFilesUsed,
+    observableCount: surface.observables,
+    actionCount: surface.actions,
+    resetCount: surface.resets,
+    terminationCount: surface.terminations,
+    diagnostics: surface.diagnostics,
   };
 }
