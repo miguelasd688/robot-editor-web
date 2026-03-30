@@ -12,6 +12,7 @@ describe("training profile metadata", () => {
     expect(resolveProfileIdForTaskTemplate(template)).toBe("ant");
     expect(metadata.profileId).toBe("ant");
     expect(metadata.baseTaskId).toBe("isaaclab.ant.manager.v1");
+    expect(metadata.displayName).toBe("Ant");
     expect(metadata.agentPresetId).toBe("rsl_rl_ppo");
     expect(catalogMetadata.profileId).toBe(metadata.profileId);
     expect(catalogMetadata.baseTaskId).toBe(metadata.baseTaskId);

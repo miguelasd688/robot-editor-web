@@ -288,6 +288,7 @@ export type CustomTrainingTaskRequest = {
   experimentContext?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  authoredProfileContract?: Record<string, unknown> | null;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentId?: string;
@@ -322,6 +323,7 @@ export type TaskAutocompletePreview = {
   resolvedLaunchPlan?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   compatibilitySignature?: Record<string, unknown>;
+  authoredProfileContract?: Record<string, unknown> | null;
   experiment?: Record<string, unknown> | null;
   experimentRevision?: Record<string, unknown> | null;
   taskTemplate: string;
@@ -423,6 +425,7 @@ export type CustomTrainingTaskLaunchResponse = {
   experimentTaskRegistration?: Record<string, unknown> | null;
   editorSceneContract?: Record<string, unknown>;
   compatibilitySignature?: Record<string, unknown>;
+  authoredProfileContract?: Record<string, unknown> | null;
   experiment?: Record<string, unknown> | null;
   experimentRevision?: Record<string, unknown> | null;
   warnings?: string[];
@@ -563,6 +566,7 @@ export type TrainingProfileCatalogRegistration = {
   policyTerms?: PolicyTerm[];
   expressionHints?: TrainingExpressionHints;
   launchCapabilities?: Record<string, unknown>;
+  authoredProfileContract?: Record<string, unknown> | null;
 };
 
 export type TrainingProfileCatalogProfile = {
@@ -1178,6 +1182,11 @@ function normalizeCustomDryRunPreview(input: {
     experimentTaskRegistration: isPlainRecord(parsed.experimentTaskRegistration)
       ? parsed.experimentTaskRegistration
       : undefined,
+    authoredProfileContract: isPlainRecord(parsed.authoredProfileContract)
+      ? parsed.authoredProfileContract
+      : isPlainRecord(parsed.experimentTaskSpec?.authoredProfileContract)
+        ? (parsed.experimentTaskSpec.authoredProfileContract as Record<string, unknown>)
+        : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
     resolvedLaunchPlan: isPlainRecord(parsed.resolvedLaunchPlan) ? parsed.resolvedLaunchPlan : null,
     sceneActivation: isPlainRecord(parsed.sceneActivation) ? parsed.sceneActivation : null,
@@ -1354,6 +1363,9 @@ export async function submitTrainingTaskRemote(
     if (custom.experimentTaskRegistration && typeof custom.experimentTaskRegistration === "object") {
       payload.experimentTaskRegistration = custom.experimentTaskRegistration;
     }
+    if (custom.authoredProfileContract && typeof custom.authoredProfileContract === "object") {
+      payload.authoredProfileContract = custom.authoredProfileContract;
+    }
     if (custom.adapterSelection && typeof custom.adapterSelection === "object") {
       payload.adapterSelection = custom.adapterSelection;
     }
@@ -1503,6 +1515,11 @@ export async function submitTrainingTaskRemote(
         experimentTaskRegistration: isPlainRecord(customLaunch.experimentTaskRegistration)
           ? customLaunch.experimentTaskRegistration
           : undefined,
+        authoredProfileContract: isPlainRecord(customLaunch.authoredProfileContract)
+          ? customLaunch.authoredProfileContract
+          : isPlainRecord(customLaunch.experimentTaskSpec?.authoredProfileContract)
+            ? customLaunch.experimentTaskSpec.authoredProfileContract
+            : undefined,
         editorSceneContract: isPlainRecord(customLaunch.editorSceneContract)
           ? customLaunch.editorSceneContract
           : undefined,

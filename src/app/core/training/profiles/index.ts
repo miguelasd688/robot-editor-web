@@ -19,6 +19,19 @@ function normalizeToken(value: unknown): string {
     .replace(/^_+|_+$/g, "");
 }
 
+function formatProfileCatalogName(displayName: string, profileId: string) {
+  const trimmedDisplayName = String(displayName ?? "").trim();
+  const cleanedDisplayName = trimmedDisplayName.replace(/\s+(sample|manager)$/i, "").trim();
+  if (cleanedDisplayName) return cleanedDisplayName;
+  const trimmedProfileId = String(profileId ?? "").trim();
+  if (!trimmedProfileId) return "Profile";
+  return trimmedProfileId
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase())
+    .trim();
+}
+
 export function resolveProfileIdForTaskTemplate(template: Pick<TaskTemplateCatalogEntry, "modelId" | "taskTemplate">) {
   const modelId = normalizeToken(template.modelId);
   if (modelId) return modelId;
@@ -38,7 +51,11 @@ export function resolveTrainingProfileMetadata(
     registrationId: String(template.environmentId ?? template.id ?? template.recipeId ?? "").trim(),
     ...(String(agentPresetId ?? "").trim() ? { agentPresetId: String(agentPresetId ?? "").trim() } : {}),
     profileVersion: "v1",
-    displayName: String(template.title ?? "").trim() || String(template.taskTemplate ?? "").trim() || "Profile",
+    displayName:
+      String(template.title ?? "").trim() ||
+      formatProfileCatalogName(String(template.profileDisplayName ?? ""), String(template.modelId ?? "")) ||
+      String(template.taskTemplate ?? "").trim() ||
+      "Profile",
     taskTemplate: String(template.taskTemplate ?? "").trim(),
     task: String(template.task ?? "").trim(),
   };
