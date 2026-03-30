@@ -1,4 +1,5 @@
 import type { TrainingJobEventSummary, TrainingJobSummary } from "../plugins/types";
+import { buildCanonicalMetricEventId } from "./trainingMetricIdentity";
 
 const DB_NAME = "runtime-training-telemetry-cache";
 const DB_VERSION = 3;
@@ -210,8 +211,14 @@ export async function appendCachedMetricEvent(input: {
   if (safeStep <= 0) return;
   if (safeStep > 5 && safeStep % METRIC_CACHE_STEP_INTERVAL !== 0) return;
   const occurredAtMs = parseCreatedAtMs(input.occurredAt, Date.now());
-  const sourceToken = String(input.source ?? "").trim() || "none";
-  const eventId = `sse_metric_${sourceToken}_${String(input.runnerJobId ?? "none")}_${safeStep}_${occurredAtMs}`;
+  const eventId = buildCanonicalMetricEventId({
+    jobId: input.jobId,
+    eventType: "runner.metrics",
+    runnerJobId: input.runnerJobId ?? null,
+    step: safeStep,
+    metrics: isRecord(input.metrics) ? input.metrics : {},
+    source: input.source ?? null,
+  });
   const event: TrainingJobEventSummary = {
     id: eventId,
     jobId: input.jobId,

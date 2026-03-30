@@ -39,6 +39,7 @@ export type TrainingJobSummary = {
   launchContext?: Record<string, unknown>;
   episodeTruthSummary?: Record<string, unknown> | null;
   episodeTruthMissing?: Record<string, unknown> | null;
+  structuredMetricsTelemetry?: Record<string, unknown> | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
