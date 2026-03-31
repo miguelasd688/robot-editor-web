@@ -67,6 +67,45 @@ export type RuntimeConfigArtifactReasonCode =
   | "CANONICAL_COMPARISON_MISSING"
   | "ARTIFACT_WRITE_FAILED";
 
+export type EpisodeRuntimeTraceEntry = {
+  eventKind: string;
+  phase: string;
+  episodeIndex: number;
+  resetCount: number;
+  selectedResetSource: string;
+  terminationKind: string;
+  terminationTerms: string[];
+  fallbackUsed: boolean | null;
+  fallbackReason: string;
+  scenePlacementRetained: boolean | null;
+  scenePlacementConsumed: boolean | null;
+  sceneAuthorityRetained: boolean | null;
+  expectedResetAuthority?: string | null;
+  observedResetAuthority?: string | null;
+  expectedTerminationAuthority?: string | null;
+  observedTerminationAuthority?: string | null;
+  rootPoseApplied?: boolean | null;
+  rootStateValid?: boolean | null;
+  jointStateApplied?: boolean | null;
+  rootDriftDetected?: boolean | null;
+  jointDriftDetected?: boolean | null;
+  causeCode: string;
+  reasonCodes: string[];
+  summary: string;
+};
+
+export type EpisodeRuntimeTraceSummary = {
+  episodeRuntimeTraceSummaryVersion: string;
+  traceMode: string;
+  maxEntries: number;
+  entryCount: number;
+  firstEpisodeIndex: number | null;
+  latestEpisodeIndex: number | null;
+  entries: EpisodeRuntimeTraceEntry[];
+  reasonCode: string;
+  details: Record<string, unknown>;
+};
+
 export type LearningHealthSummary = {
   metricsSource: string;
   firstMetricStep: number;
@@ -134,6 +173,13 @@ export type TaskRealizationSummary = {
   robotBindingApplied: boolean;
   terrainBindingApplied: boolean;
   managerBindingApplied: boolean;
+  embodimentStatus: string;
+  embodimentMismatchCodes: string[];
+  embodimentBlockingCodes: string[];
+  embodimentWarningCodes: string[];
+  blockingCodes: string[];
+  runtimeBindingMissing: boolean;
+  managerParityReasonCode: string;
   reasonCode: TaskRealizationReasonCode;
 };
 
@@ -147,6 +193,7 @@ export type ManagerParitySummary = {
   resetParity: boolean;
   sceneBindingParity: boolean;
   diffDomains: string[];
+  domainMismatchReasons: Record<string, string>;
   reasonCode: ManagerParityReasonCode;
 };
 
@@ -179,6 +226,7 @@ export type RuntimeConfigArtifactSummary = {
   effectiveManagerConfigPath: string;
   effectiveLaunchSpecPath: string;
   canonicalComparisonPath: string;
+  episodeRuntimeTraceSummaryPath: string;
   taskRealizationSummaryPath: string;
   taskCompletenessSummaryPath: string;
   managerParitySummaryPath: string;
@@ -222,6 +270,7 @@ export type TrainingJobSummary = {
   launchContext?: Record<string, unknown>;
   episodeTruthSummary?: Record<string, unknown> | null;
   episodeTruthMissing?: Record<string, unknown> | null;
+  episodeRuntimeTraceSummary?: EpisodeRuntimeTraceSummary | null;
   structuredMetricsTelemetry?: Record<string, unknown> | null;
   learningHealthSummary?: LearningHealthSummary | null;
   agentArtifactSummary?: AgentArtifactSummary | null;
