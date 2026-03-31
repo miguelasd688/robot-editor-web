@@ -604,6 +604,15 @@ export type TrainingProfileCatalogResponse = {
   schemaVersion: string;
   catalogVersion: string;
   generatedAt: string;
+  sourceKind?: string;
+  degraded?: boolean;
+  canonicalExampleAuthoringAvailable?: boolean;
+  degradedReasonCode?: string | null;
+  degradedMessage?: string | null;
+  degradedRegistrations?: Array<{
+    profileId: string;
+    registrationId: string;
+  }>;
   profiles: TrainingProfileCatalogProfile[];
   adapters?: Record<string, unknown>[];
   issues?: Array<{ code: string; message: string }>;

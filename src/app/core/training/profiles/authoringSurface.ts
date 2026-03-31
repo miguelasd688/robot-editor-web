@@ -1,3 +1,5 @@
+import { logInfo } from "../../services/logger";
+
 type PlainRecord = Record<string, unknown>;
 
 export type TrainingProfileAuthoringSurfaceCounts = {
@@ -217,6 +219,27 @@ export function materializeTrainingProfileAuthoringSurface(
     explicitCounts: canonicalCounts,
     materializedCounts,
   });
+  if (
+    typeof window !== "undefined" &&
+    profileId === "ant" &&
+    registrationId === "ant_manager"
+  ) {
+    logInfo("Normalized authored surface trace", {
+      scope: "runtime-training",
+      data: {
+        stage: "normalized_surface",
+        profileId,
+        registrationId,
+        catalogVersion,
+        authoringSurfaceSource,
+        policyTermsStatus: asText(template.policyTermsStatus, "none") || "none",
+        observables: materializedCounts.observables,
+        actions: materializedCounts.actions,
+        resets: materializedCounts.resets,
+        terminations: materializedCounts.terminations,
+      },
+    });
+  }
 
   return {
     source: authoringSurfaceSource,
