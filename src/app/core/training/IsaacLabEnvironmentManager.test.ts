@@ -286,10 +286,20 @@ describe("IsaacLabEnvironmentManager", () => {
       catalogVersion: "2026-03-23",
       policyTermsStatus: "partial",
     });
+    expect(result.request.environment.authoredProfileContract).toMatchObject({
+      profileId: "ant",
+      registrationId: "ant_manager",
+      catalogVersion: "2026-03-23",
+      policyTermsStatus: "partial",
+    });
     expect(result.request.authoredProfileContract?.authoredObservables).toHaveLength(1);
     expect(result.request.authoredProfileContract?.authoredActions).toHaveLength(1);
     expect(result.request.authoredProfileContract?.authoredResets).toHaveLength(1);
     expect(result.request.authoredProfileContract?.authoredTerminations).toHaveLength(1);
+    expect(result.request.environment.authoredProfileContract?.authoredObservables).toHaveLength(1);
+    expect(result.request.environment.authoredProfileContract?.authoredActions).toHaveLength(1);
+    expect(result.request.environment.authoredProfileContract?.authoredResets).toHaveLength(1);
+    expect(result.request.environment.authoredProfileContract?.authoredTerminations).toHaveLength(1);
     expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.request.editorRobotModel).toEqual({
       contractVersion: "editor_robot_model_v1",

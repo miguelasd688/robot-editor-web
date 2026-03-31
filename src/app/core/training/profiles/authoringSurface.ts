@@ -2,6 +2,8 @@ import { logInfo } from "../../services/logger";
 
 type PlainRecord = Record<string, unknown>;
 
+let lastNormalizedAuthoringSurfaceLogSignature = "";
+
 export type TrainingProfileAuthoringSurfaceCounts = {
   observables: number;
   actions: number;
@@ -174,6 +176,32 @@ function normalizeSourceFilesUsed(template: AuthoringSurfaceTemplate): string[] 
   ];
 }
 
+function buildNormalizedAuthoringSurfaceLogSignature(trace: {
+  profileId: string;
+  registrationId: string;
+  catalogVersion: string | null;
+  authoringSurfaceSource: string;
+  policyTermsStatus: string;
+  observables: number;
+  actions: number;
+  resets: number;
+  terminations: number;
+  sourceFilesUsed: string[];
+}) {
+  return [
+    trace.profileId,
+    trace.registrationId,
+    trace.catalogVersion ?? "n/a",
+    trace.authoringSurfaceSource,
+    trace.policyTermsStatus,
+    trace.observables,
+    trace.actions,
+    trace.resets,
+    trace.terminations,
+    trace.sourceFilesUsed.join("|"),
+  ].join("::");
+}
+
 export function materializeTrainingProfileAuthoringSurface(
   template: AuthoringSurfaceTemplate
 ): TrainingProfileAuthoringSurfaceMaterialization {
@@ -224,21 +252,36 @@ export function materializeTrainingProfileAuthoringSurface(
     profileId === "ant" &&
     registrationId === "ant_manager"
   ) {
-    logInfo("Normalized authored surface trace", {
-      scope: "runtime-training",
-      data: {
-        stage: "normalized_surface",
-        profileId,
-        registrationId,
-        catalogVersion,
-        authoringSurfaceSource,
-        policyTermsStatus: asText(template.policyTermsStatus, "none") || "none",
-        observables: materializedCounts.observables,
-        actions: materializedCounts.actions,
-        resets: materializedCounts.resets,
-        terminations: materializedCounts.terminations,
-      },
+    const logSignature = buildNormalizedAuthoringSurfaceLogSignature({
+      profileId,
+      registrationId,
+      catalogVersion,
+      authoringSurfaceSource,
+      policyTermsStatus: asText(template.policyTermsStatus, "none") || "none",
+      observables: materializedCounts.observables,
+      actions: materializedCounts.actions,
+      resets: materializedCounts.resets,
+      terminations: materializedCounts.terminations,
+      sourceFilesUsed,
     });
+    if (logSignature !== lastNormalizedAuthoringSurfaceLogSignature) {
+      lastNormalizedAuthoringSurfaceLogSignature = logSignature;
+      logInfo("Normalized authored surface trace", {
+        scope: "runtime-training",
+        data: {
+          stage: "normalized_surface",
+          profileId,
+          registrationId,
+          catalogVersion,
+          authoringSurfaceSource,
+          policyTermsStatus: asText(template.policyTermsStatus, "none") || "none",
+          observables: materializedCounts.observables,
+          actions: materializedCounts.actions,
+          resets: materializedCounts.resets,
+          terminations: materializedCounts.terminations,
+        },
+      });
+    }
   }
 
   return {
