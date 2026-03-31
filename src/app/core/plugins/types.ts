@@ -47,6 +47,19 @@ export type ManagerParityReasonCode =
   | "UNEXPECTED_MANAGER_DRIFT"
   | "CANONICAL_SAMPLE_NOT_RESOLVED"
   | "PARITY_EVAL_NOT_RUN";
+export type TaskCompletenessReasonCode =
+  | "COMPLETE_MANAGER_BASED_MDP"
+  | "CANONICAL_TASK_ONLY"
+  | "CANONICAL_TASK_WITH_RUNTIME_PATCH"
+  | "AUTHORED_SURFACE_INCOMPLETE"
+  | "MANAGER_CONTRACT_INCOMPLETE"
+  | "EFFECTIVE_RUNTIME_INCOMPLETE"
+  | "RESET_CONTRACT_INCOMPLETE"
+  | "EPISODE_EVIDENCE_PENDING"
+  | "SCENE_OWNERSHIP_UNSTABLE"
+  | "RESET_OWNERSHIP_UNSTABLE"
+  | "RESET_FALLBACK_OBSERVED"
+  | "TASK_COMPLETENESS_UNCLEAR";
 export type RuntimeConfigArtifactReasonCode =
   | "CONFIG_ARTIFACTS_READY"
   | "TASK_CONFIG_MISSING"
@@ -137,12 +150,37 @@ export type ManagerParitySummary = {
   reasonCode: ManagerParityReasonCode;
 };
 
+export type TaskCompletenessSummary = {
+  taskCompletenessSummaryVersion: string;
+  taskName: string;
+  profileId: string;
+  registrationId: string;
+  adapterId: string;
+  realizationMode: string;
+  observationsComplete: boolean;
+  actionsComplete: boolean;
+  rewardsComplete: boolean;
+  resetsComplete: boolean;
+  terminationsComplete: boolean;
+  sceneOwnershipStable: boolean;
+  resetOwnershipStable: boolean;
+  episodeEvidenceObserved: boolean;
+  terminationDrivenResets: boolean;
+  upstreamResetFallbackObserved: boolean;
+  missingDomains: string[];
+  upstreamOwnedDomains: string[];
+  reasonCode: TaskCompletenessReasonCode;
+  resetBehaviorReasonCode: string;
+  details?: Record<string, unknown> | null;
+};
+
 export type RuntimeConfigArtifactSummary = {
   effectiveTaskConfigPath: string;
   effectiveManagerConfigPath: string;
   effectiveLaunchSpecPath: string;
   canonicalComparisonPath: string;
   taskRealizationSummaryPath: string;
+  taskCompletenessSummaryPath: string;
   managerParitySummaryPath: string;
   runtimeConfigArtifactSummaryPath: string;
   artifactsReady: boolean;
@@ -191,6 +229,7 @@ export type TrainingJobSummary = {
   policyProgressSummary?: PolicyProgressSummary | null;
   evaluationArtifactSummary?: EvaluationArtifactSummary | null;
   taskRealizationSummary?: TaskRealizationSummary | null;
+  taskCompletenessSummary?: TaskCompletenessSummary | null;
   managerParitySummary?: ManagerParitySummary | null;
   runtimeConfigArtifactSummary?: RuntimeConfigArtifactSummary | null;
 };
