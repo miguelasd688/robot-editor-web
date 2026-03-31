@@ -236,6 +236,16 @@ describe("buildTrainingEnvironment", () => {
     expect(result.environment.profileVersion).toBe("v1");
     expect(result.environment.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.environment.registrationId).toBe("ant_manager");
+    expect(result.environment.authoredProfileContract).toMatchObject({
+      profileId: "ant",
+      registrationId: "ant_manager",
+      catalogVersion: expect.any(String),
+      policyTermsStatus: "partial",
+    });
+    expect(result.environment.authoredProfileContract?.authoredObservables).toHaveLength(7);
+    expect(result.environment.authoredProfileContract?.authoredActions).toHaveLength(1);
+    expect(result.environment.authoredProfileContract?.authoredResets).toHaveLength(2);
+    expect(result.environment.authoredProfileContract?.authoredTerminations).toHaveLength(2);
     expect(result.environment.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.environment.sceneAssetId).toBe("asset_scene_456");
     expect(result.environment.scenePreparation).toMatchObject({

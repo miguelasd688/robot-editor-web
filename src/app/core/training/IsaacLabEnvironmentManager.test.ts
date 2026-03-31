@@ -97,6 +97,24 @@ describe("IsaacLabEnvironmentManager", () => {
         baseTaskId: "isaaclab.ant.manager.v1",
         registrationId: "ant_manager",
         agentPresetId: "rsl_rl_ppo",
+        authoredProfileContract: {
+          profileId: "ant",
+          profileVersion: "v1",
+          registrationId: "ant_manager",
+          catalogVersion: "2026-03-23",
+          baseTaskId: "isaaclab.ant.manager.v1",
+          taskTemplate: "ant_manager",
+          task: "Isaac-Ant-v0",
+          sourceMode: "profile_example",
+          authoringSurfaceSource: "canonical_profile_catalog",
+          policyTermsStatus: "partial",
+          sourceFilesUsed: ["training-examples/ant/sample.yaml"],
+          diagnostics: [],
+          authoredObservables: [{ id: "joint_pos", expr: "robot.joint_pos", enabled: true }],
+          authoredActions: [{ id: "joint_targets", expr: "continuous[-1,1]", enabled: true }],
+          authoredResets: [{ id: "reset_root_state_uniform", expr: "pose_range(...)", enabled: true }],
+          authoredTerminations: [{ id: "time_out", expr: "episode.step >= max_steps", enabled: true }],
+        },
         editorSceneContract: {
           contractVersion: "v1",
           profileId: "ant",
@@ -192,19 +210,37 @@ describe("IsaacLabEnvironmentManager", () => {
     expect(result.request.experimentName).toBe("exp-alpha");
     expect(result.request.seed).toBe(9);
     expect(result.request.dryRun).toBe(true);
-    expect(result.request.environment).toEqual({
-      id: "custom_environment",
-      sourceOfTruth: "project_doc_environment_v1",
-      snapshot: null,
-      profileId: "ant",
-      profileVersion: "v1",
-      baseTaskId: "isaaclab.ant.manager.v1",
-      registrationId: "ant_manager",
-      agentPresetId: "rsl_rl_ppo",
-      editorSceneContract: {
-        contractVersion: "v1",
+      expect(result.request.environment).toEqual({
+        id: "custom_environment",
+        sourceOfTruth: "project_doc_environment_v1",
+        snapshot: null,
         profileId: "ant",
+        profileVersion: "v1",
         baseTaskId: "isaaclab.ant.manager.v1",
+        registrationId: "ant_manager",
+        agentPresetId: "rsl_rl_ppo",
+        authoredProfileContract: {
+          profileId: "ant",
+          profileVersion: "v1",
+          registrationId: "ant_manager",
+          catalogVersion: "2026-03-23",
+          baseTaskId: "isaaclab.ant.manager.v1",
+          taskTemplate: "ant_manager",
+          task: "Isaac-Ant-v0",
+          sourceMode: "profile_example",
+          authoringSurfaceSource: "canonical_profile_catalog",
+          policyTermsStatus: "partial",
+          sourceFilesUsed: ["training-examples/ant/sample.yaml"],
+          diagnostics: [],
+          authoredObservables: [{ id: "joint_pos", expr: "robot.joint_pos", enabled: true }],
+          authoredActions: [{ id: "joint_targets", expr: "continuous[-1,1]", enabled: true }],
+          authoredResets: [{ id: "reset_root_state_uniform", expr: "pose_range(...)", enabled: true }],
+          authoredTerminations: [{ id: "time_out", expr: "episode.step >= max_steps", enabled: true }],
+        },
+        editorSceneContract: {
+          contractVersion: "v1",
+          profileId: "ant",
+          baseTaskId: "isaaclab.ant.manager.v1",
         taskTemplate: "ant_manager",
         task: "Isaac-Ant-v0",
         robotAssetId: "robot_asset",
@@ -244,6 +280,16 @@ describe("IsaacLabEnvironmentManager", () => {
     expect(result.request.profileVersion).toBe("v1");
     expect(result.request.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.request.registrationId).toBe("ant_manager");
+    expect(result.request.authoredProfileContract).toMatchObject({
+      profileId: "ant",
+      registrationId: "ant_manager",
+      catalogVersion: "2026-03-23",
+      policyTermsStatus: "partial",
+    });
+    expect(result.request.authoredProfileContract?.authoredObservables).toHaveLength(1);
+    expect(result.request.authoredProfileContract?.authoredActions).toHaveLength(1);
+    expect(result.request.authoredProfileContract?.authoredResets).toHaveLength(1);
+    expect(result.request.authoredProfileContract?.authoredTerminations).toHaveLength(1);
     expect(result.request.agentPresetId).toBe("rsl_rl_ppo");
     expect(result.request.editorRobotModel).toEqual({
       contractVersion: "editor_robot_model_v1",

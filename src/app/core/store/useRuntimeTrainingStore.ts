@@ -595,6 +595,7 @@ function buildLaunchContextFromInput(
     "task",
     "agentId",
     "catalogVersion",
+    "authoredProfileContract",
     "robotAssetId",
     "sceneAssetId",
     "baseConstraintMode",

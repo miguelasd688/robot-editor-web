@@ -68,6 +68,7 @@ export type CustomTrainingEnvironmentPayload = {
   registrationId?: string;
   agentPresetId?: string;
   adapterId?: string;
+  authoredProfileContract?: Record<string, unknown>;
   snapshot: EnvironmentDoc | null;
   placements?: CustomTrainingEnvironmentPlacement[];
   controlPolicy?: {

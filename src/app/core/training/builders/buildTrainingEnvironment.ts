@@ -67,6 +67,11 @@ function toFiniteNumberOrUndefined(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function toRecordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 function resolvePrimaryRobotNodeId(input: {
   snapshot: EnvironmentDoc | null;
   primaryRobotEntityId: string | null;
@@ -201,11 +206,31 @@ export async function buildTrainingEnvironment(
     templateId,
     taskTemplate: toTextOrEmpty(configValues.taskTemplate) || toTextOrEmpty(environmentValues.taskTemplate),
   });
+  const authoredProfileContractFromConfig = toRecordOrUndefined(configValues.authoredProfileContract);
+  const authoredProfileContractFromTemplate = toRecordOrUndefined(template.authoredProfileContract);
+  const authoredProfileContract =
+    authoredProfileContractFromConfig && Object.keys(authoredProfileContractFromConfig).length > 0
+      ? authoredProfileContractFromConfig
+      : authoredProfileContractFromTemplate && Object.keys(authoredProfileContractFromTemplate).length > 0
+        ? authoredProfileContractFromTemplate
+        : undefined;
   const profileMetadata = resolveTrainingProfileMetadata(template, toTextOrEmpty(configValues.agentPresetId) || toTextOrEmpty(configValues.agentId));
-  const profileId = toTextOrEmpty(configValues.profileId) || profileMetadata.profileId;
-  const baseTaskId = toTextOrEmpty(configValues.baseTaskId) || profileMetadata.baseTaskId;
-  const profileVersion = toTextOrEmpty(configValues.profileVersion) || profileMetadata.profileVersion;
-  const registrationId = toTextOrEmpty(configValues.registrationId) || profileMetadata.registrationId;
+  const profileId =
+    toTextOrEmpty(configValues.profileId) ||
+    toTextOrEmpty(authoredProfileContract?.profileId) ||
+    profileMetadata.profileId;
+  const baseTaskId =
+    toTextOrEmpty(configValues.baseTaskId) ||
+    toTextOrEmpty(authoredProfileContract?.baseTaskId) ||
+    profileMetadata.baseTaskId;
+  const profileVersion =
+    toTextOrEmpty(configValues.profileVersion) ||
+    toTextOrEmpty(authoredProfileContract?.profileVersion) ||
+    profileMetadata.profileVersion;
+  const registrationId =
+    toTextOrEmpty(configValues.registrationId) ||
+    toTextOrEmpty(authoredProfileContract?.registrationId) ||
+    profileMetadata.registrationId;
   const adapterId = toTextOrEmpty(configValues.adapterId);
   const agentPresetId =
     toTextOrEmpty(configValues.agentPresetId) ||
@@ -254,6 +279,7 @@ export async function buildTrainingEnvironment(
     agentPresetId: agentPresetId || undefined,
     ...(adapterId ? { adapterId } : {}),
     snapshot,
+    ...(authoredProfileContract ? { authoredProfileContract: JSON.parse(JSON.stringify(authoredProfileContract)) } : {}),
     ...(placements.length > 0 ? { placements } : {}),
     robotAssetId: robotAssetId || undefined,
     robotUsdKey: input.context.robotUsdKey,

@@ -80,6 +80,9 @@ export class IsaacLabEnvironmentManager {
       agent,
       runtime,
       dryRun: configValues.dryRun === true,
+      ...(builtEnvironment.environment.authoredProfileContract
+        ? { authoredProfileContract: builtEnvironment.environment.authoredProfileContract }
+        : {}),
       profileId: builtEnvironment.environment.profileId,
       profileVersion: builtEnvironment.environment.profileVersion,
       baseTaskId: builtEnvironment.environment.baseTaskId,
