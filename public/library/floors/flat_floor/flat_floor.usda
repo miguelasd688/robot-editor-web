@@ -9,7 +9,7 @@ def Xform "flat_floor"
 {
     def Xform "base"
     {
-        double3 xformOp:translate = (0, 0, -1.5)
+        double3 xformOp:translate = (0, 0, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
         def Mesh "ground_mesh" (

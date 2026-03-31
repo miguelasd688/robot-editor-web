@@ -39,7 +39,7 @@ function createEnvironmentDocFixture(): EnvironmentDoc {
         children: [],
         sourceAssetId: "floor_asset",
         transform: {
-          position: { x: 0, y: 0, z: -1.5 },
+          position: { x: 0, y: 0, z: -0.6 },
           rotation: { x: 0, y: 0, z: 0 },
           scale: { x: 1, y: 1, z: 1 },
         },
