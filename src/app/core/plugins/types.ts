@@ -46,7 +46,10 @@ export type ManagerParityReasonCode =
   | "EXPECTED_EXPERIMENT_DELTAS_ONLY"
   | "UNEXPECTED_MANAGER_DRIFT"
   | "CANONICAL_SAMPLE_NOT_RESOLVED"
-  | "PARITY_EVAL_NOT_RUN";
+  | "PARITY_EVAL_NOT_RUN"
+  | "LIVE_RESET_AUTHORITY_NOT_REALIZED"
+  | "LIVE_SCENE_BINDING_NOT_REALIZED"
+  | "LIVE_OBSERVATION_NORMALIZATION_DRIFT";
 export type TaskCompletenessReasonCode =
   | "COMPLETE_MANAGER_BASED_MDP"
   | "CANONICAL_TASK_ONLY"
@@ -195,6 +198,7 @@ export type ManagerParitySummary = {
   diffDomains: string[];
   domainMismatchReasons: Record<string, string>;
   reasonCode: ManagerParityReasonCode;
+  details?: Record<string, unknown> | null;
 };
 
 export type TaskCompletenessSummary = {
