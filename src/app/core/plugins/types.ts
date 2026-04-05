@@ -10,7 +10,8 @@ export type LearningHealthReasonCode =
   | "REWARD_FLAT"
   | "EPISODE_LENGTH_FLAT"
   | "METRICS_INCOMPLETE"
-  | "CHECKPOINT_NOT_OBSERVED";
+  | "CHECKPOINT_NOT_OBSERVED"
+  | "TRAINER_NOT_STARTED";
 export type AgentArtifactReasonCode =
   | "CHECKPOINT_READY"
   | "CHECKPOINT_NOT_OBSERVED"
@@ -28,13 +29,15 @@ export type PolicyProgressReasonCode =
   | "NO_VISIBLE_DELTA"
   | "EVAL_NOT_RUN"
   | "CHECKPOINT_MISSING"
-  | "METRICS_TRUST_REQUIRED";
+  | "METRICS_TRUST_REQUIRED"
+  | "TRAINER_NOT_STARTED";
 export type EvaluationArtifactReasonCode =
   | "COMPARISON_READY"
   | "BASELINE_VIDEO_MISSING"
   | "CANDIDATE_VIDEO_MISSING"
   | "CHECKPOINT_NOT_READY"
-  | "EVAL_NOT_RUN";
+  | "EVAL_NOT_RUN"
+  | "TRAINER_NOT_STARTED";
 export type TaskRealizationReasonCode =
   | "FULL_EXPERIMENT_REALIZATION"
   | "PARTIAL_EXPERIMENT_REALIZATION"
@@ -285,6 +288,10 @@ export type TrainingJobSummary = {
   taskCompletenessSummary?: TaskCompletenessSummary | null;
   managerParitySummary?: ManagerParitySummary | null;
   runtimeConfigArtifactSummary?: RuntimeConfigArtifactSummary | null;
+  runtimeLaunchGateSummary?: Record<string, unknown> | null;
+  embodimentAdmissionSummary?: Record<string, unknown> | null;
+  preTrainerFailureSummary?: Record<string, unknown> | null;
+  trainerFailureSummary?: Record<string, unknown> | null;
 };
 
 export type TrainingArtifactKind = "checkpoint" | "model" | "metrics" | "log" | "video" | "dataset";
