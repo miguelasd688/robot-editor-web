@@ -188,6 +188,8 @@ export type RobotDiagnosticsTrace = {
   canonicalSourceKind?: string | null;
   canonicalityReason?: string | null;
   evidenceChainId?: string | null;
+  robotDiagnosticsMode?: "scene_driven_contract" | "raw_usd_contract" | string | null;
+  assetProvenanceMode?: "raw_usd_optional" | "raw_usd_primary" | string | null;
   editorRobotModel?: {
     status?: "missing" | "accepted" | "malformed";
     sent?: boolean;
