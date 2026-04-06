@@ -290,6 +290,7 @@ export type CustomTrainingTaskRequest = {
   experimentContext?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  agentCompilation?: Record<string, unknown> | null;
   authoredProfileContract?: Record<string, unknown> | null;
   taskFingerprint?: string;
   experimentTaskId?: string;
@@ -362,6 +363,7 @@ export type TaskAutocompletePreview = {
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  agentCompilation?: Record<string, unknown> | null;
   launchParityTrace?: Record<string, unknown> | null;
   launchDiagnostics?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
@@ -778,6 +780,26 @@ function formatLaunchErrorSuffix(details: Record<string, unknown> | null): strin
   return parts.length > 0 ? ` (${parts.join(" | ")})` : "";
 }
 
+function formatValidationErrorSuffix(details: Record<string, unknown> | null): string {
+  if (!details) return "";
+  const parts: string[] = [];
+  const reasonCode = String(details.reasonCode ?? "").trim();
+  const authoritySourceKind = String(details.authoritySourceKind ?? "").trim();
+  const evidenceChainId = String(details.evidenceChainId ?? "").trim();
+  const blockingDiagnostics = Array.isArray(details.blockingDiagnostics)
+    ? details.blockingDiagnostics.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const advisoryDiagnostics = Array.isArray(details.advisoryDiagnostics)
+    ? details.advisoryDiagnostics.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  if (reasonCode) parts.push(`reason ${reasonCode}`);
+  if (authoritySourceKind) parts.push(`authority ${authoritySourceKind}`);
+  if (evidenceChainId) parts.push(`trace ${evidenceChainId}`);
+  if (blockingDiagnostics.length > 0) parts.push(`blockers ${blockingDiagnostics.join(", ")}`);
+  if (advisoryDiagnostics.length > 0) parts.push(`advisories ${advisoryDiagnostics.join(", ")}`);
+  return parts.length > 0 ? ` (${parts.join(" | ")})` : "";
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -795,6 +817,7 @@ async function parseJson<T>(response: Response): Promise<T> {
       const code = String(parsed.code ?? "").trim();
       const message = String(parsed.message ?? "").trim() || response.statusText;
       const details = isPlainRecord(parsed.details) ? parsed.details : null;
+      const validationSuffix = formatValidationErrorSuffix(details);
       const launchSuffix = formatLaunchErrorSuffix(details);
       const persistence = details && isPlainRecord(details.persistence) ? details.persistence : null;
       if (persistence) {
@@ -809,7 +832,9 @@ async function parseJson<T>(response: Response): Promise<T> {
           `Training API ${response.status}: ${code || "ERROR"}: ${message}${suffix ? ` (${suffix})` : ""}${launchSuffix}`
         );
       }
-      throw new Error(`Training API ${response.status}: ${code || "ERROR"}: ${message}${launchSuffix}`);
+      throw new Error(
+        `Training API ${response.status}: ${code || "ERROR"}: ${message}${validationSuffix}${launchSuffix}`
+      );
     }
     throw new Error(fallback);
   }
@@ -1301,6 +1326,11 @@ function normalizeCustomDryRunPreview(input: {
     robotEmbodimentSpec: isPlainRecord(parsed.robotEmbodimentSpec)
       ? parsed.robotEmbodimentSpec
       : null,
+    agentCompilation: isPlainRecord(parsed.agentCompilation)
+      ? parsed.agentCompilation
+      : isPlainRecord(experimentTaskSpec?.agentCompilation)
+        ? (experimentTaskSpec.agentCompilation as Record<string, unknown>)
+        : null,
     launchParityTrace: isPlainRecord(parsed.launchParityTrace)
       ? parsed.launchParityTrace
       : null,
@@ -1404,6 +1434,9 @@ export async function submitTrainingTaskRemote(
     }
     if (custom.robotEmbodimentSpec && typeof custom.robotEmbodimentSpec === "object") {
       payload.robotEmbodimentSpec = custom.robotEmbodimentSpec;
+    }
+    if (custom.agentCompilation && typeof custom.agentCompilation === "object") {
+      payload.agentCompilation = custom.agentCompilation;
     }
     if (custom.compatibilitySignature && typeof custom.compatibilitySignature === "object") {
       payload.compatibilitySignature = custom.compatibilitySignature;

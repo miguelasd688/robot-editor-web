@@ -180,6 +180,7 @@ export type CustomTrainingTaskRequest = {
   experimentContext?: Record<string, unknown>;
   sceneActivation?: Record<string, unknown>;
   robotEmbodimentSpec?: Record<string, unknown>;
+  agentCompilation?: Record<string, unknown>;
   taskFingerprint?: string;
   experimentTaskId?: string;
   experimentId?: string;
