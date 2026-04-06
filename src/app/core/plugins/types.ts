@@ -73,6 +73,89 @@ export type RuntimeConfigArtifactReasonCode =
   | "CANONICAL_COMPARISON_MISSING"
   | "ARTIFACT_WRITE_FAILED";
 
+export type TaskMaterializationBlockerCode =
+  | "TASK_MATERIALIZATION_PREFLIGHT_FAILED"
+  | "TASK_MATERIALIZATION_TASK_CLASS_UNRESOLVED"
+  | "TASK_MATERIALIZATION_ENV_CFG_INVALID"
+  | "TASK_MATERIALIZATION_SCENE_BINDING_UNRESOLVED"
+  | "TASK_MATERIALIZATION_PRIMARY_ROBOT_UNRESOLVED"
+  | "TASK_MATERIALIZATION_ARTICULATION_UNRESOLVED"
+  | "TASK_MATERIALIZATION_ACTION_MANAGER_MISSING"
+  | "TASK_MATERIALIZATION_OBSERVATION_MANAGER_MISSING"
+  | "TASK_MATERIALIZATION_POLICY_OBS_GROUP_MISSING"
+  | "TASK_MATERIALIZATION_REWARD_MANAGER_MISSING"
+  | "TASK_MATERIALIZATION_TERMINATION_MANAGER_MISSING"
+  | "TASK_MATERIALIZATION_EVENT_MANAGER_MISSING"
+  | "TASK_MATERIALIZATION_MANAGER_SURFACE_INCOMPLETE"
+  | "TASK_MATERIALIZATION_LAUNCH_PARITY_MISSING";
+
+export type TaskMaterializationSurface = {
+  taskClassResolved: boolean;
+  envCfgValid: boolean;
+  sceneBindingReady: boolean;
+  primaryRobotReady: boolean;
+  articulationReady: boolean;
+  actionManagerReady: boolean;
+  observationManagerReady: boolean;
+  policyObsGroupReady: boolean;
+  rewardManagerReady: boolean;
+  terminationManagerReady: boolean;
+  eventManagerReady: boolean;
+  managerSurfaceComplete: boolean;
+};
+
+export type TaskMaterializationSummary = {
+  contractVersion: string;
+  ready: boolean;
+  reasonCode: TaskMaterializationBlockerCode | string;
+  blockerCodes: string[];
+  diagnostics: Array<{
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+    severity?: string;
+  }>;
+  surface: TaskMaterializationSurface;
+};
+
+export type LaunchParitySummary = {
+  contractVersion: string;
+  ready: boolean;
+  reasonCode: string;
+  sameRegistration: boolean;
+  sameTaskFingerprint: boolean;
+  previewRegistrationId?: string | null;
+  launchRegistrationId?: string | null;
+  previewTaskFingerprint?: string | null;
+  launchTaskFingerprint?: string | null;
+  details?: Record<string, unknown>;
+};
+
+export type AgentInspectorReadiness = {
+  sourceReady: boolean;
+  sceneCompilationReady: boolean;
+  embodimentReady: boolean;
+  taskMaterializationReady: boolean;
+  launchParityReady: boolean;
+  admissionReady: boolean | null;
+  trainingReady: boolean;
+};
+
+export type AgentInspectorSummary = {
+  contractVersion: string;
+  readiness: AgentInspectorReadiness;
+  sourceReady: boolean;
+  sceneCompilationReady: boolean;
+  embodimentReady: boolean;
+  taskMaterializationReady: boolean;
+  launchParityReady: boolean;
+  admissionReady: boolean | null;
+  trainingReady: boolean;
+  agentCompilationSummary?: Record<string, unknown> | null;
+  taskMaterializationSummary?: TaskMaterializationSummary | null;
+  launchParitySummary?: LaunchParitySummary | null;
+};
+
 export type EpisodeRuntimeTraceEntry = {
   eventKind: string;
   phase: string;
@@ -288,6 +371,9 @@ export type TrainingJobSummary = {
   taskCompletenessSummary?: TaskCompletenessSummary | null;
   managerParitySummary?: ManagerParitySummary | null;
   runtimeConfigArtifactSummary?: RuntimeConfigArtifactSummary | null;
+  taskMaterializationSummary?: TaskMaterializationSummary | null;
+  launchParitySummary?: LaunchParitySummary | null;
+  agentInspectorSummary?: AgentInspectorSummary | null;
   runtimeLaunchGateSummary?: Record<string, unknown> | null;
   embodimentAdmissionSummary?: Record<string, unknown> | null;
   preTrainerFailureSummary?: Record<string, unknown> | null;

@@ -291,6 +291,9 @@ export type CustomTrainingTaskRequest = {
   sceneActivation?: Record<string, unknown> | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   agentCompilation?: Record<string, unknown> | null;
+  taskMaterializationSummary?: Record<string, unknown> | null;
+  launchParitySummary?: Record<string, unknown> | null;
+  agentInspectorSummary?: Record<string, unknown> | null;
   authoredProfileContract?: Record<string, unknown> | null;
   taskFingerprint?: string;
   experimentTaskId?: string;
@@ -364,6 +367,9 @@ export type TaskAutocompletePreview = {
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   agentCompilation?: Record<string, unknown> | null;
+  taskMaterializationSummary?: Record<string, unknown> | null;
+  launchParitySummary?: Record<string, unknown> | null;
+  agentInspectorSummary?: Record<string, unknown> | null;
   launchParityTrace?: Record<string, unknown> | null;
   launchDiagnostics?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
@@ -447,6 +453,9 @@ export type CustomTrainingTaskLaunchResponse = {
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  taskMaterializationSummary?: Record<string, unknown> | null;
+  launchParitySummary?: Record<string, unknown> | null;
+  agentInspectorSummary?: Record<string, unknown> | null;
   launchParityTrace?: Record<string, unknown> | null;
   launchDiagnostics?: Record<string, unknown> | null;
   scenePreparation?: Record<string, unknown> | null;
@@ -1210,6 +1219,21 @@ function normalizeCustomDryRunPreview(input: {
       : {};
   const fallbackAssetIdFromPreview = String((environmentPreview as Record<string, unknown>).robotAssetId ?? "").trim();
   const experimentTaskSpec = isPlainRecord(parsed.experimentTaskSpec) ? parsed.experimentTaskSpec : undefined;
+  const taskMaterializationSummary = isPlainRecord(parsed.taskMaterializationSummary)
+    ? parsed.taskMaterializationSummary
+    : isPlainRecord(experimentTaskSpec?.taskMaterializationSummary)
+      ? (experimentTaskSpec.taskMaterializationSummary as Record<string, unknown>)
+      : undefined;
+  const launchParitySummary = isPlainRecord(parsed.launchParitySummary)
+    ? parsed.launchParitySummary
+    : isPlainRecord(experimentTaskSpec?.launchParitySummary)
+      ? (experimentTaskSpec.launchParitySummary as Record<string, unknown>)
+      : undefined;
+  const agentInspectorSummary = isPlainRecord(parsed.agentInspectorSummary)
+    ? parsed.agentInspectorSummary
+    : isPlainRecord(experimentTaskSpec?.agentInspectorSummary)
+      ? (experimentTaskSpec.agentInspectorSummary as Record<string, unknown>)
+      : undefined;
   const assetId =
     String(parsed.assetId ?? "").trim() ||
     fallbackAssetIdFromPreview ||
@@ -1231,6 +1255,9 @@ function normalizeCustomDryRunPreview(input: {
     taskFingerprint: String(parsed.taskFingerprint ?? "").trim() || undefined,
     experimentTaskId: String(parsed.experimentTaskId ?? "").trim() || undefined,
     experimentTaskSpec: isPlainRecord(parsed.experimentTaskSpec) ? parsed.experimentTaskSpec : undefined,
+    taskMaterializationSummary,
+    launchParitySummary,
+    agentInspectorSummary,
     experimentTaskRegistration: isPlainRecord(parsed.experimentTaskRegistration)
       ? parsed.experimentTaskRegistration
       : undefined,
@@ -1572,6 +1599,21 @@ export async function submitTrainingTaskRemote(
         experimentTaskSpec: isPlainRecord(customLaunch.experimentTaskSpec)
           ? customLaunch.experimentTaskSpec
           : undefined,
+        taskMaterializationSummary: isPlainRecord(customLaunch.taskMaterializationSummary)
+          ? customLaunch.taskMaterializationSummary
+          : isPlainRecord(customLaunch.experimentTaskSpec?.taskMaterializationSummary)
+            ? customLaunch.experimentTaskSpec.taskMaterializationSummary
+            : undefined,
+        launchParitySummary: isPlainRecord(customLaunch.launchParitySummary)
+          ? customLaunch.launchParitySummary
+          : isPlainRecord(customLaunch.experimentTaskSpec?.launchParitySummary)
+            ? customLaunch.experimentTaskSpec.launchParitySummary
+            : undefined,
+        agentInspectorSummary: isPlainRecord(customLaunch.agentInspectorSummary)
+          ? customLaunch.agentInspectorSummary
+          : isPlainRecord(customLaunch.experimentTaskSpec?.agentInspectorSummary)
+            ? customLaunch.experimentTaskSpec.agentInspectorSummary
+            : undefined,
         experimentTaskRegistration: isPlainRecord(customLaunch.experimentTaskRegistration)
           ? customLaunch.experimentTaskRegistration
           : undefined,
