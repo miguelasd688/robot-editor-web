@@ -291,6 +291,7 @@ export type CustomTrainingTaskRequest = {
   sceneActivation?: Record<string, unknown> | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   agentCompilation?: Record<string, unknown> | null;
+  compiledTaskContractV2?: Record<string, unknown> | null;
   taskMaterializationSummary?: Record<string, unknown> | null;
   launchParitySummary?: Record<string, unknown> | null;
   agentInspectorSummary?: Record<string, unknown> | null;
@@ -367,6 +368,7 @@ export type TaskAutocompletePreview = {
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
   agentCompilation?: Record<string, unknown> | null;
+  compiledTaskContractV2?: Record<string, unknown> | null;
   taskMaterializationSummary?: Record<string, unknown> | null;
   launchParitySummary?: Record<string, unknown> | null;
   agentInspectorSummary?: Record<string, unknown> | null;
@@ -453,6 +455,7 @@ export type CustomTrainingTaskLaunchResponse = {
   robotDiagnostics?: Record<string, unknown> | null;
   robotDiagnosticsTrace?: RobotDiagnosticsTrace | null;
   robotEmbodimentSpec?: Record<string, unknown> | null;
+  compiledTaskContractV2?: Record<string, unknown> | null;
   taskMaterializationSummary?: Record<string, unknown> | null;
   launchParitySummary?: Record<string, unknown> | null;
   agentInspectorSummary?: Record<string, unknown> | null;

@@ -156,6 +156,43 @@ export type AgentInspectorSummary = {
   launchParitySummary?: LaunchParitySummary | null;
 };
 
+export type CompiledTaskContractV2 = {
+  contractVersion: "compiled_task_contract_v2";
+  registrationId: string;
+  taskFingerprint: string;
+  authority: {
+    sourceKind: "prepared_scene_primary_robot_embodiment";
+    reason: string;
+    evidenceChainId: string;
+  };
+  primaryRobot: {
+    entityId: string;
+    assetId: string;
+    primPath: string;
+    jointCount: number;
+    rigidBodyCount: number;
+    totalMass: number | null;
+    cloneCompatibility: "compatible" | "incompatible" | "unknown";
+  };
+  sceneBindings: {
+    robotAlias: "robot";
+    resolvedEntities: Array<{
+      managerDomain: "observations" | "actions" | "events" | "rewards" | "terminations" | "commands";
+      termName: string;
+      binding: string;
+      resolved: boolean;
+      details?: string;
+    }>;
+  };
+  managerDomains: Record<string, unknown>;
+  readiness: {
+    validationReady: boolean;
+    launchReady: boolean;
+    blockingCodes: string[];
+    advisoryCodes: string[];
+  };
+};
+
 export type EpisodeRuntimeTraceEntry = {
   eventKind: string;
   phase: string;
