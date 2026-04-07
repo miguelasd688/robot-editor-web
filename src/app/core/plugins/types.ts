@@ -381,6 +381,7 @@ export type TrainingJobSummary = {
   dataset: string;
   epochs: number;
   status: TrainingJobStatus;
+  lifecycleStatus?: TrainingJobStatus;
   progress: number;
   currentEpoch: number;
   loss: number | null;
