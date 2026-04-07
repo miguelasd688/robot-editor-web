@@ -285,6 +285,60 @@ describe("buildTrainingEnvironment", () => {
     expect(Math.abs((rotationQuat?.[3] ?? 0) - Math.SQRT1_2)).toBeLessThan(1e-9);
   });
 
+  it("treats missing scene preparation diagnostics as an empty list", async () => {
+    const snapshot = createEnvironmentSnapshot();
+    const result = await buildTrainingEnvironment({
+      submit: createSubmitInput(),
+      configValues: {
+        taskTemplate: "ant_manager",
+        agentPresetId: "rsl_rl_ppo",
+        robotAssetId: "asset_robot_123",
+        sceneAssetId: "asset_scene_456",
+        environment: {
+          sceneAssetId: "asset_scene_456",
+        },
+      },
+      compiledEnvironment: snapshot,
+      compilationTarget: "training",
+      compilationStats: { nodeCount: 2 },
+      context: {
+        robotUsdKey: "library/robots/ur10/Legacy/ur10.usd",
+        terrainUsdKey: null,
+        terrainMode: "usd",
+      },
+      diagnostics: [],
+      sceneEligibility: {
+        canCreateExperiment: true,
+        robotCount: 1,
+        primaryRobotEntityId: "robot_root",
+        primaryRobotAssetId: "asset_robot_123",
+        robotCandidates: [
+          {
+            entityId: "robot_root",
+            assetId: "asset_robot_123",
+            label: "Robot",
+            sourceKind: "usd",
+          },
+        ],
+      },
+      prepareEditorSceneForTrainingFn: async () => ({
+        status: "ready",
+        sceneAssetId: "asset_scene_456",
+        scenePreparation: {
+          source: "explicit_override",
+          sceneAssetId: "asset_scene_456",
+        },
+        cacheHit: false,
+      }),
+    });
+
+    expect(result.environment.scenePreparation).toMatchObject({
+      source: "explicit_override",
+      sceneAssetId: "asset_scene_456",
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("prefers snapshot-attached training scene asset before composition upload", async () => {
     const snapshot = createEnvironmentSnapshot();
     snapshot.assets.table_asset.trainingAssetId = "asset_scene_from_snapshot";

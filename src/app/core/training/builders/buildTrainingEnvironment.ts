@@ -343,9 +343,10 @@ export async function buildTrainingEnvironment(
       input.submit.dataset ||
       "custom_environment",
   });
+  const preparedSceneDiagnostics = Array.isArray(preparedScene.diagnostics) ? preparedScene.diagnostics : [];
   diagnostics = mergeDiagnostics(
     diagnostics,
-    preparedScene.diagnostics
+    preparedSceneDiagnostics
       .filter((item) => item.severity !== "info")
       .map((item) => ({
         code: item.code,
