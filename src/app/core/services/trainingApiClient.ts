@@ -328,6 +328,7 @@ export type TaskAutocompletePreview = {
   editorSceneContract?: Record<string, unknown>;
   experimentContext?: Record<string, unknown> | null;
   resolvedLaunchPlan?: Record<string, unknown> | null;
+  runtimeAssetManifest?: Record<string, unknown> | null;
   sceneActivation?: Record<string, unknown> | null;
   compatibilitySignature?: Record<string, unknown>;
   authoredProfileContract?: Record<string, unknown> | null;
@@ -1261,6 +1262,11 @@ function normalizeCustomDryRunPreview(input: {
     taskMaterializationSummary,
     launchParitySummary,
     agentInspectorSummary,
+    compiledTaskContractV2: isPlainRecord(parsed.compiledTaskContractV2)
+      ? parsed.compiledTaskContractV2
+      : isPlainRecord(experimentTaskSpec?.compiledTaskContractV2)
+        ? (experimentTaskSpec.compiledTaskContractV2 as Record<string, unknown>)
+        : undefined,
     experimentTaskRegistration: isPlainRecord(parsed.experimentTaskRegistration)
       ? parsed.experimentTaskRegistration
       : undefined,
@@ -1271,6 +1277,11 @@ function normalizeCustomDryRunPreview(input: {
         : undefined,
     editorSceneContract: isPlainRecord(parsed.editorSceneContract) ? parsed.editorSceneContract : undefined,
     resolvedLaunchPlan: isPlainRecord(parsed.resolvedLaunchPlan) ? parsed.resolvedLaunchPlan : null,
+    runtimeAssetManifest: isPlainRecord(parsed.runtimeAssetManifest)
+      ? parsed.runtimeAssetManifest
+      : isPlainRecord((experimentTaskSpec as Record<string, unknown> | undefined)?.runtimeAssetManifest)
+        ? ((experimentTaskSpec as Record<string, unknown>).runtimeAssetManifest as Record<string, unknown>)
+        : undefined,
     sceneActivation: isPlainRecord(parsed.sceneActivation) ? parsed.sceneActivation : null,
     compatibilitySignature: isPlainRecord(parsed.compatibilitySignature)
       ? parsed.compatibilitySignature
