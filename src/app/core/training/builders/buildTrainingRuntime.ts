@@ -8,6 +8,24 @@ import {
   toTextOrEmpty,
 } from "./trainingBuildUtils";
 
+function pickFirstDefinedValue(source: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const value = source[key];
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+  }
+  return undefined;
+}
+
+function toPositiveIntFromAliases(source: Record<string, unknown>, keys: string[]): number | undefined {
+  return toPositiveIntOrUndefined(pickFirstDefinedValue(source, keys));
+}
+
+function toNonNegativeIntFromAliases(source: Record<string, unknown>, keys: string[]): number | undefined {
+  return toNonNegativeIntOrUndefined(pickFirstDefinedValue(source, keys));
+}
+
 export function buildTrainingRuntime(input: {
   maxSteps: number;
   configValues: Record<string, unknown>;
@@ -16,15 +34,15 @@ export function buildTrainingRuntime(input: {
   return {
     backend: "isaac_lab",
     maxSteps: Math.max(1, Math.round(input.maxSteps)),
-    numEnvs: toPositiveIntOrUndefined(input.configValues.numEnvs),
-    checkpoint: toNonNegativeIntOrUndefined(input.configValues.checkpoint),
-    stepsPerEpoch: toPositiveIntOrUndefined(input.configValues.stepsPerEpoch),
+    numEnvs: toPositiveIntFromAliases(input.configValues, ["numEnvs", "num_envs", "numEnv"]),
+    checkpoint: toNonNegativeIntFromAliases(input.configValues, ["checkpoint"]),
+    stepsPerEpoch: toPositiveIntFromAliases(input.configValues, ["stepsPerEpoch", "steps_per_epoch"]),
     videoLengthSec:
-      toPositiveIntOrUndefined(previewValues.videoLengthSec) ??
-      toPositiveIntOrUndefined(input.configValues.videoLengthSec),
-    videoLengthMs: toPositiveIntOrUndefined(previewValues.videoLengthMs),
-    videoLength: toPositiveIntOrUndefined(previewValues.videoLength),
-    videoInterval: toPositiveIntOrUndefined(previewValues.videoInterval),
+      toPositiveIntFromAliases(previewValues, ["videoLengthSec", "video_length_sec", "clipLengthSec", "clip_length_sec"]) ??
+      toPositiveIntFromAliases(input.configValues, ["videoLengthSec", "video_length_sec", "clipLengthSec", "clip_length_sec"]),
+    videoLengthMs: toPositiveIntFromAliases(previewValues, ["videoLengthMs", "video_length_ms"]),
+    videoLength: toPositiveIntFromAliases(previewValues, ["videoLength", "video_length"]),
+    videoInterval: toPositiveIntFromAliases(previewValues, ["videoInterval", "video_interval"]),
     baseConstraintMode:
       toTextOrEmpty(input.configValues.baseConstraintMode) === "fix_base"
         ? "fix_base"

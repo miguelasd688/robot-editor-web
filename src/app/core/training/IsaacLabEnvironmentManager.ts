@@ -18,6 +18,16 @@ import {
   toTextOrEmpty,
 } from "./builders/trainingBuildUtils";
 
+function resolvePositiveIntAlias(source: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) continue;
+    return Math.max(1, Math.round(parsed));
+  }
+  return undefined;
+}
+
 export type {
   BuildCustomTaskRequestInput,
   CustomTrainingTaskBuildResult,
@@ -42,7 +52,17 @@ export class IsaacLabEnvironmentManager {
       toTextOrEmpty(configValues.experimentName) ||
       input.submit.modelName ||
       "custom-experiment";
-    const maxSteps = Math.max(1, Math.round(input.submit.maxSteps ?? input.submit.epochs));
+    const maxSteps =
+      resolvePositiveIntAlias(configValues, [
+        "numberEpisodes",
+        "number_episodes",
+        "numberOfEpisodes",
+        "maxSteps",
+        "max_steps",
+        "epochs",
+      ]) ??
+      resolvePositiveIntAlias(input.submit as unknown as Record<string, unknown>, ["maxSteps", "epochs"]) ??
+      1;
     const sceneEligibility = deriveSceneTrainingEligibility(compiled);
     const builtEnvironment = await buildTrainingEnvironment({
       submit: input.submit,

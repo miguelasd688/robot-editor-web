@@ -315,4 +315,22 @@ describe("IsaacLabEnvironmentManager", () => {
     expect(result.request.editorSceneContract?.baseTaskId).toBe("isaaclab.ant.manager.v1");
     expect(result.diagnostics.map((item) => item.code)).toEqual(["ENV_WARN"]);
   });
+
+  it("derives runtime maxSteps from number_episodes aliases", async () => {
+    const manager = new IsaacLabEnvironmentManager();
+
+    await manager.buildCustomTaskRequest({
+      submit: createSubmitInput(),
+      config: {
+        dryRun: true,
+        number_episodes: 640,
+      },
+    });
+
+    expect(buildTrainingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(buildTrainingRuntimeMock).toHaveBeenCalledWith({
+      maxSteps: 640,
+      configValues: { dryRun: true, number_episodes: 640 },
+    });
+  });
 });

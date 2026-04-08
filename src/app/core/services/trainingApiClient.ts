@@ -1184,6 +1184,24 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function readPositiveIntFromRecord(source: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const parsed = Number(source[key]);
+    if (!Number.isFinite(parsed)) continue;
+    return Math.max(1, Math.round(parsed));
+  }
+  return undefined;
+}
+
+function readNonNegativeIntFromRecord(source: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const parsed = Number(source[key]);
+    if (!Number.isFinite(parsed)) continue;
+    return Math.max(0, Math.round(parsed));
+  }
+  return undefined;
+}
+
 function toStageUpAxis(value: unknown): StageUpAxis {
   const token = String(value ?? "").trim().toUpperCase();
   if (token === "X" || token === "Y" || token === "Z") return token;
@@ -1500,6 +1518,7 @@ export async function submitTrainingTaskRemote(
   }
 
   const legacy = input as TaskAutocompleteRequest;
+  const legacyRecord = legacy as unknown as Record<string, unknown>;
   const resolvedRobotAssetId = String(legacy.robotAssetId ?? legacy.rootAssetId ?? "").trim();
   const taskTemplate = String(legacy.taskTemplate ?? "").trim();
   const task = String(legacy.task ?? "").trim() || taskTemplate || "custom_manager";
@@ -1508,9 +1527,8 @@ export async function submitTrainingTaskRemote(
   const tenantId = String(legacy.tenantId ?? "").trim();
   const experimentName = String(legacy.experimentName ?? "").trim();
   const maxSteps =
-    typeof legacy.maxSteps === "number" && Number.isFinite(legacy.maxSteps)
-      ? Math.max(1, Math.round(legacy.maxSteps))
-      : 256;
+    readPositiveIntFromRecord(legacyRecord, ["maxSteps", "numberEpisodes", "number_episodes", "numberOfEpisodes"]) ??
+    256;
   const payload: Record<string, unknown> = {
     environment: {
       id: taskTemplate || task,
@@ -1531,34 +1549,16 @@ export async function submitTrainingTaskRemote(
     runtime: {
       backend: "isaac_lab",
       maxSteps,
-      numEnvs:
-        typeof legacy.numEnvs === "number" && Number.isFinite(legacy.numEnvs)
-          ? Math.max(1, Math.round(legacy.numEnvs))
-          : undefined,
-      checkpoint:
-        typeof legacy.checkpoint === "number" && Number.isFinite(legacy.checkpoint)
-          ? Math.max(0, Math.round(legacy.checkpoint))
-          : undefined,
-      stepsPerEpoch:
-        typeof legacy.stepsPerEpoch === "number" && Number.isFinite(legacy.stepsPerEpoch)
-          ? Math.max(1, Math.round(legacy.stepsPerEpoch))
-          : undefined,
-      videoLengthSec:
-        typeof legacy.videoLengthSec === "number" && Number.isFinite(legacy.videoLengthSec)
-          ? Math.max(1, Math.round(legacy.videoLengthSec))
-          : undefined,
-      videoLengthMs:
-        typeof legacy.videoLengthMs === "number" && Number.isFinite(legacy.videoLengthMs)
-          ? Math.max(1, Math.round(legacy.videoLengthMs))
-          : undefined,
-      videoLength:
-        typeof legacy.videoLength === "number" && Number.isFinite(legacy.videoLength)
-          ? Math.max(1, Math.round(legacy.videoLength))
-          : undefined,
-      videoInterval:
-        typeof legacy.videoInterval === "number" && Number.isFinite(legacy.videoInterval)
-          ? Math.max(1, Math.round(legacy.videoInterval))
-          : undefined,
+      numEnvs: readPositiveIntFromRecord(legacyRecord, ["numEnvs", "num_envs", "numEnv"]),
+      checkpoint: readNonNegativeIntFromRecord(legacyRecord, ["checkpoint"]),
+      stepsPerEpoch: readPositiveIntFromRecord(legacyRecord, ["stepsPerEpoch", "steps_per_epoch"]),
+      videoLengthSec: readPositiveIntFromRecord(
+        legacyRecord,
+        ["videoLengthSec", "video_length_sec", "clipLengthSec", "clip_length_sec"]
+      ),
+      videoLengthMs: readPositiveIntFromRecord(legacyRecord, ["videoLengthMs", "video_length_ms"]),
+      videoLength: readPositiveIntFromRecord(legacyRecord, ["videoLength", "video_length"]),
+      videoInterval: readPositiveIntFromRecord(legacyRecord, ["videoInterval", "video_interval"]),
       baseConstraintMode:
         legacy.baseConstraintMode === "fix_base" || legacy.baseConstraintMode === "source_weld"
           ? legacy.baseConstraintMode
