@@ -222,6 +222,71 @@ function createGeneratedTerrainAsset(assetId: string, node: SceneNode): Environm
   };
 }
 
+function isReferenceEnvironmentEntityKind(kind: EnvironmentEntityKind): boolean {
+  return kind === "terrain" || kind === "scene_asset";
+}
+
+function isReferenceEnvironmentRoot(
+  entity: EnvironmentEntity,
+  entities: Record<string, EnvironmentEntity>
+): boolean {
+  if (!isReferenceEnvironmentEntityKind(entity.kind)) return false;
+  const parent = entity.parentId ? entities[entity.parentId] : null;
+  if (!parent || !isReferenceEnvironmentEntityKind(parent.kind)) return true;
+  const parentSourceAssetId = toOptionalText(parent.sourceAssetId);
+  const sourceAssetId = toOptionalText(entity.sourceAssetId);
+  return !parentSourceAssetId || !sourceAssetId || parentSourceAssetId !== sourceAssetId;
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function mergeReferenceEnvironment(input: {
+  previous?: EnvironmentDoc;
+  assets: Record<string, EnvironmentAsset>;
+  entities: Record<string, EnvironmentEntity>;
+  roots: string[];
+}): void {
+  const previous = input.previous;
+  if (!previous) return;
+
+  const previousAssets = asRecord(previous.assets) as Record<string, EnvironmentAsset>;
+  const previousEntities = asRecord(previous.entities) as Record<string, EnvironmentEntity>;
+  const copied = new Set<string>();
+
+  const copySubtree = (entityId: string): void => {
+    if (copied.has(entityId) || input.entities[entityId]) return;
+    const previousEntity = previousEntities[entityId];
+    if (!previousEntity) return;
+    copied.add(entityId);
+
+    const sourceAssetId = toOptionalText(previousEntity.sourceAssetId);
+    if (sourceAssetId && previousAssets[sourceAssetId] && !input.assets[sourceAssetId]) {
+      input.assets[sourceAssetId] = cloneJson(previousAssets[sourceAssetId]);
+    }
+
+    input.entities[entityId] = cloneJson(previousEntity);
+    for (const childId of safeArray(previousEntity.children)) {
+      copySubtree(childId);
+    }
+  };
+
+  const candidateIds = [...safeArray(previous.roots), ...Object.keys(previousEntities)];
+  for (const entityId of candidateIds) {
+    const previousEntity = previousEntities[entityId];
+    if (!previousEntity || !isReferenceEnvironmentRoot(previousEntity, previousEntities)) continue;
+    if (input.entities[entityId]) {
+      if (!input.roots.includes(entityId)) input.roots.push(entityId);
+      continue;
+    }
+    copySubtree(entityId);
+    if (input.entities[entityId] && !input.roots.includes(entityId)) {
+      input.roots.push(entityId);
+    }
+  }
+}
+
 function createEntityFromNode(
   node: SceneNode,
   kind: EnvironmentEntityKind,
@@ -433,6 +498,7 @@ function buildEnvironmentFromProjectDoc(doc: ProjectDoc, previous?: EnvironmentD
   const directSourceAssetIdByNode = new Map<string, string>();
   const kindMemo = new Map<string, EnvironmentEntityKind>();
   const nodesById = doc.scene.nodes;
+  const sceneRootIds = safeArray(doc.scene.roots);
 
   for (const nodeId of Object.keys(nodesById)) {
     classifyNodeKind({
@@ -498,12 +564,21 @@ function buildEnvironmentFromProjectDoc(doc: ProjectDoc, previous?: EnvironmentD
     }
   };
 
-  for (const rootId of safeArray(doc.scene.roots)) {
+  for (const rootId of sceneRootIds) {
     visitNode(rootId, null);
   }
   for (const nodeId of Object.keys(nodesById)) {
     if (!visited.has(nodeId)) visitNode(nodeId, null);
   }
+
+  const roots = sceneRootIds.filter((rootId) => Boolean(entities[rootId]));
+
+  mergeReferenceEnvironment({
+    previous,
+    assets,
+    entities,
+    roots,
+  });
 
   const legacySources = asRecord(doc.sources);
   const legacyUrdf = String(legacySources.urdf ?? "").trim();
@@ -571,7 +646,7 @@ function buildEnvironmentFromProjectDoc(doc: ProjectDoc, previous?: EnvironmentD
     version: 1,
     assets,
     entities,
-    roots: safeArray(doc.scene.roots).filter((rootId) => Boolean(entities[rootId])),
+    roots,
     simulation,
     trainingHints: previous?.trainingHints,
     diagnostics: [...preservedDiagnostics, ...documentDiagnostics],
