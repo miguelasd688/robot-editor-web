@@ -724,6 +724,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             );
           }
           const customTaskRequest = customTaskBuild.request;
+          useTrainingImportContextStore.getState().setCompiledTrainingEnvironment(customTaskRequest.environment);
           const taskResponse = await submitTrainingTaskRemoteWithResponse(customTaskRequest);
           if (taskResponse.status !== 202) {
             throw new Error(`Training API ${taskResponse.status}: launch was not accepted.`);

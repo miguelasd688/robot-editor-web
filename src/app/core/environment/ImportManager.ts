@@ -56,6 +56,7 @@ export type ImportExecutionPlan = {
     posePolicy?: "auto" | "prefer_frame_pair" | "prefer_mjcf";
   };
   options: Partial<UsdImportOptions>;
+  robotTransform?: ImportRootTransform;
   environmentId?: string | null;
   environmentOverrideActive?: boolean;
   replaceFullScene: boolean;
@@ -493,6 +494,9 @@ export class ImportManager {
         runtimeBuildReport: null,
         replacedRoots,
       };
+    }
+    if (robotImport.rootId && plan.robotTransform) {
+      applyImportedRootTransform(robotImport.rootId, plan.robotTransform);
     }
 
     for (const action of plan.actions) {

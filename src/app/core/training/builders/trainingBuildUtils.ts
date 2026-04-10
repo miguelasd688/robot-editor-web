@@ -1,5 +1,13 @@
-import type { EnvironmentDiagnostic, EnvironmentDoc } from "../../editor/document/types";
+import * as THREE from "three";
+import type { EnvironmentDiagnostic, EnvironmentDoc, ProjectDoc } from "../../editor/document/types";
+import { environmentCompilationManager } from "../../environment/EnvironmentCompilationManager";
 import type { CustomTrainingEnvironmentPlacement } from "./trainingRequestTypes";
+
+export type TrainingPlacementTransform = {
+  position?: { x: number; y: number; z: number };
+  rotationDeg?: { x: number; y: number; z: number };
+  scale?: { x: number; y: number; z: number };
+};
 
 export function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -220,4 +228,284 @@ export function buildTrainingPlacementsFromSnapshot(
 
   placements.sort((a, b) => a.entityId.localeCompare(b.entityId));
   return placements;
+}
+
+function normalizeWorkspaceKey(value: unknown): string {
+  return typeof value === "string" ? value.trim().replace(/\\/g, "/").replace(/^\/+/, "") : "";
+}
+
+function toPlacementArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item && typeof item === "object" && !Array.isArray(item)) as Array<
+    Record<string, unknown>
+  >;
+}
+
+function quaternionToEulerDegreesXYZ(rotationQuat: unknown): TrainingPlacementTransform["rotationDeg"] | undefined {
+  if (!Array.isArray(rotationQuat) || rotationQuat.length < 4) return undefined;
+  const x = Number(rotationQuat[0]);
+  const y = Number(rotationQuat[1]);
+  const z = Number(rotationQuat[2]);
+  const w = Number(rotationQuat[3]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(w)) return undefined;
+  const quaternion = new THREE.Quaternion(x, y, z, w);
+  const euler = new THREE.Euler().setFromQuaternion(quaternion, "XYZ");
+  const rad2deg = 180 / Math.PI;
+  return {
+    x: euler.x * rad2deg,
+    y: euler.y * rad2deg,
+    z: euler.z * rad2deg,
+  };
+}
+
+function placementToTrainingPlacementTransform(placement: Record<string, unknown>): TrainingPlacementTransform | undefined {
+  const localTransform = toObjectOrEmpty(placement.localTransform);
+  const translation = Array.isArray(localTransform.translation) ? localTransform.translation : [];
+  const rotationQuat = Array.isArray(localTransform.rotationQuat) ? localTransform.rotationQuat : [];
+  const scale = Array.isArray(localTransform.scale) ? localTransform.scale : [];
+  const hasPosition = translation.some((value) => Number.isFinite(Number(value)));
+  const hasScale = scale.some((value) => Number.isFinite(Number(value)));
+  const rotationDeg = quaternionToEulerDegreesXYZ(rotationQuat);
+  const hasRotation = Boolean(rotationDeg);
+
+  if (!hasPosition && !hasRotation && !hasScale) return undefined;
+
+  return {
+    ...(hasPosition
+      ? {
+          position: {
+            x: toFiniteNumber(translation[0], 0),
+            y: toFiniteNumber(translation[1], 0),
+            z: toFiniteNumber(translation[2], 0),
+          },
+        }
+      : {}),
+    ...(rotationDeg ? { rotationDeg } : {}),
+    ...(hasScale
+      ? {
+          scale: {
+            x: toFiniteNumber(scale[0], 1),
+            y: toFiniteNumber(scale[1], 1),
+            z: toFiniteNumber(scale[2], 1),
+          },
+        }
+      : {}),
+  };
+}
+
+function resolvePlacementFromContainer(input: {
+  container: unknown;
+  primaryRobotEntityId: string;
+  primaryRobotAssetId: string;
+  robotUsdKey: string;
+}): TrainingPlacementTransform | undefined {
+  const container = toObjectOrEmpty(input.container);
+  const placements = toPlacementArray(container.placements);
+  if (placements.length === 0) return undefined;
+
+  for (const placement of placements) {
+    const entityId = toTextOrEmpty(placement.entityId);
+    const sourceAssetId = toTextOrEmpty(placement.sourceAssetId);
+    if (input.primaryRobotEntityId && entityId === input.primaryRobotEntityId) {
+      return placementToTrainingPlacementTransform(placement);
+    }
+    if (input.primaryRobotAssetId && sourceAssetId === input.primaryRobotAssetId) {
+      return placementToTrainingPlacementTransform(placement);
+    }
+    if (input.robotUsdKey && sourceAssetId === input.robotUsdKey) {
+      return placementToTrainingPlacementTransform(placement);
+    }
+  }
+
+  return undefined;
+}
+
+function resolvePrimaryRobotIdentifiersFromCompiledEnvironment(input: {
+  compiledTrainingEnvironment: Record<string, unknown>;
+  snapshot: EnvironmentDoc | null;
+}): {
+  primaryRobotEntityId: string;
+  primaryRobotAssetId: string;
+} {
+  const environment = input.compiledTrainingEnvironment;
+  const editorSceneContract = toObjectOrEmpty(environment.editorSceneContract);
+  const primaryRobot = toObjectOrEmpty(editorSceneContract.primaryRobot);
+  const controlPolicy = toObjectOrEmpty(environment.controlPolicy);
+  const metadata = toObjectOrEmpty(environment.metadata);
+  const snapshotEntities =
+    input.snapshot && typeof input.snapshot.entities === "object" && input.snapshot.entities
+      ? (input.snapshot.entities as Record<string, Record<string, unknown>>)
+      : {};
+
+  const primaryRobotEntityId =
+    toTextOrEmpty(primaryRobot.entityId) ||
+    toTextOrEmpty(controlPolicy.primaryRobotEntityId) ||
+    toTextOrEmpty(environment.primaryRobotEntityId) ||
+    toTextOrEmpty(metadata.primaryRobotEntityId);
+  const primaryRobotAssetId =
+    toTextOrEmpty(primaryRobot.assetId) ||
+    toTextOrEmpty(controlPolicy.primaryRobotAssetId) ||
+    toTextOrEmpty(environment.robotAssetId) ||
+    toTextOrEmpty(metadata.primaryRobotAssetId);
+
+  if (primaryRobotEntityId || primaryRobotAssetId) {
+    return {
+      primaryRobotEntityId,
+      primaryRobotAssetId,
+    };
+  }
+
+  for (const entity of Object.values(snapshotEntities)) {
+    if (!entity || typeof entity !== "object" || Array.isArray(entity)) continue;
+    const record = entity as Record<string, unknown>;
+    if (toTextOrEmpty(record.kind).toLowerCase() !== "robot") continue;
+    return {
+      primaryRobotEntityId: toTextOrEmpty(record.id),
+      primaryRobotAssetId: toTextOrEmpty(record.sourceAssetId),
+    };
+  }
+
+  return {
+    primaryRobotEntityId: "",
+    primaryRobotAssetId: "",
+  };
+}
+
+function transformToTrainingPlacementTransform(transform: unknown): TrainingPlacementTransform | undefined {
+  const record = toObjectOrEmpty(transform);
+  const position = toObjectOrEmpty(record.position);
+  const rotation = toObjectOrEmpty(record.rotation);
+  const scale = toObjectOrEmpty(record.scale);
+  const hasPosition =
+    typeof position.x === "number" || typeof position.y === "number" || typeof position.z === "number";
+  const hasRotation =
+    typeof rotation.x === "number" || typeof rotation.y === "number" || typeof rotation.z === "number";
+  const hasScale = typeof scale.x === "number" || typeof scale.y === "number" || typeof scale.z === "number";
+
+  if (!hasPosition && !hasRotation && !hasScale) return undefined;
+
+  return {
+    ...(hasPosition
+      ? {
+          position: {
+            x: toFiniteNumber(position.x, 0),
+            y: toFiniteNumber(position.y, 0),
+            z: toFiniteNumber(position.z, 0),
+          },
+        }
+      : {}),
+    ...(hasRotation
+      ? {
+          rotationDeg: {
+            x: toFiniteNumber(rotation.x, 0),
+            y: toFiniteNumber(rotation.y, 0),
+            z: toFiniteNumber(rotation.z, 0),
+          },
+        }
+      : {}),
+    ...(hasScale
+      ? {
+          scale: {
+            x: toFiniteNumber(scale.x, 1),
+            y: toFiniteNumber(scale.y, 1),
+            z: toFiniteNumber(scale.z, 1),
+          },
+        }
+      : {}),
+  };
+}
+
+export function resolvePrimaryRobotImportTransformFromSnapshot(input: {
+  snapshot: EnvironmentDoc | null;
+  robotUsdKey?: string | null;
+}): TrainingPlacementTransform | undefined {
+  const snapshot = input.snapshot;
+  if (!snapshot || !snapshot.entities || typeof snapshot.entities !== "object") return undefined;
+
+  const robotUsdKey = normalizeWorkspaceKey(input.robotUsdKey);
+  const robotEntities = Object.values(snapshot.entities)
+    .filter((entity) => Boolean(entity) && typeof entity === "object" && !Array.isArray(entity))
+    .map((entity) => entity as Record<string, unknown>)
+    .filter((entity) => toTextOrEmpty(entity.kind).toLowerCase() === "robot");
+
+  if (robotEntities.length === 0) return undefined;
+
+  const resolveAssetKeys = (entity: Record<string, unknown>) => {
+    const keys = new Set<string>();
+    const sourceAssetId = toTextOrEmpty(entity.sourceAssetId);
+    if (sourceAssetId) {
+      keys.add(normalizeWorkspaceKey(sourceAssetId));
+      const asset = snapshot.assets && typeof snapshot.assets === "object" ? (snapshot.assets as Record<string, unknown>)[sourceAssetId] : undefined;
+      if (asset && typeof asset === "object" && !Array.isArray(asset)) {
+        const assetRecord = asset as Record<string, unknown>;
+        keys.add(normalizeWorkspaceKey(assetRecord.workspaceKey));
+        keys.add(normalizeWorkspaceKey(assetRecord.converterAssetId));
+        keys.add(normalizeWorkspaceKey(assetRecord.trainingAssetId));
+        keys.add(normalizeWorkspaceKey(assetRecord.usdKey));
+      }
+    }
+    return Array.from(keys).filter((item) => item.length > 0);
+  };
+
+  const matchedByKey =
+    robotUsdKey.length > 0
+      ? robotEntities.find((entity) => resolveAssetKeys(entity).some((item) => item === robotUsdKey))
+      : undefined;
+  const matched = matchedByKey ?? (robotEntities.length === 1 ? robotEntities[0] : robotEntities.find((entity) => entity.parentId === null)) ?? robotEntities[0];
+  return transformToTrainingPlacementTransform(matched.transform);
+}
+
+export function resolvePrimaryRobotImportTransformFromTrainingArtifacts(input: {
+  snapshot: EnvironmentDoc | null;
+  robotUsdKey?: string | null;
+  compiledTrainingEnvironment?: Record<string, unknown> | null;
+}): TrainingPlacementTransform | undefined {
+  const robotUsdKey = normalizeWorkspaceKey(input.robotUsdKey);
+  const compiledTrainingEnvironment =
+    input.compiledTrainingEnvironment && typeof input.compiledTrainingEnvironment === "object" && !Array.isArray(input.compiledTrainingEnvironment)
+      ? (input.compiledTrainingEnvironment as Record<string, unknown>)
+      : null;
+
+  if (compiledTrainingEnvironment) {
+    const identifiers = resolvePrimaryRobotIdentifiersFromCompiledEnvironment({
+      compiledTrainingEnvironment,
+      snapshot: input.snapshot,
+    });
+
+    const scenePreparation = toObjectOrEmpty(compiledTrainingEnvironment.scenePreparation);
+    const placements = [
+      scenePreparation.placements,
+      compiledTrainingEnvironment.placements,
+      toObjectOrEmpty(compiledTrainingEnvironment.editorSceneContract).placements,
+    ];
+    for (const placementSource of placements) {
+      const resolved = resolvePlacementFromContainer({
+        container: { placements: placementSource },
+        primaryRobotEntityId: identifiers.primaryRobotEntityId,
+        primaryRobotAssetId: identifiers.primaryRobotAssetId,
+        robotUsdKey,
+      });
+      if (resolved) return resolved;
+    }
+  }
+
+  return resolvePrimaryRobotImportTransformFromSnapshot({
+    snapshot: input.snapshot,
+    robotUsdKey,
+  });
+}
+
+export function resolvePrimaryRobotImportTransformFromProjectDoc(input: {
+  projectDoc: ProjectDoc | null;
+  robotUsdKey?: string | null;
+}): TrainingPlacementTransform | undefined {
+  if (!input.projectDoc) return undefined;
+  const compiled = environmentCompilationManager.compileProjectDoc({
+    doc: input.projectDoc,
+    target: "training",
+  });
+  return resolvePrimaryRobotImportTransformFromSnapshot({
+    snapshot: compiled.environment,
+    robotUsdKey: input.robotUsdKey,
+  });
 }

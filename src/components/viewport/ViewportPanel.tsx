@@ -42,6 +42,10 @@ import {
 } from "../asset-library/libraryAssetPacks";
 import { importManager, type ImportExecutionAction } from "../../app/core/environment/ImportManager";
 import { environmentDocumentManager } from "../../app/core/environment/EnvironmentDocumentManager";
+import {
+  resolvePrimaryRobotImportTransformFromProjectDoc,
+  resolvePrimaryRobotImportTransformFromTrainingArtifacts,
+} from "../../app/core/training/builders/trainingBuildUtils";
 
 const pointerPointFromRay = (ray: { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } }, depth: number) => ({
   x: ray.origin.x + ray.direction.x * depth,
@@ -1070,6 +1074,18 @@ export default function ViewportPanel() {
       );
       if (!approved) return;
     }
+    const robotTransform =
+      selectedEnvironment !== null
+        ? resolvePrimaryRobotImportTransformFromTrainingArtifacts({
+            snapshot: useTrainingImportContextStore.getState().environmentSnapshot,
+            robotUsdKey: selectedUsdKey,
+            compiledTrainingEnvironment: useTrainingImportContextStore.getState().compiledTrainingEnvironment,
+          }) ??
+          resolvePrimaryRobotImportTransformFromProjectDoc({
+            projectDoc: editorEngine.getDoc(),
+            robotUsdKey: selectedUsdKey,
+          })
+        : undefined;
     setUSD(selectedUsdKey);
     setUSDOptions(resolvedImportOptions);
     closeUsdImportDialog();
@@ -1155,6 +1171,7 @@ export default function ViewportPanel() {
       robotBundleHintPaths,
       robotVariantImportHints,
       options: resolvedImportOptions satisfies UsdImportOptions,
+      robotTransform,
       environmentId: selectedEnvironment?.id ?? null,
       environmentOverrideActive,
       replaceFullScene: shouldReplaceFullScene,
@@ -1186,6 +1203,7 @@ export default function ViewportPanel() {
       terrainUsdKey: executionResult.terrainUsdKey,
       terrainMode: executionResult.terrainMode,
       environmentSnapshot: executionResult.environment,
+      compiledTrainingEnvironment: null,
       diagnostics,
     });
     logInfo("Viewport USD import confirmed", {
@@ -1237,6 +1255,7 @@ export default function ViewportPanel() {
         terrainUsdKey: null,
         terrainMode: "none",
         environmentSnapshot: result.environment,
+        compiledTrainingEnvironment: null,
         diagnostics: result.diagnostics,
       });
     } else {

@@ -95,6 +95,7 @@ function buildScenePreparationPayload(input: {
   sourceAssetId?: string;
   entityId?: string;
   compositionSignature?: string;
+  placements?: CustomTrainingEnvironmentPlacement[];
 }) {
   return {
     source: input.source,
@@ -108,6 +109,7 @@ function buildScenePreparationPayload(input: {
     ...(input.entryPath ? { entryPath: input.entryPath } : {}),
     ...(input.sourceAssetId ? { sourceAssetId: input.sourceAssetId } : {}),
     ...(input.entityId ? { entityId: input.entityId } : {}),
+    ...(Array.isArray(input.placements) && input.placements.length > 0 ? { placements: cloneJson(input.placements) } : {}),
   };
 }
 
@@ -157,6 +159,7 @@ export async function prepareEditorSceneForTraining(
         sceneAssetId: explicitSceneAssetId,
         fingerprint: preservedFingerprint || undefined,
         cacheHit: false,
+        placements,
       }),
     };
     return {
@@ -181,6 +184,7 @@ export async function prepareEditorSceneForTraining(
         cacheHit: false,
         sourceAssetId: sceneAssetIdFromSnapshot.sourceAssetId,
         entityId: sceneAssetIdFromSnapshot.entityId,
+        placements,
       }),
     };
     return {
@@ -243,6 +247,7 @@ export async function prepareEditorSceneForTraining(
         cacheHit: false,
         sourceCount,
         entityCount,
+        placements,
       }),
       diagnostics: [
         ...diagnostics,
@@ -265,6 +270,7 @@ export async function prepareEditorSceneForTraining(
         cacheHit: false,
         sourceCount,
         entityCount,
+        placements,
       }),
       diagnostics,
     });
@@ -282,6 +288,7 @@ export async function prepareEditorSceneForTraining(
         cacheHit: true,
         sourceCount,
         entityCount,
+        placements,
       }),
     };
     return {
@@ -329,6 +336,7 @@ export async function prepareEditorSceneForTraining(
     sourceCount: sceneComposition.sourceCount,
     entityCount: sceneComposition.entityCount,
     entryPath: sceneComposition.entryPath,
+    placements,
   });
   setCachedSceneCompositionFn(sceneComposition.signature, {
     sceneAssetId: sceneComposition.sceneAssetId,

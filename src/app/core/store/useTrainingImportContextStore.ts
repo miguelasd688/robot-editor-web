@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { EnvironmentDiagnostic, EnvironmentDoc } from "../editor/document/types";
+import type { CustomTrainingEnvironmentPayload } from "../training/builders/trainingRequestTypes";
 
 export type TrainingTerrainMode = "none" | "usd" | "plane" | "generator";
 
@@ -8,17 +9,20 @@ type TrainingImportContextState = {
   terrainUsdKey: string | null;
   terrainMode: TrainingTerrainMode;
   environmentSnapshot: EnvironmentDoc | null;
+  compiledTrainingEnvironment: CustomTrainingEnvironmentPayload | null;
   diagnostics: EnvironmentDiagnostic[];
   setRobotUsdKey: (usdKey: string | null) => void;
   setTerrainUsdKey: (usdKey: string | null) => void;
   setTerrainMode: (mode: TrainingTerrainMode | null | undefined) => void;
   setEnvironmentSnapshot: (snapshot: EnvironmentDoc | null) => void;
+  setCompiledTrainingEnvironment: (environment: CustomTrainingEnvironmentPayload | null) => void;
   setDiagnostics: (diagnostics: EnvironmentDiagnostic[] | null | undefined) => void;
   setImportContext: (input: {
     robotUsdKey?: string | null;
     terrainUsdKey?: string | null;
     terrainMode?: TrainingTerrainMode | null;
     environmentSnapshot?: EnvironmentDoc | null;
+    compiledTrainingEnvironment?: CustomTrainingEnvironmentPayload | null;
     diagnostics?: EnvironmentDiagnostic[] | null;
   }) => void;
   clear: () => void;
@@ -69,31 +73,47 @@ function cloneEnvironmentSnapshot(snapshot: EnvironmentDoc | null | undefined): 
   return JSON.parse(JSON.stringify(snapshot)) as EnvironmentDoc;
 }
 
+function cloneCompiledTrainingEnvironment(
+  environment: CustomTrainingEnvironmentPayload | null | undefined
+): CustomTrainingEnvironmentPayload | null {
+  if (!environment) return null;
+  return JSON.parse(JSON.stringify(environment)) as CustomTrainingEnvironmentPayload;
+}
+
 export const useTrainingImportContextStore = create<TrainingImportContextState>((set) => ({
   robotUsdKey: null,
   terrainUsdKey: null,
   terrainMode: "none",
   environmentSnapshot: null,
+  compiledTrainingEnvironment: null,
   diagnostics: [],
   setRobotUsdKey: (usdKey) => set({ robotUsdKey: normalizeKey(usdKey) }),
   setTerrainUsdKey: (usdKey) => set({ terrainUsdKey: normalizeKey(usdKey) }),
   setTerrainMode: (mode) => set({ terrainMode: normalizeTerrainMode(mode) }),
   setEnvironmentSnapshot: (snapshot) => set({ environmentSnapshot: cloneEnvironmentSnapshot(snapshot) }),
+  setCompiledTrainingEnvironment: (environment) =>
+    set({ compiledTrainingEnvironment: cloneCompiledTrainingEnvironment(environment) }),
   setDiagnostics: (diagnostics) => set({ diagnostics: normalizeDiagnostics(diagnostics) }),
   setImportContext: (input) =>
-    set({
+    set((state) => ({
+      ...state,
       robotUsdKey: normalizeKey(input.robotUsdKey),
       terrainUsdKey: normalizeKey(input.terrainUsdKey),
       terrainMode: normalizeTerrainMode(input.terrainMode),
       environmentSnapshot: cloneEnvironmentSnapshot(input.environmentSnapshot),
+      compiledTrainingEnvironment:
+        input.compiledTrainingEnvironment === undefined
+          ? state.compiledTrainingEnvironment
+          : cloneCompiledTrainingEnvironment(input.compiledTrainingEnvironment),
       diagnostics: normalizeDiagnostics(input.diagnostics),
-    }),
+    })),
   clear: () =>
     set({
       robotUsdKey: null,
       terrainUsdKey: null,
       terrainMode: "none",
       environmentSnapshot: null,
+      compiledTrainingEnvironment: null,
       diagnostics: [],
     }),
 }));

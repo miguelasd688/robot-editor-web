@@ -9,9 +9,6 @@ def Xform "flat_floor"
 {
     def Xform "base"
     {
-        double3 xformOp:translate = (0, 0, -0.6)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Mesh "ground_mesh" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
@@ -25,7 +22,7 @@ def Xform "flat_floor"
             int[] faceVertexCounts = [3, 3]
             int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
             normal3f[] normals = [(0, 0, 1)]
-            point3f[] points = [(-3, -3, 0), (3, -3, 0), (3, 3, 0), (-3, 3, 0)]
+            point3f[] points = [(-30, -30, 0), (30, -30, 0), (30, 30, 0), (-30, 30, 0)]
             uniform token subdivisionScheme = "none"
         }
     }
