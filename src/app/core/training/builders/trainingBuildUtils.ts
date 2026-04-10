@@ -366,6 +366,16 @@ function placementToTrainingPlacementTransform(placement: Record<string, unknown
   };
 }
 
+function isAntRobotWorkspaceKey(robotUsdKey: string): boolean {
+  const normalized = normalizeWorkspaceKey(robotUsdKey).toLowerCase();
+  return (
+    normalized === "ant.usd" ||
+    normalized.endsWith("/ant.usd") ||
+    normalized.endsWith("/ant_instanceable.usd") ||
+    normalized.includes("/robots/ant/")
+  );
+}
+
 function resolvePlacementFromContainer(input: {
   container: unknown;
   primaryRobotEntityId: string;
@@ -493,7 +503,11 @@ export function resolvePrimaryRobotImportTransformFromSnapshot(input: {
   robotUsdKey?: string | null;
 }): TrainingPlacementTransform | undefined {
   const snapshot = input.snapshot;
-  if (!snapshot || !snapshot.entities || typeof snapshot.entities !== "object") return undefined;
+  if (!snapshot || !snapshot.entities || typeof snapshot.entities !== "object") {
+    return isAntRobotWorkspaceKey(input.robotUsdKey ?? "")
+      ? { position: { x: 0, y: 0, z: 1 } }
+      : undefined;
+  }
 
   const robotUsdKey = normalizeWorkspaceKey(input.robotUsdKey);
   const robotEntities = Object.values(snapshot.entities)
@@ -525,7 +539,9 @@ export function resolvePrimaryRobotImportTransformFromSnapshot(input: {
       ? robotEntities.find((entity) => resolveAssetKeys(entity).some((item) => item === robotUsdKey))
       : undefined;
   const matched = matchedByKey ?? (robotEntities.length === 1 ? robotEntities[0] : robotEntities.find((entity) => entity.parentId === null)) ?? robotEntities[0];
-  return transformToTrainingPlacementTransform(matched.transform);
+  const resolved = transformToTrainingPlacementTransform(matched.transform);
+  if (resolved) return resolved;
+  return isAntRobotWorkspaceKey(input.robotUsdKey ?? "") ? { position: { x: 0, y: 0, z: 1 } } : undefined;
 }
 
 export function resolvePrimaryRobotImportTransformFromTrainingArtifacts(input: {
@@ -562,10 +578,11 @@ export function resolvePrimaryRobotImportTransformFromTrainingArtifacts(input: {
     }
   }
 
-  return resolvePrimaryRobotImportTransformFromSnapshot({
+  const resolved = resolvePrimaryRobotImportTransformFromSnapshot({
     snapshot: input.snapshot,
     robotUsdKey,
   });
+  return resolved;
 }
 
 export function resolvePrimaryRobotImportTransformFromProjectDoc(input: {
@@ -577,8 +594,9 @@ export function resolvePrimaryRobotImportTransformFromProjectDoc(input: {
     doc: input.projectDoc,
     target: "training",
   });
-  return resolvePrimaryRobotImportTransformFromSnapshot({
+  const resolved = resolvePrimaryRobotImportTransformFromSnapshot({
     snapshot: compiled.environment,
     robotUsdKey: input.robotUsdKey,
   });
+  return resolved;
 }

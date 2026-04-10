@@ -86,14 +86,19 @@ function shouldApplyAntSpawnHeightOffset(input: {
   resolvedLaunchPlan?: Record<string, unknown> | undefined;
 }): boolean {
   const recipeId = toTextOrEmpty(input.resolvedLaunchPlan?.recipeId);
+  const sceneActivation = toObjectOrEmpty(input.resolvedLaunchPlan?.sceneActivation);
+  const sceneActivationMode = toTextOrEmpty(sceneActivation.mode);
+  const sceneDrivenLaunch =
+    sceneActivationMode === "scene_driven_adapter" ||
+    input.taskTemplate === "ant_scene_driven" ||
+    input.baseTaskId === "isaaclab.ant.scene_driven.v1" ||
+    recipeId === "isaaclab.ant.scene_driven.v1";
+  if (sceneDrivenLaunch) return false;
   return (
     input.task === "Isaac-Ant-v0" ||
     input.taskTemplate === "ant_manager" ||
-    input.taskTemplate === "ant_scene_driven" ||
     input.baseTaskId === "isaaclab.ant.manager.v1" ||
-    input.baseTaskId === "isaaclab.ant.scene_driven.v1" ||
-    recipeId === "isaaclab.ant.manager.v1" ||
-    recipeId === "isaaclab.ant.scene_driven.v1"
+    recipeId === "isaaclab.ant.manager.v1"
   );
 }
 

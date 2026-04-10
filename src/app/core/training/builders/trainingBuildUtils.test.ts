@@ -246,6 +246,31 @@ describe("resolvePrimaryRobotImportTransformFromTrainingArtifacts", () => {
       scale: { x: 1, y: 1, z: 1 },
     });
   });
+
+  it("defaults the ant robot to z=1.0 when no robot placement exists", () => {
+    const transform = resolvePrimaryRobotImportTransformFromSnapshot({
+      snapshot: {
+        version: 1,
+        assets: {},
+        entities: {},
+        roots: [],
+        simulation: {
+          gravity: [0, 0, -9.81],
+          timestep: 0.002,
+          substeps: 1,
+          solver: "auto",
+          contactModel: "auto",
+        },
+        diagnostics: [],
+        updatedAt: new Date().toISOString(),
+      },
+      robotUsdKey: "library/robots/ant/ant.usd",
+    });
+
+    expect(transform).toEqual({
+      position: { x: 0, y: 0, z: 1 },
+    });
+  });
 });
 
 describe("resolvePrimaryRobotImportTransformFromProjectDoc", () => {

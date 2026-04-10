@@ -289,6 +289,53 @@ describe("buildTrainingEnvironment", () => {
     });
   });
 
+  it("preserves the authored ant scene pose for scene-driven launches", async () => {
+    const snapshot = createEnvironmentSnapshot();
+    const result = await buildTrainingEnvironment({
+      submit: createSubmitInput(),
+      configValues: {
+        taskTemplate: "ant_scene_driven",
+        baseTaskId: "isaaclab.ant.scene_driven.v1",
+        agentPresetId: "rsl_rl_ppo",
+        robotAssetId: "asset_robot_123",
+        sceneAssetId: "asset_scene_456",
+        environment: {
+          sceneAssetId: "asset_scene_456",
+        },
+      },
+      compiledEnvironment: snapshot,
+      compilationTarget: "training",
+      compilationStats: { nodeCount: 2 },
+      context: {
+        robotUsdKey: "library/robots/ur10/Legacy/ur10.usd",
+        terrainUsdKey: null,
+        terrainMode: "usd",
+      },
+      diagnostics: [],
+      sceneEligibility: {
+        canCreateExperiment: true,
+        robotCount: 1,
+        primaryRobotEntityId: "robot_root",
+        primaryRobotAssetId: "asset_robot_123",
+        robotCandidates: [
+          {
+            entityId: "robot_root",
+            assetId: "asset_robot_123",
+            label: "Robot",
+            sourceKind: "usd",
+          },
+        ],
+      },
+    });
+
+    const robotPlacement = result.environment.placements?.find((item) => item.entityId === "robot_root");
+    expect(robotPlacement?.localTransform?.translation).toEqual([1.2, 0.3, 0.4]);
+    expect(result.environment.primaryRobotPlacement?.localTransform?.translation).toEqual([1.2, 0.3, 0.4]);
+    expect(result.environment.editorSceneContract?.primaryRobotPlacementSummary.localTransform).toMatchObject({
+      translation: [1.2, 0.3, 0.4],
+    });
+  });
+
   it("treats missing scene preparation diagnostics as an empty list", async () => {
     const snapshot = createEnvironmentSnapshot();
     const result = await buildTrainingEnvironment({
