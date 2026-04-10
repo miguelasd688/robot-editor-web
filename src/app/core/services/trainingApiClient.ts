@@ -219,40 +219,6 @@ export type ConfigDerivationPreview = {
   message: string;
 };
 
-export type TaskAutocompleteRequest = {
-  recipeId?: string;
-  executionMode?: TrainingExecutionMode;
-  taskSpecId?: string;
-  taskSpec?: Record<string, unknown>;
-  agentId?: string;
-  catalogVersion?: string;
-  taskTemplate?: string;
-  task?: string;
-  robotAssetId: string;
-  rootAssetId?: string;
-  sceneAssetId?: string;
-  tenantId?: string;
-  experimentName?: string;
-  maxSteps?: number;
-  numEnvs?: number;
-  checkpoint?: number;
-  stepsPerEpoch?: number;
-  videoLengthSec?: number;
-  videoLengthMs?: number;
-  videoLength?: number;
-  videoInterval?: number;
-  seed?: number;
-  policy?: Record<string, unknown>;
-  policyRules?: Record<string, unknown>;
-  baseConstraintMode?: "fix_base" | "source_weld";
-  userModelMetadata?: Record<string, unknown>;
-  environment?: Record<string, unknown>;
-  assetPipeline?: AssetPipelineDecision;
-  extraArgs?: string[];
-  overrides?: Record<string, unknown>;
-  dryRun?: boolean;
-};
-
 export type CustomTrainingEnvironmentPlacement = {
   entityId: string;
   sourceAssetId?: string;
@@ -888,7 +854,7 @@ export async function submitTrainingJobRemoteWithResponse(
 }
 
 export async function submitTrainingTaskRemoteWithResponse(
-  input: TaskAutocompleteRequest | CustomTrainingTaskRequest
+  input: CustomTrainingTaskRequest
 ): Promise<{
   status: number;
   response: TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse;
@@ -1433,7 +1399,7 @@ function normalizeCustomDryRunPreview(input: {
 }
 
 export async function submitTrainingTaskRemote(
-  input: TaskAutocompleteRequest | CustomTrainingTaskRequest
+  input: CustomTrainingTaskRequest
 ): Promise<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse> {
   if (
     isPlainRecord((input as CustomTrainingTaskRequest).environment) &&
@@ -1526,182 +1492,5 @@ export async function submitTrainingTaskRemote(
     return parsed as CustomTrainingTaskLaunchResponse;
   }
 
-  const legacy = input as TaskAutocompleteRequest;
-  const legacyRecord = legacy as unknown as Record<string, unknown>;
-  const resolvedRobotAssetId = String(legacy.robotAssetId ?? legacy.rootAssetId ?? "").trim();
-  const taskTemplate = String(legacy.taskTemplate ?? "").trim();
-  const task = String(legacy.task ?? "").trim() || taskTemplate || "custom_manager";
-  const agentId = String(legacy.agentId ?? "").trim();
-  const sceneAssetId = String(legacy.sceneAssetId ?? "").trim();
-  const tenantId = String(legacy.tenantId ?? "").trim();
-  const experimentName = String(legacy.experimentName ?? "").trim();
-  const maxSteps =
-    readPositiveIntFromRecord(legacyRecord, ["maxSteps", "numberEpisodes", "number_episodes", "numberOfEpisodes"]) ??
-    256;
-  const payload: Record<string, unknown> = {
-    environment: {
-      id: taskTemplate || task,
-      taskTemplate: taskTemplate || undefined,
-      task,
-      robotAssetId: resolvedRobotAssetId || undefined,
-      sceneAssetId: sceneAssetId || undefined,
-      metadata: {
-        ...(legacy.userModelMetadata && typeof legacy.userModelMetadata === "object" ? legacy.userModelMetadata : {}),
-        ...(legacy.environment && typeof legacy.environment === "object" ? legacy.environment : {}),
-      },
-    },
-    agent: {
-      agentId: agentId || undefined,
-      policy: legacy.policy && typeof legacy.policy === "object" ? legacy.policy : {},
-      policyRules: legacy.policyRules && typeof legacy.policyRules === "object" ? legacy.policyRules : {},
-    },
-    runtime: {
-      backend: "isaac_lab",
-      maxSteps,
-      numEnvs: readPositiveIntFromRecord(legacyRecord, ["numEnvs", "num_envs", "numEnv"]),
-      checkpoint: readNonNegativeIntFromRecord(legacyRecord, ["checkpoint"]),
-      stepsPerEpoch: readPositiveIntFromRecord(legacyRecord, ["stepsPerEpoch", "steps_per_epoch"]),
-      videoLengthSec: readPositiveIntFromRecord(
-        legacyRecord,
-        ["videoLengthSec", "video_length_sec", "clipLengthSec", "clip_length_sec"]
-      ),
-      videoLengthMs: readPositiveIntFromRecord(legacyRecord, ["videoLengthMs", "video_length_ms"]),
-      videoLength: readPositiveIntFromRecord(legacyRecord, ["videoLength", "video_length"]),
-      videoInterval: readPositiveIntFromRecord(legacyRecord, ["videoInterval", "video_interval"]),
-      baseConstraintMode:
-        legacy.baseConstraintMode === "fix_base" || legacy.baseConstraintMode === "source_weld"
-          ? legacy.baseConstraintMode
-          : undefined,
-      assetPipeline: legacy.assetPipeline && typeof legacy.assetPipeline === "object" ? legacy.assetPipeline : undefined,
-      overrides: legacy.overrides && typeof legacy.overrides === "object" ? legacy.overrides : undefined,
-      extraArgs: Array.isArray(legacy.extraArgs) ? legacy.extraArgs.map((item) => String(item)) : undefined,
-    },
-  };
-  if (tenantId) payload.tenantId = tenantId;
-  if (experimentName) payload.experimentName = experimentName;
-  if (typeof legacy.seed === "number" && Number.isFinite(legacy.seed)) payload.seed = Math.trunc(legacy.seed);
-  if (legacy.dryRun === true) payload.dryRun = true;
-
-  const response = await fetch(buildUrl("/v1/training/tasks"), {
-    method: "POST",
-    headers: buildHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(payload),
-  });
-  const parsed = await parseJson<TaskAutocompletePreview | TaskAutocompleteLaunchResponse | CustomTrainingTaskLaunchResponse>(response);
-  if (parsed && typeof parsed === "object" && "mode" in parsed && parsed.mode === "custom") {
-    if ((parsed as { dryRun?: boolean }).dryRun === true) {
-      const customPreview = parsed as Record<string, unknown>;
-      return normalizeCustomDryRunPreview({
-        parsed: customPreview,
-        fallbackTaskTemplate: taskTemplate || "custom_manager",
-        fallbackAssetId: resolvedRobotAssetId || "custom-asset",
-      });
-    }
-    if ("job" in parsed) {
-      const customLaunch = parsed as CustomTrainingTaskLaunchResponse & Record<string, unknown>;
-      return {
-        mode: "custom",
-        job: customLaunch.job,
-        profileId: String(customLaunch.profileId ?? "").trim() || undefined,
-        profileVersion: String(customLaunch.profileVersion ?? "").trim() || undefined,
-        baseTaskId: String(customLaunch.baseTaskId ?? "").trim() || undefined,
-        registrationId: String(customLaunch.registrationId ?? "").trim() || undefined,
-        agentPresetId: String(customLaunch.agentPresetId ?? "").trim() || undefined,
-        adapterId: String(customLaunch.adapterId ?? "").trim() || undefined,
-        adapterVersion: String(customLaunch.adapterVersion ?? "").trim() || undefined,
-        adapterSelection: isPlainRecord(customLaunch.adapterSelection)
-          ? customLaunch.adapterSelection
-          : undefined,
-        adapterCompatibility: isPlainRecord(customLaunch.adapterCompatibility)
-          ? customLaunch.adapterCompatibility
-          : undefined,
-        experimentId: String(customLaunch.experimentId ?? "").trim() || undefined,
-        experimentRevisionId: String(customLaunch.experimentRevisionId ?? "").trim() || undefined,
-        experimentTaskId: String(customLaunch.experimentTaskId ?? "").trim() || undefined,
-        taskFingerprint: String(customLaunch.taskFingerprint ?? "").trim() || undefined,
-        experimentTaskSpec: isPlainRecord(customLaunch.experimentTaskSpec)
-          ? customLaunch.experimentTaskSpec
-          : undefined,
-        taskMaterializationSummary: isPlainRecord(customLaunch.taskMaterializationSummary)
-          ? customLaunch.taskMaterializationSummary
-          : isPlainRecord(customLaunch.experimentTaskSpec?.taskMaterializationSummary)
-            ? customLaunch.experimentTaskSpec.taskMaterializationSummary
-            : undefined,
-        launchParitySummary: isPlainRecord(customLaunch.launchParitySummary)
-          ? customLaunch.launchParitySummary
-          : isPlainRecord(customLaunch.experimentTaskSpec?.launchParitySummary)
-            ? customLaunch.experimentTaskSpec.launchParitySummary
-            : undefined,
-        agentInspectorSummary: isPlainRecord(customLaunch.agentInspectorSummary)
-          ? customLaunch.agentInspectorSummary
-          : isPlainRecord(customLaunch.experimentTaskSpec?.agentInspectorSummary)
-            ? customLaunch.experimentTaskSpec.agentInspectorSummary
-            : undefined,
-        experimentTaskRegistration: isPlainRecord(customLaunch.experimentTaskRegistration)
-          ? customLaunch.experimentTaskRegistration
-          : undefined,
-        authoredProfileContract: isPlainRecord(customLaunch.authoredProfileContract)
-          ? customLaunch.authoredProfileContract
-          : isPlainRecord(customLaunch.experimentTaskSpec?.authoredProfileContract)
-            ? customLaunch.experimentTaskSpec.authoredProfileContract
-            : undefined,
-        editorSceneContract: isPlainRecord(customLaunch.editorSceneContract)
-          ? customLaunch.editorSceneContract
-          : undefined,
-        compatibilitySignature: isPlainRecord(customLaunch.compatibilitySignature)
-          ? customLaunch.compatibilitySignature
-          : undefined,
-        robotEmbodimentSpec: isPlainRecord(customLaunch.robotEmbodimentSpec)
-          ? customLaunch.robotEmbodimentSpec
-          : null,
-        launchParityTrace: isPlainRecord(customLaunch.launchParityTrace)
-          ? customLaunch.launchParityTrace
-          : null,
-        launchDiagnostics: isPlainRecord(customLaunch.launchDiagnostics)
-          ? customLaunch.launchDiagnostics
-          : null,
-        experiment: isPlainRecord(customLaunch.experiment)
-          ? customLaunch.experiment
-          : null,
-        experimentRevision: isPlainRecord(customLaunch.experimentRevision)
-          ? customLaunch.experimentRevision
-          : null,
-        task: String(customLaunch.task ?? task ?? taskTemplate ?? "custom_manager"),
-        policy:
-          legacy.policy && typeof legacy.policy === "object"
-            ? (legacy.policy as Record<string, unknown>)
-            : {},
-        taskTemplate: String(customLaunch.taskTemplate ?? taskTemplate ?? "custom_manager"),
-        warnings: Array.isArray(customLaunch.warnings)
-          ? customLaunch.warnings.map((item) => String(item))
-          : [],
-        validationErrors: Array.isArray(customLaunch.validationErrors)
-          ? customLaunch.validationErrors
-              .filter((item) => isPlainRecord(item))
-              .map((item) => {
-                const record = item as Record<string, unknown>;
-                return {
-                  code: String(record.code ?? "").trim() || "unknown",
-                  message: String(record.message ?? "").trim() || "validation",
-                  ...(isPlainRecord(record.details) ? { details: record.details } : {}),
-                  ...(Number.isFinite(Number(record.status))
-                    ? { status: Math.max(0, Math.round(Number(record.status))) }
-                    : {}),
-                };
-              })
-          : [],
-        autoConfig: {
-          assetId: resolvedRobotAssetId || "custom-asset",
-          introspection: {
-            jointCount: 0,
-            joints: [],
-            rootBodies: [],
-            stageUpAxis: "unknown",
-          },
-          derivedConfig: {},
-        },
-      } as CustomTrainingTaskLaunchResponse;
-    }
-  }
-  return parsed;
+  throw new Error("Legacy training task requests are no longer supported.");
 }
