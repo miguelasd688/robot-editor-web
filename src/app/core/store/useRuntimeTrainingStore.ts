@@ -267,11 +267,14 @@ export function buildLocalEvents(job: TrainingJobSummary): TrainingJobEventSumma
     }
   }
 
-  if (job.currentEpoch > 0 && !submissionFailed) {
+  const currentEpisode = job.currentEpisode ?? job.currentEpoch;
+  if (currentEpisode > 0 && !submissionFailed) {
     pushEvent(
-      "job.metrics",
+      "runner.metrics",
       {
-        currentEpoch: job.currentEpoch,
+        step: currentEpisode,
+        currentEpoch: currentEpisode,
+        currentEpisode,
         progress: job.progress,
         loss: job.loss,
       },
@@ -308,6 +311,10 @@ function buildLocalRunnerLogs(job: TrainingJobSummary): TrainingRunnerLogsSummar
     runtime: null,
     unavailableReason: "runner_mode_not_remote",
   };
+}
+
+function resolveEpisodeBudget(job: Pick<TrainingJobSummary, "episodeTarget" | "maxSteps">) {
+  return Math.max(1, Math.round(job.episodeTarget ?? job.maxSteps ?? 1));
 }
 
 async function syncRemoteJobsOnce() {
@@ -472,13 +479,14 @@ function scheduleTrainingProgress(jobId: string) {
       return;
     }
 
-    const nextEpoch = Math.min(job.epochs, job.currentEpoch + 1);
-    const nextProgress = nextEpoch / Math.max(1, job.epochs);
+    const episodeBudget = resolveEpisodeBudget(job);
+    const nextEpisode = Math.min(episodeBudget, (job.currentEpisode ?? job.currentEpoch) + 1);
+    const nextProgress = nextEpisode / Math.max(1, episodeBudget);
     const trend = 1.2 * (1 - nextProgress) + 0.05;
     const jitter = (Math.random() - 0.5) * 0.08;
     const nextLoss = Number(Math.max(0.02, trend + jitter).toFixed(4));
     const updatedAt = Date.now();
-    const finished = nextEpoch >= job.epochs;
+    const finished = nextEpisode >= episodeBudget;
     const nextStatus: TrainingJobStatus = finished ? "completed" : "running";
 
     useRuntimeTrainingStore.setState((current) => {
@@ -486,7 +494,8 @@ function scheduleTrainingProgress(jobId: string) {
         item.id === jobId
           ? {
               ...item,
-              currentEpoch: nextEpoch,
+              currentEpoch: nextEpisode,
+              currentEpisode: nextEpisode,
               progress: nextProgress,
               loss: nextLoss,
               status: nextStatus,
@@ -585,8 +594,7 @@ function buildLaunchContextFromInput(
     experimentName: input.experimentName ?? input.modelName,
     envId: input.envId ?? input.dataset,
     trainer: input.trainer ?? "rsl_rl",
-    epochs: input.epochs,
-    maxSteps: input.maxSteps ?? input.epochs,
+    maxSteps: input.maxSteps,
   };
 
   const keysToCopy = [
@@ -671,9 +679,8 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
 
       const now = Date.now();
       const localId = `local_job_${now}_${trainingJobCounter++}`;
-      const epochs = Math.max(1, Math.round(input.epochs));
       const experimentName = (input.experimentName ?? modelName).trim() || modelName;
-      const maxSteps = Math.max(1, Math.round(input.maxSteps ?? epochs));
+      const maxSteps = Math.max(1, Math.round(input.maxSteps ?? 100));
       const configObject = input.config ?? {};
       const configValues = toObjectOrEmpty(configObject);
       const launchContext = buildLaunchContextFromInput(input, configValues);
@@ -681,10 +688,12 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         id: localId,
         modelName,
         dataset,
-        epochs,
+        maxSteps,
+        episodeTarget: maxSteps,
         status: "submitting",
         progress: 0,
         currentEpoch: 0,
+        currentEpisode: 0,
         loss: null,
         startedAt: now,
         updatedAt: now,
@@ -748,6 +757,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           };
           const enrichedRemoteJob: TrainingJobSummary = {
             ...remoteJob,
+            episodeTarget: remoteJob.episodeTarget ?? remoteJob.maxSteps ?? maxSteps,
+            maxSteps: remoteJob.maxSteps ?? maxSteps,
+            currentEpisode: remoteJob.currentEpisode ?? remoteJob.currentEpoch ?? 0,
             status: "queued",
             launchContext: launchContextWithSource,
           };
@@ -803,17 +815,19 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
 
     const now = Date.now();
     const id = `job_${now}_${trainingJobCounter++}`;
-    const epochs = Math.max(1, Math.round(input.epochs));
+    const maxSteps = Math.max(1, Math.round(input.maxSteps ?? 100));
     const launchContext = buildLaunchContextFromInput(input, toObjectOrEmpty(input.config ?? {}));
 
     const job: TrainingJobSummary = {
       id,
       modelName,
       dataset,
-      epochs,
+      maxSteps,
+      episodeTarget: maxSteps,
       status: "queued",
       progress: 0,
       currentEpoch: 0,
+      currentEpisode: 0,
       loss: null,
       startedAt: now,
       updatedAt: now,
@@ -821,7 +835,10 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     };
 
     set((state) => ({ jobs: [job, ...state.jobs] }));
-    logInfo("Training job queued", { scope: "runtime-training", data: { id, modelName, dataset, epochs } });
+    logInfo("Training job queued", {
+      scope: "runtime-training",
+      data: { id, modelName, dataset, maxSteps },
+    });
 
     const queueDelayMs = 500 + Math.round(Math.random() * 400);
     window.setTimeout(() => {

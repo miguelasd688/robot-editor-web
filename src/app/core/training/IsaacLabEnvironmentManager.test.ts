@@ -63,7 +63,6 @@ function createSubmitInput(): SubmitTrainingJobInput {
   return {
     modelName: "model-a",
     dataset: "dataset-a",
-    epochs: 200,
     maxSteps: 500,
     tenantId: "tenant-alpha",
     experimentName: "exp-alpha",

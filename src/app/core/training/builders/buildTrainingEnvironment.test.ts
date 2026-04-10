@@ -8,8 +8,8 @@ function createSubmitInput(): SubmitTrainingJobInput {
   return {
     modelName: "custom-model",
     dataset: "custom-dataset",
-    epochs: 256,
     envId: "custom_environment",
+    maxSteps: 256,
   };
 }
 

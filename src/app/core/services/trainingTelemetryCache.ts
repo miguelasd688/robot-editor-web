@@ -11,7 +11,7 @@ const META_STORE = "cacheMeta";
 const MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 const MIN_PRUNE_INTERVAL_MS = 20_000;
-const METRIC_CACHE_STEP_INTERVAL = 25;
+const METRIC_CACHE_STEP_INTERVAL = 16;
 const DEFAULT_TENANT_ID = "local";
 const META_KEY_EVENT_COUNT = "eventCount";
 const META_KEY_JOB_COUNT = "jobCount";
@@ -57,6 +57,8 @@ type CachedVideoClipRow = {
   sizeBytes: number;
   episodeNumber?: number;
   videoStep?: number;
+  sourceEpisodeIndex?: number;
+  sourceVideoStep?: number;
   createdAtMs: number;
   accessedAtMs: number;
 };
@@ -205,6 +207,7 @@ export async function appendCachedMetricEvent(input: {
   step: number;
   metrics: Record<string, unknown>;
   source?: string | null;
+  progressSummary?: Record<string, unknown> | null;
   occurredAt?: string;
 }): Promise<void> {
   const safeStep = Math.max(0, Math.round(Number(input.step) || 0));
@@ -228,6 +231,7 @@ export async function appendCachedMetricEvent(input: {
       step: safeStep,
       metrics: isRecord(input.metrics) ? input.metrics : {},
       source: input.source ?? null,
+      ...(isRecord(input.progressSummary) ? { progressSummary: input.progressSummary } : {}),
     },
     createdAt: new Date(occurredAtMs).toISOString(),
   };
@@ -253,7 +257,14 @@ export async function getCachedVideoClipEntry(input: {
   jobId: string;
   viewId: string;
   clipIndex: number;
-}): Promise<{ blob: Blob; clipIndex: number; episodeNumber: number | null; videoStep: number | null } | null> {
+}): Promise<{
+  blob: Blob;
+  clipIndex: number;
+  episodeNumber: number | null;
+  videoStep: number | null;
+  sourceEpisodeIndex: number | null;
+  sourceVideoStep: number | null;
+} | null> {
   const db = await openCacheDb();
   if (!db) return null;
   const cacheKey = buildVideoCacheKey(input.tenantId, input.jobId, input.viewId, input.clipIndex);
@@ -279,6 +290,12 @@ export async function getCachedVideoClipEntry(input: {
     videoStep: Number.isFinite(Number(row.videoStep))
       ? Math.max(0, Math.round(Number(row.videoStep)))
       : null,
+    sourceEpisodeIndex: Number.isFinite(Number(row.sourceEpisodeIndex))
+      ? Math.max(0, Math.round(Number(row.sourceEpisodeIndex)))
+      : null,
+    sourceVideoStep: Number.isFinite(Number(row.sourceVideoStep))
+      ? Math.max(0, Math.round(Number(row.sourceVideoStep)))
+      : null,
   };
 }
 
@@ -287,7 +304,14 @@ export async function getCachedVideoClipForView(input: {
   jobId: string;
   viewId: string;
   clipIndex?: number | null;
-}): Promise<{ blob: Blob; clipIndex: number; episodeNumber: number | null; videoStep: number | null } | null> {
+}): Promise<{
+  blob: Blob;
+  clipIndex: number;
+  episodeNumber: number | null;
+  videoStep: number | null;
+  sourceEpisodeIndex: number | null;
+  sourceVideoStep: number | null;
+} | null> {
   const db = await openCacheDb();
   if (!db) return null;
   const tenantId = resolveTrainingCacheTenantId(input.tenantId);
@@ -329,6 +353,12 @@ export async function getCachedVideoClipForView(input: {
       : null,
     videoStep: Number.isFinite(Number(chosen.videoStep))
       ? Math.max(0, Math.round(Number(chosen.videoStep)))
+      : null,
+    sourceEpisodeIndex: Number.isFinite(Number(chosen.sourceEpisodeIndex))
+      ? Math.max(0, Math.round(Number(chosen.sourceEpisodeIndex)))
+      : null,
+    sourceVideoStep: Number.isFinite(Number(chosen.sourceVideoStep))
+      ? Math.max(0, Math.round(Number(chosen.sourceVideoStep)))
       : null,
   };
 }
@@ -376,6 +406,8 @@ export async function putCachedVideoClip(input: {
   contentType?: string;
   episodeNumber?: number | null;
   videoStep?: number | null;
+  sourceEpisodeIndex?: number | null;
+  sourceVideoStep?: number | null;
 }): Promise<void> {
   await withCacheWrite(async (db) => {
     const now = Date.now();
@@ -393,6 +425,16 @@ export async function putCachedVideoClip(input: {
       : Number.isFinite(Number(existing?.videoStep))
         ? Math.max(0, Math.round(Number(existing?.videoStep)))
         : undefined;
+    const normalizedSourceEpisodeIndex = Number.isFinite(Number(input.sourceEpisodeIndex))
+      ? Math.max(0, Math.round(Number(input.sourceEpisodeIndex)))
+      : Number.isFinite(Number(existing?.sourceEpisodeIndex))
+        ? Math.max(0, Math.round(Number(existing?.sourceEpisodeIndex)))
+        : undefined;
+    const normalizedSourceVideoStep = Number.isFinite(Number(input.sourceVideoStep))
+      ? Math.max(0, Math.round(Number(input.sourceVideoStep)))
+      : Number.isFinite(Number(existing?.sourceVideoStep))
+        ? Math.max(0, Math.round(Number(existing?.sourceVideoStep)))
+        : undefined;
     const row: CachedVideoClipRow = {
       cacheKey,
       tenantId: input.tenantId,
@@ -405,6 +447,8 @@ export async function putCachedVideoClip(input: {
       sizeBytes: Math.max(0, Number(input.blob.size || 0)),
       episodeNumber: normalizedEpisodeNumber,
       videoStep: normalizedVideoStep,
+      sourceEpisodeIndex: normalizedSourceEpisodeIndex,
+      sourceVideoStep: normalizedSourceVideoStep,
       createdAtMs: Number.isFinite(Number(existing?.createdAtMs))
         ? Math.max(0, Math.round(Number(existing?.createdAtMs)))
         : now,

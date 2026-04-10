@@ -59,9 +59,8 @@ export class IsaacLabEnvironmentManager {
         "numberOfEpisodes",
         "maxSteps",
         "max_steps",
-        "epochs",
       ]) ??
-      resolvePositiveIntAlias(input.submit as unknown as Record<string, unknown>, ["maxSteps", "epochs"]) ??
+      resolvePositiveIntAlias(input.submit as unknown as Record<string, unknown>, ["maxSteps"]) ??
       1;
     const sceneEligibility = deriveSceneTrainingEligibility(compiled);
     const builtEnvironment = await buildTrainingEnvironment({

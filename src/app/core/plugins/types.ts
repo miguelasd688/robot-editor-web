@@ -269,6 +269,7 @@ export type MetricsIngestionSummary = {
   dedupedCount: number;
   rejectedCount: number;
   reasonCode: MetricsIngestionReasonCode;
+  latestMetrics?: Record<string, unknown> | null;
 };
 
 export type PolicyProgressSummary = {
@@ -362,10 +363,37 @@ export type RuntimeConfigArtifactSummary = {
   reasonCode: RuntimeConfigArtifactReasonCode;
 };
 
+export type ProgressAxisSummary = {
+  unit: string;
+  current: number | null;
+  total: number | null;
+  ratio: number | null;
+  source?: string;
+};
+
+export type RecordingProgressSummary = {
+  unit: string;
+  currentClipIndex: number | null;
+  totalClipCount: number | null;
+  sourceEpisodeIndex?: number | null;
+  sourceVideoStep?: number | null;
+  source?: string;
+};
+
+export type TrainingProgressSummary = {
+  contractVersion: string;
+  episodeAxisUnit: string;
+  clipSourceField: string;
+  trainingProgress: ProgressAxisSummary;
+  episodeProgress: ProgressAxisSummary;
+  iterationProgress: ProgressAxisSummary;
+  checkpointProgress: ProgressAxisSummary;
+  recordingProgress?: RecordingProgressSummary | null;
+};
+
 export type SubmitTrainingJobInput = {
   modelName: string;
   dataset: string;
-  epochs: number;
   tenantId?: string;
   experimentName?: string;
   envId?: string;
@@ -379,11 +407,12 @@ export type TrainingJobSummary = {
   id: string;
   modelName: string;
   dataset: string;
-  epochs: number;
   status: TrainingJobStatus;
   lifecycleStatus?: TrainingJobStatus;
   progress: number;
   currentEpoch: number;
+  currentEpisode?: number;
+  progressSummary?: TrainingProgressSummary | null;
   loss: number | null;
   startedAt: number;
   updatedAt: number;
@@ -395,6 +424,7 @@ export type TrainingJobSummary = {
   experimentRevisionId?: string | null;
   envId?: string;
   maxSteps?: number;
+  episodeTarget?: number;
   launchContext?: Record<string, unknown>;
   episodeTruthSummary?: Record<string, unknown> | null;
   episodeTruthMissing?: Record<string, unknown> | null;

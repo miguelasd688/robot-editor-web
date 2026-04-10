@@ -5,6 +5,7 @@ import type {
   TrainingJobEventSummary,
   TrainingRunnerLogsSummary,
   TrainingJobSummary,
+  TrainingProgressSummary,
 } from "../plugins/types";
 
 type TrainingJobListResponse = {
@@ -715,15 +716,22 @@ export type TrainingRecordingViewMeta = {
   videoInterval?: number;
   visibleVideoStep?: number;
   visibleVideoEpoch?: number;
+  visibleSourceEpisodeIndex?: number;
+  visibleSourceVideoStep?: number;
   latestVideoStep?: number;
   latestVideoEpoch?: number;
+  latestSourceEpisodeIndex?: number;
+  latestSourceVideoStep?: number;
   currentClipIndex?: number;
+  currentSourceEpisodeIndex?: number;
   states?: Array<{
     clipIndex: number;
     stateKey: string;
     stateName: string;
     videoStep?: number;
     videoEpoch?: number;
+    sourceEpisodeIndex?: number;
+    sourceVideoStep?: number;
     isLatest: boolean;
   }>;
   previewSource?: string;
@@ -746,6 +754,7 @@ export type TrainingMetricsSseEvent = {
   step: number;
   metrics: Record<string, unknown>;
   source?: string | null;
+  progressSummary?: TrainingProgressSummary | null;
   occurredAt?: string;
 };
 
