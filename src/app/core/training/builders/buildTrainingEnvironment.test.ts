@@ -277,12 +277,16 @@ describe("buildTrainingEnvironment", () => {
 
     const robotPlacement = result.environment.placements?.find((item) => item.entityId === "robot_root");
     expect(robotPlacement).toBeTruthy();
-    expect(robotPlacement?.localTransform?.translation).toEqual([1.2, 0.3, 0.4]);
+    expect(robotPlacement?.localTransform?.translation).toEqual([1.2, 0.3, 1.4]);
     expect(robotPlacement?.localTransform?.scale).toEqual([1, 1, 1]);
     const rotationQuat = robotPlacement?.localTransform?.rotationQuat;
     expect(rotationQuat).toBeTruthy();
     expect(Math.abs((rotationQuat?.[2] ?? 0) - Math.SQRT1_2)).toBeLessThan(1e-9);
     expect(Math.abs((rotationQuat?.[3] ?? 0) - Math.SQRT1_2)).toBeLessThan(1e-9);
+    expect(result.environment.primaryRobotPlacement?.localTransform?.translation).toEqual([1.2, 0.3, 1.4]);
+    expect(result.environment.editorSceneContract?.primaryRobotPlacementSummary.localTransform).toMatchObject({
+      translation: [1.2, 0.3, 1.4],
+    });
   });
 
   it("treats missing scene preparation diagnostics as an empty list", async () => {

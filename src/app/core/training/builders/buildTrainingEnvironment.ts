@@ -10,6 +10,7 @@ import { resolveTaskTemplateCatalogEntry } from "@runtime-plugins/catalog";
 import { resolveTrainingProfileMetadata } from "../profiles";
 import {
   buildTrainingPlacementsFromSnapshot,
+  buildPrimaryRobotPlacementFromSnapshot,
   cloneEnvironmentSnapshot,
   mergeDiagnostics,
   pickEnvironmentOverrides,
@@ -18,6 +19,8 @@ import {
 } from "./trainingBuildUtils";
 import type {
   CustomTrainingEnvironmentPayload,
+  CustomTrainingEnvironmentPlacement,
+  CustomTrainingPrimaryRobotPlacement,
   CustomTrainingRobotRuntimeSemantics,
 } from "./trainingRequestTypes";
 import type { SceneTrainingEligibility } from "../sceneTrainingEligibility";
@@ -70,6 +73,68 @@ function toFiniteNumberOrUndefined(value: unknown): number | undefined {
 function toRecordOrUndefined(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function shouldApplyAntSpawnHeightOffset(input: {
+  taskTemplate: string;
+  baseTaskId: string;
+  task: string;
+  resolvedLaunchPlan?: Record<string, unknown> | undefined;
+}): boolean {
+  const recipeId = toTextOrEmpty(input.resolvedLaunchPlan?.recipeId);
+  return (
+    input.task === "Isaac-Ant-v0" ||
+    input.taskTemplate === "ant_manager" ||
+    input.taskTemplate === "ant_scene_driven" ||
+    input.baseTaskId === "isaaclab.ant.manager.v1" ||
+    input.baseTaskId === "isaaclab.ant.scene_driven.v1" ||
+    recipeId === "isaaclab.ant.manager.v1" ||
+    recipeId === "isaaclab.ant.scene_driven.v1"
+  );
+}
+
+function offsetPlacementZ<T extends { localTransform?: { translation?: [number, number, number] } }>(
+  placement: T,
+  offsetZ: number
+): T {
+  const adjusted = cloneJson(placement);
+  const translation = adjusted.localTransform?.translation;
+  if (!Array.isArray(translation) || translation.length < 3) return adjusted;
+  const z = Number(translation[2]);
+  if (!Number.isFinite(z)) return adjusted;
+  adjusted.localTransform = {
+    ...(adjusted.localTransform ?? {}),
+    translation: [Number(translation[0]), Number(translation[1]), z + offsetZ],
+  };
+  return adjusted;
+}
+
+function applyAntSpawnHeightOffset(
+  placements: CustomTrainingEnvironmentPlacement[],
+  primaryRobotPlacement: CustomTrainingPrimaryRobotPlacement | undefined,
+  offsetZ: number
+): {
+  placements: CustomTrainingEnvironmentPlacement[];
+  primaryRobotPlacement: CustomTrainingPrimaryRobotPlacement | undefined;
+} {
+  if (!primaryRobotPlacement) {
+    return {
+      placements,
+      primaryRobotPlacement,
+    };
+  }
+  const adjustedPrimaryRobotPlacement = offsetPlacementZ(primaryRobotPlacement, offsetZ);
+  const adjustedPlacements = placements.map((placement) =>
+    placement.entityId === adjustedPrimaryRobotPlacement.entityId ? offsetPlacementZ(placement, offsetZ) : placement
+  );
+  return {
+    placements: adjustedPlacements,
+    primaryRobotPlacement: adjustedPrimaryRobotPlacement,
+  };
 }
 
 function resolvePrimaryRobotNodeId(input: {
@@ -200,7 +265,7 @@ export async function buildTrainingEnvironment(
   const environmentValues = toObjectOrEmpty(configValues.environment);
   const environmentOverrides = pickEnvironmentOverrides(environmentValues);
   const snapshot = cloneEnvironmentSnapshot(input.compiledEnvironment);
-  const placements = buildTrainingPlacementsFromSnapshot(snapshot);
+  let placements = buildTrainingPlacementsFromSnapshot(snapshot);
   const templateId = toTextOrEmpty(configValues.templateId) || toTextOrEmpty(environmentValues.templateId);
   const template = resolveTaskTemplateCatalogEntry({
     templateId,
@@ -253,6 +318,11 @@ export async function buildTrainingEnvironment(
     primaryRobotEntityId: resolvedPrimaryRobotEntityId,
     sourceSceneNodes: input.sourceSceneNodes,
   });
+  let primaryRobotPlacement = buildPrimaryRobotPlacementFromSnapshot({
+    snapshot,
+    primaryRobotEntityId: resolvedPrimaryRobotEntityId,
+    primaryRobotAssetId: robotAssetId,
+  });
   const robotRuntimeSemantics = buildRobotRuntimeSemantics({
     sourceSceneNodes: input.sourceSceneNodes,
     actuatorRegistryByRobot: input.actuatorRegistryByRobot,
@@ -264,6 +334,19 @@ export async function buildTrainingEnvironment(
     | { terrainPlan?: { strategy?: string }; overlayPlan?: { emitWorldUsdOverride?: boolean } }
     | undefined;
   const resolvedPlanSuppressesOverlay = resolvedLaunchPlan?.overlayPlan?.emitWorldUsdOverride === false;
+  const antSpawnHeightOffset = shouldApplyAntSpawnHeightOffset({
+    taskTemplate: toTextOrEmpty(configValues.taskTemplate) || toTextOrEmpty(environmentValues.taskTemplate),
+    baseTaskId,
+    task: toTextOrEmpty(configValues.task) || toTextOrEmpty(environmentValues.task) || input.submit.modelName || "",
+    resolvedLaunchPlan,
+  })
+    ? 1.0
+    : 0.0;
+  if (antSpawnHeightOffset !== 0) {
+    const adjusted = applyAntSpawnHeightOffset(placements, primaryRobotPlacement, antSpawnHeightOffset);
+    placements = adjusted.placements;
+    primaryRobotPlacement = adjusted.primaryRobotPlacement as CustomTrainingPrimaryRobotPlacement;
+  }
 
   const environment: CustomTrainingEnvironmentPayload = {
     id:
@@ -281,6 +364,7 @@ export async function buildTrainingEnvironment(
     snapshot,
     ...(authoredProfileContract ? { authoredProfileContract: JSON.parse(JSON.stringify(authoredProfileContract)) } : {}),
     ...(placements.length > 0 ? { placements } : {}),
+    primaryRobotPlacement,
     robotAssetId: robotAssetId || undefined,
     robotUsdKey: input.context.robotUsdKey,
     terrainUsdKey: input.context.terrainUsdKey,
@@ -310,6 +394,8 @@ export async function buildTrainingEnvironment(
       ...(agentPresetId ? { agentPresetId } : {}),
       ...(adapterId ? { adapterId } : {}),
       ...(resolvedPrimaryRobotEntityId ? { primaryRobotEntityId: resolvedPrimaryRobotEntityId } : {}),
+      primaryRobotPlacementSource: primaryRobotPlacement.source,
+      primaryRobotPlacementPoseFrame: primaryRobotPlacement.poseFrame,
       robotCount: resolvedRobotCount,
       ...(resolvedPrimaryRobotEntityId ? { primaryRobotSelection: "auto" } : {}),
       compilationTarget: input.compilationTarget,
