@@ -15,6 +15,25 @@ export type EditorScenePrimaryRobot = {
   sourceKind: string;
 };
 
+export type EditorScenePrimaryRobotPlacement = {
+  entityId: string;
+  sourceAssetId?: string;
+  localTransform?: {
+    translation?: [number, number, number];
+    rotationQuat?: [number, number, number, number];
+    scale?: [number, number, number];
+  };
+  source: string;
+  placementSelection?: {
+    matchReason: string;
+    entityId: string;
+    sourceAssetId: string;
+  } | null;
+  poseFrame: "editor_scene_local";
+  placementsConsumed: boolean;
+  placementsPresent: number;
+};
+
 export type EditorSceneContract = {
   contractVersion: string;
   profileId: string;
@@ -23,6 +42,8 @@ export type EditorSceneContract = {
   task: string;
   robotAssetId: string;
   primaryRobot: EditorScenePrimaryRobot;
+  primaryRobotPlacement: EditorScenePrimaryRobotPlacement;
+  primaryRobotPlacementSummary: Record<string, unknown>;
   sceneAssetId: string | null;
   placements: EditorScenePlacement[];
   terrain: {
@@ -127,6 +148,22 @@ export function compileEditorSceneContract(input: {
     isObject(environment.metadata) ? environment.metadata.primaryRobotSelection : "",
     ""
   );
+  const primaryRobotPlacement: EditorScenePrimaryRobotPlacement = isObject(environment.primaryRobotPlacement)
+    ? (cloneJson(environment.primaryRobotPlacement) as EditorScenePrimaryRobotPlacement)
+    : {
+        entityId: primaryRobotEntityId,
+        sourceAssetId: robotAssetId || undefined,
+        localTransform: {
+          translation: [0, 0, 0] as [number, number, number],
+          rotationQuat: [0, 0, 0, 1] as [number, number, number, number],
+          scale: [1, 1, 1] as [number, number, number],
+        },
+        source: "scene_origin",
+        placementSelection: null,
+        poseFrame: "editor_scene_local" as const,
+        placementsConsumed: false,
+        placementsPresent: placements.length,
+      };
   const sourceHints = isObject(environment.sourceHints) ? environment.sourceHints : {};
   const sourceAssets = isObject(sourceHints.assets) ? (sourceHints.assets as Record<string, Record<string, unknown>>) : {};
   const scenePreparation = isObject(environment.scenePreparation) ? environment.scenePreparation : {};
@@ -147,6 +184,16 @@ export function compileEditorSceneContract(input: {
       name: primaryRobotName,
       assetId: robotAssetId,
       sourceKind: toText(isObject(primaryRobotSourceAsset) ? (primaryRobotSourceAsset as Record<string, unknown>).kind : "", ""),
+    },
+    primaryRobotPlacement,
+    primaryRobotPlacementSummary: {
+      entityId: primaryRobotPlacement.entityId,
+      sourceAssetId: primaryRobotPlacement.sourceAssetId ?? "",
+      source: primaryRobotPlacement.source,
+      poseFrame: primaryRobotPlacement.poseFrame,
+      placementsConsumed: primaryRobotPlacement.placementsConsumed,
+      placementsPresent: primaryRobotPlacement.placementsPresent,
+      localTransform: cloneJson(primaryRobotPlacement.localTransform ?? {}),
     },
     sceneAssetId: scene || null,
     placements,

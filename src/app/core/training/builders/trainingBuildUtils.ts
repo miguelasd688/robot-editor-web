@@ -9,6 +9,25 @@ export type TrainingPlacementTransform = {
   scale?: { x: number; y: number; z: number };
 };
 
+export type TrainingPrimaryRobotPlacement = {
+  entityId: string;
+  sourceAssetId?: string;
+  localTransform?: {
+    translation?: [number, number, number];
+    rotationQuat?: [number, number, number, number];
+    scale?: [number, number, number];
+  };
+  source: string;
+  placementSelection?: {
+    matchReason: string;
+    entityId: string;
+    sourceAssetId: string;
+  } | null;
+  poseFrame: "editor_scene_local";
+  placementsConsumed: boolean;
+  placementsPresent: number;
+};
+
 export function toObjectOrEmpty(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -228,6 +247,60 @@ export function buildTrainingPlacementsFromSnapshot(
 
   placements.sort((a, b) => a.entityId.localeCompare(b.entityId));
   return placements;
+}
+
+export function buildPrimaryRobotPlacementFromSnapshot(input: {
+  snapshot: EnvironmentDoc | null;
+  primaryRobotEntityId?: string | null;
+  primaryRobotAssetId?: string | null;
+}): TrainingPrimaryRobotPlacement {
+  const snapshot = input.snapshot;
+  const placements = buildTrainingPlacementsFromSnapshot(snapshot);
+  const primaryRobotEntityId = toTextOrEmpty(input.primaryRobotEntityId);
+  const primaryRobotAssetId = toTextOrEmpty(input.primaryRobotAssetId);
+
+  const matchedPlacement =
+    placements.find((placement) => placement.entityId === primaryRobotEntityId) ??
+    placements.find((placement) => placement.sourceAssetId === primaryRobotAssetId) ??
+    placements[0];
+
+  if (matchedPlacement) {
+    const matchReason =
+      matchedPlacement.entityId === primaryRobotEntityId
+        ? "primary_robot_entity_id"
+        : matchedPlacement.sourceAssetId === primaryRobotAssetId
+          ? "primary_robot_asset_id"
+          : "first_placement";
+    return {
+      entityId: matchedPlacement.entityId,
+      ...(matchedPlacement.sourceAssetId ? { sourceAssetId: matchedPlacement.sourceAssetId } : {}),
+      ...(matchedPlacement.localTransform ? { localTransform: matchedPlacement.localTransform } : {}),
+      source: matchReason === "first_placement" ? "scene_first_placement" : "scene_primary_robot",
+      placementSelection: {
+        matchReason,
+        entityId: matchedPlacement.entityId,
+        sourceAssetId: matchedPlacement.sourceAssetId ?? "",
+      },
+      poseFrame: "editor_scene_local",
+      placementsConsumed: true,
+      placementsPresent: placements.length,
+    };
+  }
+
+  return {
+    entityId: primaryRobotEntityId || "",
+    ...(primaryRobotAssetId ? { sourceAssetId: primaryRobotAssetId } : {}),
+    localTransform: {
+      translation: [0, 0, 0],
+      rotationQuat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    source: "scene_origin",
+    placementSelection: null,
+    poseFrame: "editor_scene_local",
+    placementsConsumed: false,
+    placementsPresent: 0,
+  };
 }
 
 function normalizeWorkspaceKey(value: unknown): string {

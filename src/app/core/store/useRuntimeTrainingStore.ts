@@ -31,6 +31,7 @@ import {
 } from "../services/trainingTelemetryCache";
 import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManager";
 import { editorEngine } from "../editor/engineSingleton";
+import { useTrainingImportContextStore } from "./useTrainingImportContextStore";
 
 type RuntimeTrainingState = {
   jobs: TrainingJobSummary[];

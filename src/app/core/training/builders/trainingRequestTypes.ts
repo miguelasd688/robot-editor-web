@@ -59,6 +59,18 @@ export type CustomTrainingEnvironmentPlacement = {
   };
 };
 
+export type CustomTrainingPrimaryRobotPlacement = CustomTrainingEnvironmentPlacement & {
+  source: string;
+  placementSelection?: {
+    matchReason: string;
+    entityId: string;
+    sourceAssetId: string;
+  } | null;
+  poseFrame: "editor_scene_local";
+  placementsConsumed: boolean;
+  placementsPresent: number;
+};
+
 export type CustomTrainingEnvironmentPayload = {
   id: string;
   sourceOfTruth: "project_doc_environment_v1";
@@ -71,6 +83,7 @@ export type CustomTrainingEnvironmentPayload = {
   authoredProfileContract?: Record<string, unknown>;
   snapshot: EnvironmentDoc | null;
   placements?: CustomTrainingEnvironmentPlacement[];
+  primaryRobotPlacement?: CustomTrainingPrimaryRobotPlacement;
   controlPolicy?: {
     mode: "single_agent_primary_robot" | "future_multi_agent";
     primaryRobotEntityId?: string;

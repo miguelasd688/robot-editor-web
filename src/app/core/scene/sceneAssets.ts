@@ -395,9 +395,7 @@ export function createSceneAssetTree(
     const floorVisualId = createDocId();
     const floorCollisionId = createDocId();
     const floorMeshId = createDocId();
-    const floorTransform = defaultTransform({
-      position: { x: 0, y: 0, z: -0.6 },
-    });
+    const floorTransform = defaultTransform();
 
     return {
       rootId: floorGroupId,
@@ -445,9 +443,7 @@ export function createSceneAssetTree(
     const floorVisualId = createDocId();
     const floorCollisionId = createDocId();
     const floorMeshId = createDocId();
-    const floorTransform = defaultTransform({
-      position: { x: 0, y: 0, z: -0.6 },
-    });
+    const floorTransform = defaultTransform();
     const createSeededRandom = (seed: number) => {
       let state = seed >>> 0;
       return () => {
