@@ -10,11 +10,15 @@ import type {
   TrainingRecordingSummary,
 } from "../plugins/types";
 import {
+  buildTrainingLivePulseStreamUrl,
   cancelTrainingJobRemote,
   getTrainingRunnerLogsRemote,
+  listTrainingMetricBatchesRemote,
   submitTrainingTaskRemoteWithResponse,
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
+  type TrainingLivePulseSseEvent,
+  type TrainingMetricBatchSummary,
   listTrainingJobsRemote,
   trainingApiEnabled,
 } from "../services/trainingApiClient";
@@ -22,11 +26,15 @@ import { logError, logInfo, logWarn } from "../services/logger";
 import {
   cacheTrainingJobs,
   cacheTrainingEvents,
+  cacheMetricBatches,
   deleteTrainingTelemetryForJob,
   hasHydratedTrainingEvents,
+  hasHydratedMetricBatches,
   listCachedTrainingJobs,
   listCachedTrainingEvents,
+  listCachedMetricBatches,
   markHydratedTrainingEvents,
+  markHydratedMetricBatches,
   resolveTrainingCacheTenantId,
 } from "../services/trainingTelemetryCache";
 import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManager";
@@ -52,6 +60,7 @@ const optimisticJobIds = new Set<string>();
 let remotePollingTimer: number | null = null;
 let remoteSyncConsumerCount = 0;
 let remoteSyncInFlight = false;
+const livePulseSources = new Map<string, EventSource>();
 let trainingJobCounter = 0;
 let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
@@ -62,6 +71,17 @@ const MAX_EVENT_HISTORY_ITEMS = 20_000;
 let localJobsHydrationPromise: Promise<void> | null = null;
 const DELETED_JOBS_STORAGE_KEY = "runtime-training-deleted-jobs-v1";
 const deletedTrainingJobKeys = readDeletedTrainingJobKeys();
+
+function closeLivePulseSource(jobId: string) {
+  const existing = livePulseSources.get(jobId);
+  if (!existing) return;
+  existing.close();
+  livePulseSources.delete(jobId);
+}
+
+function closeAllLivePulseSources() {
+  for (const jobId of livePulseSources.keys()) closeLivePulseSource(jobId);
+}
 
 function readDeletedTrainingJobKeys() {
   if (typeof window === "undefined" || !window.localStorage) return new Set<string>();
@@ -317,6 +337,28 @@ function resolveEpisodeBudget(job: Pick<TrainingJobSummary, "episodeTarget" | "m
   return Math.max(1, Math.round(job.episodeTarget ?? job.maxSteps ?? 1));
 }
 
+function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatchSummary[]): TrainingJobEventSummary[] {
+  const items: TrainingJobEventSummary[] = [];
+  for (const batch of batches) {
+    for (const sample of batch.samples ?? []) {
+      items.push({
+        id: `${batch.batchId}:${sample.step}`,
+        jobId,
+        eventType: "runner.metrics",
+        payload: {
+          batchId: batch.batchId,
+          step: sample.step,
+          currentEpisode: sample.step,
+          metrics: sample.metrics ?? {},
+        },
+        createdAt: sample.occurredAt,
+      });
+    }
+  }
+  items.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return items;
+}
+
 async function syncRemoteJobsOnce() {
   if (!trainingApiEnabled || remoteSyncInFlight) return;
   remoteSyncInFlight = true;
@@ -361,6 +403,7 @@ async function syncRemoteJobsOnce() {
         recordings: nextRecordings,
       };
     });
+    ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
   } catch (error) {
     logWarn("Failed to sync jobs from training API", {
       scope: "runtime-training",
@@ -405,6 +448,99 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
       recordings: nextRecordings,
     };
   });
+  ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
+}
+
+function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSseEvent): TrainingJobSummary {
+  const nextStatus = (pulse.status ?? job.status) as TrainingJobStatus;
+  const currentEpisode = Math.max(
+    Number(job.currentEpisode ?? job.currentEpoch ?? 0),
+    Math.round(Number(pulse.episodeIndex ?? pulse.metricStep ?? 0))
+  );
+  const nextProgress = Number.isFinite(Number(pulse.progressRatio))
+    ? Math.max(0, Math.min(1, Number(pulse.progressRatio)))
+    : job.progress;
+  const nextLossRaw = Number(pulse.latestMetricSample?.loss);
+  const nextLoss = Number.isFinite(nextLossRaw) ? nextLossRaw : job.loss;
+  const updatedAt = Date.parse(String(pulse.occurredAt ?? "")) || Date.now();
+  return {
+    ...job,
+    status: nextStatus,
+    lifecycleStatus: nextStatus,
+    currentEpoch: currentEpisode,
+    currentEpisode,
+    progress: nextProgress,
+    loss: nextLoss,
+    updatedAt,
+    liveTelemetrySummary: {
+      ...(job.liveTelemetrySummary ?? {}),
+      latestLivePulseStep: pulse.metricStep ?? null,
+      latestLivePulseEpisodeIndex: pulse.episodeIndex ?? pulse.metricStep ?? null,
+      latestMetricSample: pulse.latestMetricSample ?? null,
+      latestVisibleClipIndex: pulse.visibleClipIndex ?? null,
+      latestClipIndex: pulse.latestClipIndex ?? null,
+      latestVisibleVideoStep: pulse.visibleVideoStep ?? null,
+      eventId: pulse.eventId ?? null,
+      occurredAt: pulse.occurredAt ?? null,
+    },
+    recordingLiveSyncSummary: {
+      ...(job.recordingLiveSyncSummary ?? {}),
+      visibleClipIndex: pulse.visibleClipIndex ?? null,
+      latestClipIndex: pulse.latestClipIndex ?? null,
+      visibleVideoStep: pulse.visibleVideoStep ?? null,
+      occurredAt: pulse.occurredAt ?? null,
+    },
+  };
+}
+
+function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
+  if (!trainingApiEnabled || typeof EventSource === "undefined") return;
+  const activeJobIds = new Set(
+    jobs.filter((job) => ["queued", "provisioning", "running"].includes(job.status)).map((job) => job.id)
+  );
+  for (const jobId of Array.from(livePulseSources.keys())) {
+    if (!activeJobIds.has(jobId)) closeLivePulseSource(jobId);
+  }
+  for (const jobId of activeJobIds) {
+    if (livePulseSources.has(jobId)) continue;
+    const source = new EventSource(buildTrainingLivePulseStreamUrl(jobId));
+    source.addEventListener("live_pulse", (event) => {
+      try {
+        const pulse = JSON.parse((event as MessageEvent<string>).data) as TrainingLivePulseSseEvent;
+        useRuntimeTrainingStore.setState((current) => ({
+          jobs: sortJobs(
+            current.jobs.map((job) => (job.id === jobId ? applyLivePulseToJob(job, pulse) : job))
+          ),
+        }));
+      } catch (error) {
+        logWarn("Failed to parse live pulse event", {
+          scope: "runtime-training",
+          data: { jobId, error },
+        });
+      }
+    });
+    source.addEventListener("job", (event) => {
+      try {
+        const job = JSON.parse((event as MessageEvent<string>).data) as TrainingJobSummary;
+        useRuntimeTrainingStore.setState((current) => ({
+          jobs: sortJobs([
+            job,
+            ...current.jobs.filter((existing) => existing.id !== job.id),
+          ]),
+          recordings: upsertRecordingFromCompletedJob(current.recordings, job),
+        }));
+      } catch (error) {
+        logWarn("Failed to parse job stream event", {
+          scope: "runtime-training",
+          data: { jobId, error },
+        });
+      }
+    });
+    source.onerror = () => {
+      closeLivePulseSource(jobId);
+    };
+    livePulseSources.set(jobId, source);
+  }
 }
 
 function hydrateJobsFromLocalCacheOnce() {
@@ -437,6 +573,7 @@ function stopRemotePollingIfIdle() {
   if (remotePollingTimer === null) return;
   window.clearInterval(remotePollingTimer);
   remotePollingTimer = null;
+  closeAllLivePulseSources();
 }
 
 function requestRemoteJobsSyncOnce() {
@@ -777,6 +914,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
               data: { remoteId: remoteJob.id, error: cacheError },
             });
           });
+          ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
           logInfo("Training job submitted to remote API", {
             scope: "runtime-training",
             data: { localId, remoteId: remoteJob.id },
@@ -928,6 +1066,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
 
     markTrainingJobDeleted(targetJob);
     optimisticJobIds.delete(jobId);
+    closeLivePulseSource(jobId);
     const targetTenantId = resolveTrainingCacheTenantId(targetJob.tenantId);
 
     set((state) => ({
@@ -990,45 +1129,55 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     if (trainingApiEnabled) {
       const tenantId = resolveTrainingCacheTenantId(get().jobs.find((item) => item.id === jobId)?.tenantId);
       try {
-        const cached = await listCachedTrainingEvents({
-          tenantId,
-          jobId,
-          limit: boundedLimit,
-        });
-        const hydrated = await hasHydratedTrainingEvents({ tenantId, jobId });
-        if (!hydrated) {
-          const remote = await listTrainingJobEventsRemote(jobId, boundedLimit);
-          if (remote.length > 0) {
-            try {
-              await cacheTrainingEvents({
-                tenantId,
-                jobId,
-                items: remote,
-              });
-            } catch (cacheError) {
-              logWarn("Failed to cache training job events locally", {
-                scope: "runtime-training",
-                data: { tenantId, jobId, error: cacheError },
-              });
-            }
-          }
-          try {
-            await markHydratedTrainingEvents({ tenantId, jobId });
-          } catch (markError) {
-            logWarn("Failed to mark training event hydration", {
-              scope: "runtime-training",
-              data: { tenantId, jobId, error: markError },
+        const [eventsHydrated, metricBatchesHydrated] = await Promise.all([
+          hasHydratedTrainingEvents({ tenantId, jobId }),
+          hasHydratedMetricBatches({ tenantId, jobId }),
+        ]);
+        if (!eventsHydrated || !metricBatchesHydrated) {
+          const [remoteEvents, remoteBatches] = await Promise.all([
+            eventsHydrated ? Promise.resolve([]) : listTrainingJobEventsRemote(jobId, boundedLimit),
+            metricBatchesHydrated ? Promise.resolve([]) : listTrainingMetricBatchesRemote(jobId, boundedLimit),
+          ]);
+          if (remoteEvents.length > 0) {
+            await cacheTrainingEvents({
+              tenantId,
+              jobId,
+              items: remoteEvents.filter((item) => item.eventType !== "runner.metrics"),
             });
           }
-          const merged = await listCachedTrainingEvents({
+          if (remoteBatches.length > 0) {
+            await cacheMetricBatches({
+              tenantId,
+              jobId,
+              items: remoteBatches,
+            });
+          }
+          if (!eventsHydrated) {
+            await markHydratedTrainingEvents({ tenantId, jobId });
+          }
+          if (!metricBatchesHydrated) {
+            await markHydratedMetricBatches({ tenantId, jobId });
+          }
+        }
+        const [mergedEvents, mergedBatches] = await Promise.all([
+          listCachedTrainingEvents({
             tenantId,
             jobId,
             limit: boundedLimit,
-          });
-          return merged;
-        }
-        if (cached.length > 0) return cached;
-        return [];
+          }),
+          listCachedMetricBatches({
+            tenantId,
+            jobId,
+            limit: boundedLimit,
+          }),
+        ]);
+        const merged = [
+          ...mergedEvents.filter((item) => item.eventType !== "runner.metrics"),
+          ...buildMetricEventsFromBatches(jobId, mergedBatches),
+        ]
+          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+          .slice(0, boundedLimit);
+        return merged;
       } catch (error) {
         logWarn("Failed to list training job events from remote API", {
           scope: "runtime-training",

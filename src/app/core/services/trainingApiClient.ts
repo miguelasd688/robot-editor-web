@@ -19,6 +19,10 @@ type TrainingJobEventListResponse = {
   items: TrainingJobEventSummary[];
 };
 
+type TrainingMetricBatchListResponse = {
+  items: TrainingMetricBatchSummary[];
+};
+
 type TrainingValidationError = {
   code: string;
   message: string;
@@ -735,6 +739,28 @@ export type TrainingLivePulseSseEvent = {
 
 export type TrainingMetricsSseEvent = TrainingLivePulseSseEvent;
 
+export type TrainingMetricBatchSample = {
+  step: number;
+  occurredAt: string;
+  metrics: {
+    rewardMean?: number | null;
+    loss?: number | null;
+    episodeLengthMean?: number | null;
+    fps?: number | null;
+  };
+};
+
+export type TrainingMetricBatchSummary = {
+  batchId: string;
+  jobId: string;
+  runnerJobId?: string | null;
+  fromStep: number;
+  toStep: number;
+  sampleCount: number;
+  samples: TrainingMetricBatchSample[];
+  createdAt: string;
+};
+
 const rawBaseUrl = String(import.meta.env.VITE_TRAINING_API_BASE_URL ?? "").trim();
 const baseUrl = rawBaseUrl.replace(/\/+$/, "");
 const rawApiToken = String(import.meta.env.VITE_TRAINING_API_TOKEN ?? "").trim();
@@ -930,6 +956,19 @@ export async function listTrainingJobEventsRemote(jobId: string, limit = 100): P
     }
   );
   const payload = await parseJson<TrainingJobEventListResponse>(response);
+  return payload.items;
+}
+
+export async function listTrainingMetricBatchesRemote(jobId: string, limit = 100): Promise<TrainingMetricBatchSummary[]> {
+  const bounded = Math.min(Math.max(1, Math.round(limit)), 20_000);
+  const response = await fetch(
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/metrics/batches?limit=${bounded}`),
+    {
+      method: "GET",
+      headers: buildHeaders({ accept: "application/json" }),
+    }
+  );
+  const payload = await parseJson<TrainingMetricBatchListResponse>(response);
   return payload.items;
 }
 
