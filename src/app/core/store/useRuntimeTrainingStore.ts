@@ -61,6 +61,8 @@ let remotePollingTimer: number | null = null;
 let remoteSyncConsumerCount = 0;
 let remoteSyncInFlight = false;
 const livePulseSources = new Map<string, EventSource>();
+const livePulseReconnectTimers = new Map<string, number>();
+const livePulseReconnectAttempts = new Map<string, number>();
 let trainingJobCounter = 0;
 let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
@@ -73,10 +75,57 @@ const DELETED_JOBS_STORAGE_KEY = "runtime-training-deleted-jobs-v1";
 const deletedTrainingJobKeys = readDeletedTrainingJobKeys();
 
 function closeLivePulseSource(jobId: string) {
+  const reconnectTimer = livePulseReconnectTimers.get(jobId);
+  if (reconnectTimer !== undefined) {
+    window.clearTimeout(reconnectTimer);
+    livePulseReconnectTimers.delete(jobId);
+  }
+  livePulseReconnectAttempts.delete(jobId);
   const existing = livePulseSources.get(jobId);
   if (!existing) return;
   existing.close();
   livePulseSources.delete(jobId);
+}
+
+function scheduleLivePulseReconnect(jobId: string) {
+  if (typeof window === "undefined") return;
+  if (livePulseReconnectTimers.has(jobId)) return;
+  const attempt = (livePulseReconnectAttempts.get(jobId) ?? 0) + 1;
+  livePulseReconnectAttempts.set(jobId, attempt);
+  const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempt - 1, 4));
+  const timer = window.setTimeout(() => {
+    livePulseReconnectTimers.delete(jobId);
+    const state = useRuntimeTrainingStore.getState();
+    const job = state.jobs.find((item) => item.id === jobId);
+    if (!job || !ACTIVE_JOB_STATUSES.has(job.status) || !trainingApiEnabled || typeof EventSource === "undefined") {
+      return;
+    }
+    closeLivePulseSource(jobId);
+    ensureLivePulseSubscriptions(state.jobs);
+  }, delay);
+  livePulseReconnectTimers.set(jobId, timer);
+}
+
+async function catchUpMetricBatchesForJob(jobId: string) {
+  if (!trainingApiEnabled) return;
+  const state = useRuntimeTrainingStore.getState();
+  const job = state.jobs.find((item) => item.id === jobId);
+  if (!job || !ACTIVE_JOB_STATUSES.has(job.status)) return;
+  const tenantId = resolveTrainingCacheTenantId(job.tenantId);
+  try {
+    const cached = await listCachedMetricBatches({ tenantId, jobId, limit: 1 });
+    const cachedLatestStep = cached[0]?.toStep ?? 0;
+    const remoteBatches = await listTrainingMetricBatchesRemote(jobId, 50);
+    const remoteLatestStep = remoteBatches[0]?.toStep ?? 0;
+    if (remoteLatestStep <= cachedLatestStep) return;
+    await cacheMetricBatches({ tenantId, jobId, items: remoteBatches });
+    await markHydratedMetricBatches({ tenantId, jobId });
+  } catch (error) {
+    logWarn("Failed to catch up metric batches", {
+      scope: "runtime-training",
+      data: { jobId, error },
+    });
+  }
 }
 
 function closeAllLivePulseSources() {
@@ -339,23 +388,49 @@ function resolveEpisodeBudget(job: Pick<TrainingJobSummary, "episodeTarget" | "m
 
 function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatchSummary[]): TrainingJobEventSummary[] {
   const items: TrainingJobEventSummary[] = [];
-  for (const batch of batches) {
-    for (const sample of batch.samples ?? []) {
+  const orderedBatches = batches
+    .slice()
+    .sort((a, b) => {
+      if (a.toStep !== b.toStep) return a.toStep - b.toStep;
+      return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+    });
+  for (const batch of orderedBatches) {
+    const orderedSamples = (batch.samples ?? [])
+      .slice()
+      .sort((a, b) => {
+        if (a.metricStep !== b.metricStep) return a.metricStep - b.metricStep;
+        return Date.parse(a.occurredAt) - Date.parse(b.occurredAt);
+      });
+    for (const sample of orderedSamples) {
       items.push({
-        id: `${batch.batchId}:${sample.step}`,
+        id: `${batch.batchId}:${sample.metricStep}:${sample.occurredAt}`,
         jobId,
         eventType: "runner.metrics",
         payload: {
           batchId: batch.batchId,
-          step: sample.step,
-          currentEpisode: sample.step,
-          metrics: sample.metrics ?? {},
+          metricStep: sample.metricStep,
+          currentEpisode: sample.episodeIndex ?? sample.metricStep,
+          episodeIndex: sample.episodeIndex ?? sample.metricStep,
+          progressRatio: sample.progressRatio ?? null,
+          canonicalMetrics: sample.canonicalMetrics ?? {},
+          rawMetrics: sample.rawMetrics ?? {},
+          metrics: {
+            ...(sample.rawMetrics ?? {}),
+            ...(sample.metrics ?? {}),
+            ...(sample.canonicalMetrics ?? {}),
+          },
         },
         createdAt: sample.occurredAt,
       });
     }
   }
-  items.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  items.sort((a, b) => {
+    const leftStep = Number((a.payload as Record<string, unknown>).metricStep ?? 0);
+    const rightStep = Number((b.payload as Record<string, unknown>).metricStep ?? 0);
+    const stepDiff = leftStep - rightStep;
+    if (stepDiff !== 0) return stepDiff;
+    return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  });
   return items;
 }
 
@@ -404,6 +479,12 @@ async function syncRemoteJobsOnce() {
       };
     });
     ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
+    void Promise.all(
+      useRuntimeTrainingStore
+        .getState()
+        .jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status))
+        .map((job) => catchUpMetricBatchesForJob(job.id))
+    );
   } catch (error) {
     logWarn("Failed to sync jobs from training API", {
       scope: "runtime-training",
@@ -453,6 +534,8 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
 
 function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSseEvent): TrainingJobSummary {
   const nextStatus = (pulse.status ?? job.status) as TrainingJobStatus;
+  const latestMetricSurface = pulse.latestMetricSurface ?? pulse.metrics ?? pulse.latestMetricSample ?? null;
+  const latestMetricSample = pulse.latestMetricSample ?? latestMetricSurface ?? null;
   const currentEpisode = Math.max(
     Number(job.currentEpisode ?? job.currentEpoch ?? 0),
     Math.round(Number(pulse.episodeIndex ?? pulse.metricStep ?? 0))
@@ -460,7 +543,7 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
   const nextProgress = Number.isFinite(Number(pulse.progressRatio))
     ? Math.max(0, Math.min(1, Number(pulse.progressRatio)))
     : job.progress;
-  const nextLossRaw = Number(pulse.latestMetricSample?.loss);
+  const nextLossRaw = Number(latestMetricSample?.loss);
   const nextLoss = Number.isFinite(nextLossRaw) ? nextLossRaw : job.loss;
   const updatedAt = Date.parse(String(pulse.occurredAt ?? "")) || Date.now();
   return {
@@ -476,7 +559,10 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
       ...(job.liveTelemetrySummary ?? {}),
       latestLivePulseStep: pulse.metricStep ?? null,
       latestLivePulseEpisodeIndex: pulse.episodeIndex ?? pulse.metricStep ?? null,
-      latestMetricSample: pulse.latestMetricSample ?? null,
+      latestMetricSample,
+      latestRawMetricSample: pulse.latestRawMetricSample ?? null,
+      latestMetricSurface,
+      source: pulse.source ?? null,
       latestVisibleClipIndex: pulse.visibleClipIndex ?? null,
       latestClipIndex: pulse.latestClipIndex ?? null,
       latestVisibleVideoStep: pulse.visibleVideoStep ?? null,
@@ -505,6 +591,12 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
     if (livePulseSources.has(jobId)) continue;
     const source = new EventSource(buildTrainingLivePulseStreamUrl(jobId));
     source.addEventListener("live_pulse", (event) => {
+      const reconnectTimer = livePulseReconnectTimers.get(jobId);
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+        livePulseReconnectTimers.delete(jobId);
+      }
+      livePulseReconnectAttempts.delete(jobId);
       try {
         const pulse = JSON.parse((event as MessageEvent<string>).data) as TrainingLivePulseSseEvent;
         useRuntimeTrainingStore.setState((current) => ({
@@ -536,8 +628,17 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
         });
       }
     });
+    source.onopen = () => {
+      const reconnectTimer = livePulseReconnectTimers.get(jobId);
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+        livePulseReconnectTimers.delete(jobId);
+      }
+      livePulseReconnectAttempts.delete(jobId);
+      void catchUpMetricBatchesForJob(jobId);
+    };
     source.onerror = () => {
-      closeLivePulseSource(jobId);
+      scheduleLivePulseReconnect(jobId);
     };
     livePulseSources.set(jobId, source);
   }

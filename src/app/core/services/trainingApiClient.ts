@@ -724,12 +724,22 @@ export type TrainingLivePulseSseEvent = {
   metricStep: number;
   episodeIndex: number;
   progressRatio?: number | null;
+  source?: string | null;
+  metrics?: {
+    [key: string]: number | null | undefined;
+  } | null;
   latestMetricSample: {
     rewardMean?: number | null;
     loss?: number | null;
     episodeLengthMean?: number | null;
     fps?: number | null;
   };
+  latestMetricSurface?: {
+    [key: string]: number | null | undefined;
+  };
+  latestRawMetricSample?: {
+    [key: string]: number | null | undefined;
+  } | null;
   visibleClipIndex?: number | null;
   latestClipIndex?: number | null;
   visibleVideoStep?: number | null;
@@ -740,13 +750,22 @@ export type TrainingLivePulseSseEvent = {
 export type TrainingMetricsSseEvent = TrainingLivePulseSseEvent;
 
 export type TrainingMetricBatchSample = {
-  step: number;
+  metricStep: number;
+  episodeIndex?: number | null;
+  progressRatio?: number | null;
   occurredAt: string;
-  metrics: {
+  canonicalMetrics: {
     rewardMean?: number | null;
     loss?: number | null;
     episodeLengthMean?: number | null;
     fps?: number | null;
+    [key: string]: number | null | undefined;
+  };
+  rawMetrics: {
+    [key: string]: number | null | undefined;
+  };
+  metrics: {
+    [key: string]: number | null | undefined;
   };
 };
 
