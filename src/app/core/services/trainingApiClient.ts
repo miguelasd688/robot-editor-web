@@ -5,7 +5,6 @@ import type {
   TrainingJobEventSummary,
   TrainingRunnerLogsSummary,
   TrainingJobSummary,
-  TrainingProgressSummary,
 } from "../plugins/types";
 
 type TrainingJobListResponse = {
@@ -714,15 +713,27 @@ export type TrainingRecordingMeta = {
   views?: Record<string, TrainingRecordingViewMeta>;
 };
 
-export type TrainingMetricsSseEvent = {
+export type TrainingLivePulseSseEvent = {
   jobId: string;
   runnerJobId?: string | null;
-  step: number;
-  metrics: Record<string, unknown>;
-  source?: string | null;
-  progressSummary?: TrainingProgressSummary | null;
+  status: string;
+  metricStep: number;
+  episodeIndex: number;
+  progressRatio?: number | null;
+  latestMetricSample: {
+    rewardMean?: number | null;
+    loss?: number | null;
+    episodeLengthMean?: number | null;
+    fps?: number | null;
+  };
+  visibleClipIndex?: number | null;
+  latestClipIndex?: number | null;
+  visibleVideoStep?: number | null;
   occurredAt?: string;
+  eventId?: string | null;
 };
+
+export type TrainingMetricsSseEvent = TrainingLivePulseSseEvent;
 
 const rawBaseUrl = String(import.meta.env.VITE_TRAINING_API_BASE_URL ?? "").trim();
 const baseUrl = rawBaseUrl.replace(/\/+$/, "");
@@ -736,7 +747,7 @@ function buildUrl(path: string) {
   return `${baseUrl}${path}`;
 }
 
-export function buildTrainingMetricsStreamUrl(jobId: string) {
+export function buildTrainingLivePulseStreamUrl(jobId: string) {
   const safeJobId = encodeURIComponent(jobId);
   if (!rawApiToken) {
     return buildUrl(`/v1/training/jobs/${safeJobId}/metrics/stream`);
@@ -744,6 +755,10 @@ export function buildTrainingMetricsStreamUrl(jobId: string) {
   const params = new URLSearchParams();
   params.set("access_token", rawApiToken);
   return buildUrl(`/v1/training/jobs/${safeJobId}/metrics/stream?${params.toString()}`);
+}
+
+export function buildTrainingMetricsStreamUrl(jobId: string) {
+  return buildTrainingLivePulseStreamUrl(jobId);
 }
 
 function buildHeaders(headers: Record<string, string> = {}) {
@@ -1157,24 +1172,6 @@ export async function resolveAgentRemote(input: AgentResolveRequest): Promise<Ag
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readPositiveIntFromRecord(source: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const parsed = Number(source[key]);
-    if (!Number.isFinite(parsed)) continue;
-    return Math.max(1, Math.round(parsed));
-  }
-  return undefined;
-}
-
-function readNonNegativeIntFromRecord(source: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const parsed = Number(source[key]);
-    if (!Number.isFinite(parsed)) continue;
-    return Math.max(0, Math.round(parsed));
-  }
-  return undefined;
 }
 
 function toStageUpAxis(value: unknown): StageUpAxis {

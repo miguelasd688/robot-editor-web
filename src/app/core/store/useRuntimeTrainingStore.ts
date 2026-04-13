@@ -995,35 +995,40 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           jobId,
           limit: boundedLimit,
         });
-        if (cached.length > 0) return cached;
-
         const hydrated = await hasHydratedTrainingEvents({ tenantId, jobId });
-        if (hydrated) return [];
-
-        const remote = await listTrainingJobEventsRemote(jobId, boundedLimit);
-        if (remote.length > 0) {
+        if (!hydrated) {
+          const remote = await listTrainingJobEventsRemote(jobId, boundedLimit);
+          if (remote.length > 0) {
+            try {
+              await cacheTrainingEvents({
+                tenantId,
+                jobId,
+                items: remote,
+              });
+            } catch (cacheError) {
+              logWarn("Failed to cache training job events locally", {
+                scope: "runtime-training",
+                data: { tenantId, jobId, error: cacheError },
+              });
+            }
+          }
           try {
-            await cacheTrainingEvents({
-              tenantId,
-              jobId,
-              items: remote,
-            });
-          } catch (cacheError) {
-            logWarn("Failed to cache training job events locally", {
+            await markHydratedTrainingEvents({ tenantId, jobId });
+          } catch (markError) {
+            logWarn("Failed to mark training event hydration", {
               scope: "runtime-training",
-              data: { tenantId, jobId, error: cacheError },
+              data: { tenantId, jobId, error: markError },
             });
           }
-        }
-        try {
-          await markHydratedTrainingEvents({ tenantId, jobId });
-        } catch (markError) {
-          logWarn("Failed to mark training event hydration", {
-            scope: "runtime-training",
-            data: { tenantId, jobId, error: markError },
+          const merged = await listCachedTrainingEvents({
+            tenantId,
+            jobId,
+            limit: boundedLimit,
           });
+          return merged;
         }
-        return remote;
+        if (cached.length > 0) return cached;
+        return [];
       } catch (error) {
         logWarn("Failed to list training job events from remote API", {
           scope: "runtime-training",
