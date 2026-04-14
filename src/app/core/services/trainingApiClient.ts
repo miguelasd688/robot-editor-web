@@ -802,10 +802,6 @@ export function buildTrainingLivePulseStreamUrl(jobId: string) {
   return buildUrl(`/v1/training/jobs/${safeJobId}/metrics/stream?${params.toString()}`);
 }
 
-export function buildTrainingMetricsStreamUrl(jobId: string) {
-  return buildTrainingLivePulseStreamUrl(jobId);
-}
-
 function buildHeaders(headers: Record<string, string> = {}) {
   const next: Record<string, string> = { ...headers };
   if (rawApiToken) {

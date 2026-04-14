@@ -57,7 +57,6 @@ type RuntimeTrainingState = {
 
 const runningIntervals = new Map<string, number>();
 const optimisticJobIds = new Set<string>();
-let remotePollingTimer: number | null = null;
 let remoteSyncConsumerCount = 0;
 let remoteSyncInFlight = false;
 const livePulseSources = new Map<string, EventSource>();
@@ -108,6 +107,7 @@ function scheduleLivePulseReconnect(jobId: string) {
 
 async function catchUpMetricBatchesForJob(jobId: string) {
   if (!trainingApiEnabled) return;
+  if (jobId.startsWith("local_job_")) return;
   const state = useRuntimeTrainingStore.getState();
   const job = state.jobs.find((item) => item.id === jobId);
   if (!job || !ACTIVE_JOB_STATUSES.has(job.status)) return;
@@ -486,6 +486,7 @@ async function syncRemoteJobsOnce() {
       useRuntimeTrainingStore
         .getState()
         .jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status))
+        .filter((job) => !job.id.startsWith("local_job_"))
         .map((job) => catchUpMetricBatchesForJob(job.id))
     );
   } catch (error) {
@@ -591,7 +592,10 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
 function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
   if (!trainingApiEnabled || typeof EventSource === "undefined") return;
   const activeJobIds = new Set(
-    jobs.filter((job) => ["queued", "provisioning", "running"].includes(job.status)).map((job) => job.id)
+    jobs
+      .filter((job) => ["queued", "provisioning", "running"].includes(job.status))
+      .filter((job) => !job.id.startsWith("local_job_"))
+      .map((job) => job.id)
   );
   for (const jobId of Array.from(livePulseSources.keys())) {
     if (!activeJobIds.has(jobId)) closeLivePulseSource(jobId);
@@ -668,24 +672,6 @@ function hydrateJobsFromLocalCacheOnce() {
     });
 }
 
-function ensureRemotePolling() {
-  if (!trainingApiEnabled) return;
-  if (remotePollingTimer !== null || remoteSyncConsumerCount <= 0) return;
-
-  void syncRemoteJobsOnce();
-  remotePollingTimer = window.setInterval(() => {
-    void syncRemoteJobsOnce();
-  }, 2000);
-}
-
-function stopRemotePollingIfIdle() {
-  if (remoteSyncConsumerCount > 0) return;
-  if (remotePollingTimer === null) return;
-  window.clearInterval(remotePollingTimer);
-  remotePollingTimer = null;
-  closeAllLivePulseSources();
-}
-
 function requestRemoteJobsSyncOnce() {
   if (!trainingApiEnabled) return;
   void syncRemoteJobsOnce();
@@ -696,15 +682,13 @@ function startRemoteJobSyncSession() {
 
   hydrateJobsFromLocalCacheOnce();
   remoteSyncConsumerCount += 1;
-  ensureRemotePolling();
   requestRemoteJobsSyncOnce();
 
-  let released = false;
   return () => {
-    if (released) return;
-    released = true;
     remoteSyncConsumerCount = Math.max(0, remoteSyncConsumerCount - 1);
-    stopRemotePollingIfIdle();
+    if (remoteSyncConsumerCount === 0) {
+      closeAllLivePulseSources();
+    }
   };
 }
 
@@ -995,22 +979,41 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         .then((remoteJob) => {
           unmarkTrainingJobDeleted(remoteJob);
           optimisticJobIds.delete(localId);
+          const optimisticJob = useRuntimeTrainingStore.getState().jobs.find((job) => job.id === localId) ?? null;
           const launchContextWithSource = {
             ...mergeLaunchContexts(remoteJob.launchContext, launchContext),
             sourceLocalJobId: localId,
             launchSubmissionStatus: "accepted",
             launchSubmissionResponseStatus: 202,
           };
+          const optimisticCurrentEpoch = Number(optimisticJob?.currentEpoch ?? 0);
+          const optimisticCurrentEpisode = Number(optimisticJob?.currentEpisode ?? 0);
+          const optimisticProgress = Number(optimisticJob?.progress ?? 0);
+          const optimisticLoss = optimisticJob?.loss ?? null;
           const enrichedRemoteJob: TrainingJobSummary = {
             ...remoteJob,
-          episodeTarget: remoteJob.episodeTarget ?? remoteJob.maxSteps ?? maxSteps,
-          maxSteps: remoteJob.maxSteps ?? maxSteps,
-          status: "queued",
-          launchContext: launchContextWithSource,
-          ...(remoteJob.currentEpisode === null || remoteJob.currentEpisode === undefined
-            ? {}
-            : { currentEpisode: remoteJob.currentEpisode }),
-        };
+            episodeTarget: Math.max(
+              Number(remoteJob.episodeTarget ?? 0),
+              Number(remoteJob.maxSteps ?? 0),
+              Number(optimisticJob?.episodeTarget ?? 0),
+              Number(optimisticJob?.maxSteps ?? maxSteps)
+            ),
+            maxSteps: Math.max(
+              Number(remoteJob.maxSteps ?? 0),
+              Number(optimisticJob?.maxSteps ?? maxSteps)
+            ),
+            status: "queued",
+            launchContext: launchContextWithSource,
+            currentEpoch: Math.max(Number(remoteJob.currentEpoch ?? 0), optimisticCurrentEpoch),
+            currentEpisode: Math.max(Number(remoteJob.currentEpisode ?? 0), optimisticCurrentEpisode),
+            progress: Math.max(Number(remoteJob.progress ?? 0), optimisticProgress),
+            loss:
+              Number.isFinite(Number(remoteJob.loss))
+                ? remoteJob.loss
+                : Number.isFinite(Number(optimisticLoss))
+                  ? Number(optimisticLoss)
+                  : remoteJob.loss,
+          };
           set((state) => {
             const withoutLocal = state.jobs.filter((job) => job.id !== localId && job.id !== remoteJob.id);
             const merged = sortJobs([enrichedRemoteJob, ...withoutLocal]);
