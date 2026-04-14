@@ -722,7 +722,7 @@ export type TrainingLivePulseSseEvent = {
   runnerJobId?: string | null;
   status: string;
   metricStep: number;
-  episodeIndex: number;
+  episodeIndex?: number | null;
   progressRatio?: number | null;
   source?: string | null;
   metrics?: {

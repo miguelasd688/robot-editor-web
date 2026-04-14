@@ -336,14 +336,13 @@ export function buildLocalEvents(job: TrainingJobSummary): TrainingJobEventSumma
     }
   }
 
-  const currentEpisode = job.currentEpisode ?? job.currentEpoch;
-  if (currentEpisode > 0 && !submissionFailed) {
+  const currentEpoch = Number(job.currentEpoch ?? 0);
+  if (currentEpoch > 0 && !submissionFailed) {
     pushEvent(
       "runner.metrics",
       {
-        step: currentEpisode,
-        currentEpoch: currentEpisode,
-        currentEpisode,
+        step: currentEpoch,
+        currentEpoch,
         progress: job.progress,
         loss: job.loss,
       },
@@ -409,8 +408,6 @@ function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatc
         payload: {
           batchId: batch.batchId,
           metricStep: sample.metricStep,
-          currentEpisode: sample.episodeIndex ?? sample.metricStep,
-          episodeIndex: sample.episodeIndex ?? sample.metricStep,
           progressRatio: sample.progressRatio ?? null,
           canonicalMetrics: sample.canonicalMetrics ?? {},
           rawMetrics: sample.rawMetrics ?? {},
@@ -419,6 +416,12 @@ function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatc
             ...(sample.metrics ?? {}),
             ...(sample.canonicalMetrics ?? {}),
           },
+          ...(sample.episodeIndex === null || sample.episodeIndex === undefined
+            ? {}
+            : {
+                currentEpisode: sample.episodeIndex,
+                episodeIndex: sample.episodeIndex,
+              }),
         },
         createdAt: sample.occurredAt,
       });
@@ -536,10 +539,15 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
   const nextStatus = (pulse.status ?? job.status) as TrainingJobStatus;
   const latestMetricSurface = pulse.latestMetricSurface ?? pulse.metrics ?? pulse.latestMetricSample ?? null;
   const latestMetricSample = pulse.latestMetricSample ?? latestMetricSurface ?? null;
-  const currentEpisode = Math.max(
-    Number(job.currentEpisode ?? job.currentEpoch ?? 0),
-    Math.round(Number(pulse.episodeIndex ?? pulse.metricStep ?? 0))
-  );
+  const explicitEpisodeIndex =
+    pulse.episodeIndex === null || pulse.episodeIndex === undefined
+      ? null
+      : Math.max(0, Math.round(Number(pulse.episodeIndex) || 0));
+  const currentEpoch = Math.max(Number(job.currentEpoch ?? 0), Math.round(Number(pulse.metricStep ?? 0)));
+  const currentEpisode =
+    explicitEpisodeIndex === null
+      ? job.currentEpisode
+      : Math.max(Number(job.currentEpisode ?? 0), explicitEpisodeIndex);
   const nextProgress = Number.isFinite(Number(pulse.progressRatio))
     ? Math.max(0, Math.min(1, Number(pulse.progressRatio)))
     : job.progress;
@@ -550,7 +558,7 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
     ...job,
     status: nextStatus,
     lifecycleStatus: nextStatus,
-    currentEpoch: currentEpisode,
+    currentEpoch,
     currentEpisode,
     progress: nextProgress,
     loss: nextLoss,
@@ -558,7 +566,8 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
     liveTelemetrySummary: {
       ...(job.liveTelemetrySummary ?? {}),
       latestLivePulseStep: pulse.metricStep ?? null,
-      latestLivePulseEpisodeIndex: pulse.episodeIndex ?? pulse.metricStep ?? null,
+      latestLivePulseEpisodeIndex:
+        explicitEpisodeIndex === null ? job.liveTelemetrySummary?.latestLivePulseEpisodeIndex ?? null : explicitEpisodeIndex,
       latestMetricSample,
       latestRawMetricSample: pulse.latestRawMetricSample ?? null,
       latestMetricSurface,
@@ -718,13 +727,13 @@ function scheduleTrainingProgress(jobId: string) {
     }
 
     const episodeBudget = resolveEpisodeBudget(job);
-    const nextEpisode = Math.min(episodeBudget, (job.currentEpisode ?? job.currentEpoch) + 1);
-    const nextProgress = nextEpisode / Math.max(1, episodeBudget);
+    const nextIteration = Math.min(episodeBudget, Number(job.currentEpoch ?? 0) + 1);
+    const nextProgress = nextIteration / Math.max(1, episodeBudget);
     const trend = 1.2 * (1 - nextProgress) + 0.05;
     const jitter = (Math.random() - 0.5) * 0.08;
     const nextLoss = Number(Math.max(0.02, trend + jitter).toFixed(4));
     const updatedAt = Date.now();
-    const finished = nextEpisode >= episodeBudget;
+    const finished = nextIteration >= episodeBudget;
     const nextStatus: TrainingJobStatus = finished ? "completed" : "running";
 
     useRuntimeTrainingStore.setState((current) => {
@@ -732,8 +741,7 @@ function scheduleTrainingProgress(jobId: string) {
         item.id === jobId
           ? {
               ...item,
-              currentEpoch: nextEpisode,
-              currentEpisode: nextEpisode,
+              currentEpoch: nextIteration,
               progress: nextProgress,
               loss: nextLoss,
               status: nextStatus,
@@ -995,12 +1003,14 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           };
           const enrichedRemoteJob: TrainingJobSummary = {
             ...remoteJob,
-            episodeTarget: remoteJob.episodeTarget ?? remoteJob.maxSteps ?? maxSteps,
-            maxSteps: remoteJob.maxSteps ?? maxSteps,
-            currentEpisode: remoteJob.currentEpisode ?? remoteJob.currentEpoch ?? 0,
-            status: "queued",
-            launchContext: launchContextWithSource,
-          };
+          episodeTarget: remoteJob.episodeTarget ?? remoteJob.maxSteps ?? maxSteps,
+          maxSteps: remoteJob.maxSteps ?? maxSteps,
+          status: "queued",
+          launchContext: launchContextWithSource,
+          ...(remoteJob.currentEpisode === null || remoteJob.currentEpisode === undefined
+            ? {}
+            : { currentEpisode: remoteJob.currentEpisode }),
+        };
           set((state) => {
             const withoutLocal = state.jobs.filter((job) => job.id !== localId && job.id !== remoteJob.id);
             const merged = sortJobs([enrichedRemoteJob, ...withoutLocal]);
