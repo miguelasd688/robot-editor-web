@@ -52,6 +52,7 @@ type RuntimeTrainingState = {
   deleteTrainingJob: (jobId: string, tenantId?: string) => void;
   listTrainingArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
   listTrainingJobEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
+  listTrainingMetricBatches: (jobId: string, limit?: number) => Promise<TrainingMetricBatchSummary[]>;
   listTrainingRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
 };
 
@@ -109,9 +110,9 @@ async function catchUpMetricBatchesForJob(jobId: string) {
   if (!trainingApiEnabled) return;
   if (jobId.startsWith("local_job_")) return;
   const state = useRuntimeTrainingStore.getState();
-  const job = state.jobs.find((item) => item.id === jobId);
-  if (!job || !ACTIVE_JOB_STATUSES.has(job.status)) return;
-  const tenantId = resolveTrainingCacheTenantId(job.tenantId);
+  const selectedJob = state.jobs.find((item) => item.id === jobId);
+  if (!selectedJob || !ACTIVE_JOB_STATUSES.has(selectedJob.status)) return;
+  const tenantId = resolveTrainingCacheTenantId(selectedJob.tenantId);
   try {
     const cached = await listCachedMetricBatches({ tenantId, jobId, limit: 1 });
     const cachedLatestStep = cached[0]?.toStep ?? 0;
@@ -119,7 +120,9 @@ async function catchUpMetricBatchesForJob(jobId: string) {
     const remoteLatestStep = remoteBatches[0]?.toStep ?? 0;
     if (remoteLatestStep <= cachedLatestStep) return;
     await cacheMetricBatches({ tenantId, jobId, items: remoteBatches });
-    await markHydratedMetricBatches({ tenantId, jobId });
+    if (shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
+      await markHydratedMetricBatches({ tenantId, jobId });
+    }
   } catch (error) {
     logWarn("Failed to catch up metric batches", {
       scope: "runtime-training",
@@ -187,6 +190,13 @@ function readPositiveIntEnv(rawValue: unknown, fallback: number) {
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.round(parsed));
+}
+
+function shouldPersistMetricBatchHydration(
+  job: TrainingJobSummary | null | undefined,
+  remoteBatches: TrainingMetricBatchSummary[]
+) {
+  return remoteBatches.length > 0 || !job || !ACTIVE_JOB_STATUSES.has(job.status);
 }
 
 function sortJobs(jobs: TrainingJobSummary[]) {
@@ -407,6 +417,7 @@ function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatc
         eventType: "runner.metrics",
         payload: {
           batchId: batch.batchId,
+          source: "metrics_batch",
           metricStep: sample.metricStep,
           progressRatio: sample.progressRatio ?? null,
           canonicalMetrics: sample.canonicalMetrics ?? {},
@@ -458,11 +469,13 @@ async function syncRemoteJobsOnce() {
       const remoteWithContext = remoteJobs.map((job) => {
         const existing = existingById.get(job.id);
         const launchContext = mergeLaunchContexts(existing?.launchContext, job.launchContext);
-        if (!launchContext) return job;
-        return {
-          ...job,
-          launchContext,
-        };
+        const withContext = !launchContext
+          ? job
+          : {
+              ...job,
+              launchContext,
+            };
+        return mergeActiveJobTruth(existing, withContext, existing?.liveTelemetrySummary ?? null);
       });
       const persistedLocal = current.jobs.filter((job) => !optimisticJobIds.has(job.id));
       const mergedById = new Map(persistedLocal.map((job) => [job.id, job] as const));
@@ -515,11 +528,13 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
     const cachedWithContext = cachedJobs.map((job) => {
       const existing = existingById.get(job.id);
       const launchContext = mergeLaunchContexts(existing?.launchContext, job.launchContext);
-      if (!launchContext) return job;
-      return {
-        ...job,
-        launchContext,
-      };
+      const withContext = !launchContext
+        ? job
+        : {
+            ...job,
+            launchContext,
+          };
+      return mergeActiveJobTruth(existing, withContext, existing?.liveTelemetrySummary ?? null);
     });
     const mergedJobs = sortJobs([...cachedWithContext, ...optimistic]);
 
@@ -589,6 +604,125 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
   };
 }
 
+function parseLiveTelemetryTimestamp(summary: TrainingJobSummary["liveTelemetrySummary"] | null | undefined) {
+  const occurredAt = String((summary as Record<string, unknown> | null | undefined)?.occurredAt ?? "").trim();
+  const parsed = Date.parse(occurredAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isTerminalJobStatus(status: TrainingJobStatus) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toFiniteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getStatusRank(status: TrainingJobStatus | string | null | undefined) {
+  if (status === "queued" || status === "submitting") return 0;
+  if (status === "provisioning") return 1;
+  if (status === "running") return 2;
+  return -1;
+}
+
+function resolveVisibleActiveStatus(
+  existing: TrainingJobSummary | undefined,
+  incoming: TrainingJobSummary,
+  freshestLiveSummary: TrainingJobSummary["liveTelemetrySummary"] | null
+): TrainingJobStatus {
+  const liveSummary = isObject(freshestLiveSummary) ? freshestLiveSummary : null;
+  const crossSurfaceTruth = isObject(liveSummary?.crossSurfaceTruthSummary)
+    ? (liveSummary?.crossSurfaceTruthSummary as Record<string, unknown>)
+    : null;
+  const hasLiveTelemetryStep =
+    toFiniteNumber(crossSurfaceTruth?.runnerLivePulseIteration) !== null ||
+    toFiniteNumber(liveSummary?.latestLivePulseStep) !== null ||
+    toFiniteNumber(liveSummary?.latestAcceptedMetricStep) !== null;
+  const ownershipProven = Boolean(
+    crossSurfaceTruth?.ownershipProven === true ||
+      hasLiveTelemetryStep ||
+      toFiniteNumber(existing?.metricsIngestionSummary?.lastAcceptedStep) !== null ||
+      toFiniteNumber(incoming.metricsIngestionSummary?.lastAcceptedStep) !== null
+  );
+  if (!ownershipProven) {
+    return incoming.status;
+  }
+
+  const livePulseStep =
+    toFiniteNumber(crossSurfaceTruth?.runnerLivePulseIteration) ??
+    toFiniteNumber(liveSummary?.latestLivePulseStep) ??
+    toFiniteNumber(liveSummary?.latestAcceptedMetricStep) ??
+    0;
+  if (livePulseStep > 0) {
+    return "running";
+  }
+
+  const strongestActiveRank = Math.max(getStatusRank(existing?.status), getStatusRank(incoming.status));
+  if (strongestActiveRank >= 2) {
+    return "running";
+  }
+  if (strongestActiveRank === 1) {
+    return "provisioning";
+  }
+  return "provisioning";
+}
+
+function mergeActiveJobTruth(
+  existing: TrainingJobSummary | undefined,
+  incoming: TrainingJobSummary,
+  latestLivePulse?: TrainingJobSummary["liveTelemetrySummary"] | null
+): TrainingJobSummary {
+  if (!existing) return incoming;
+
+  if (isTerminalJobStatus(incoming.status)) {
+    return incoming;
+  }
+  if (isTerminalJobStatus(existing.status)) {
+    return existing;
+  }
+  if (!ACTIVE_JOB_STATUSES.has(existing.status) || !ACTIVE_JOB_STATUSES.has(incoming.status)) {
+    return incoming;
+  }
+
+  const freshestLiveSummary = latestLivePulse ?? existing.liveTelemetrySummary ?? incoming.liveTelemetrySummary ?? null;
+  const freshestLiveAt = parseLiveTelemetryTimestamp(freshestLiveSummary);
+  const incomingLiveAt = parseLiveTelemetryTimestamp(incoming.liveTelemetrySummary);
+  if (incomingLiveAt > freshestLiveAt) {
+    return incoming;
+  }
+
+  const currentEpoch = Math.max(Number(existing.currentEpoch ?? 0), Number(incoming.currentEpoch ?? 0));
+  const currentEpisode = Math.max(Number(existing.currentEpisode ?? 0), Number(incoming.currentEpisode ?? 0));
+  const progress = Math.max(Number(existing.progress ?? 0), Number(incoming.progress ?? 0));
+  const existingLoss = Number(existing.loss);
+  const incomingLoss = Number(incoming.loss);
+  const loss =
+    Number.isFinite(existingLoss) && existingLoss >= 0
+      ? existing.loss
+      : Number.isFinite(incomingLoss) && incomingLoss >= 0
+        ? incoming.loss
+        : incoming.loss;
+  const visibleStatus = resolveVisibleActiveStatus(existing, incoming, freshestLiveSummary);
+
+  return {
+    ...incoming,
+    status: visibleStatus,
+    lifecycleStatus: visibleStatus,
+    currentEpoch,
+    currentEpisode,
+    progress,
+    loss,
+    updatedAt: Math.max(Number(incoming.updatedAt ?? 0), Number(existing.updatedAt ?? 0), freshestLiveAt),
+    liveTelemetrySummary: freshestLiveSummary ?? incoming.liveTelemetrySummary ?? existing.liveTelemetrySummary,
+    recordingLiveSyncSummary: existing.recordingLiveSyncSummary ?? incoming.recordingLiveSyncSummary,
+  };
+}
+
 function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
   if (!trainingApiEnabled || typeof EventSource === "undefined") return;
   const activeJobIds = new Set(
@@ -627,13 +761,17 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
     source.addEventListener("job", (event) => {
       try {
         const job = JSON.parse((event as MessageEvent<string>).data) as TrainingJobSummary;
-        useRuntimeTrainingStore.setState((current) => ({
-          jobs: sortJobs([
-            job,
-            ...current.jobs.filter((existing) => existing.id !== job.id),
-          ]),
-          recordings: upsertRecordingFromCompletedJob(current.recordings, job),
-        }));
+        useRuntimeTrainingStore.setState((current) => {
+          const existing = current.jobs.find((item) => item.id === job.id);
+          const mergedJob = mergeActiveJobTruth(existing, job, existing?.liveTelemetrySummary ?? null);
+          return {
+            jobs: sortJobs([
+              mergedJob,
+              ...current.jobs.filter((item) => item.id !== job.id),
+            ]),
+            recordings: upsertRecordingFromCompletedJob(current.recordings, mergedJob),
+          };
+        });
       } catch (error) {
         logWarn("Failed to parse job stream event", {
           scope: "runtime-training",
@@ -1235,13 +1373,14 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     const boundedLimit = Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS);
 
     if (isOptimisticLocalJobId(jobId)) {
-      const job = get().jobs.find((item) => item.id === jobId) ?? null;
-      if (!job) return [];
-      return buildLocalEvents(job).slice(0, boundedLimit);
+      const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
+      if (!selectedJob) return [];
+      return buildLocalEvents(selectedJob).slice(0, boundedLimit);
     }
 
     if (trainingApiEnabled) {
-      const tenantId = resolveTrainingCacheTenantId(get().jobs.find((item) => item.id === jobId)?.tenantId);
+      const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
+      const tenantId = resolveTrainingCacheTenantId(selectedJob?.tenantId);
       try {
         const [eventsHydrated, metricBatchesHydrated] = await Promise.all([
           hasHydratedTrainingEvents({ tenantId, jobId }),
@@ -1256,7 +1395,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             await cacheTrainingEvents({
               tenantId,
               jobId,
-              items: remoteEvents.filter((item) => item.eventType !== "runner.metrics"),
+              items: remoteEvents,
             });
           }
           if (remoteBatches.length > 0) {
@@ -1269,7 +1408,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           if (!eventsHydrated) {
             await markHydratedTrainingEvents({ tenantId, jobId });
           }
-          if (!metricBatchesHydrated) {
+          if (!metricBatchesHydrated && shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
             await markHydratedMetricBatches({ tenantId, jobId });
           }
         }
@@ -1286,7 +1425,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           }),
         ]);
         const merged = [
-          ...mergedEvents.filter((item) => item.eventType !== "runner.metrics"),
+          ...mergedEvents,
           ...buildMetricEventsFromBatches(jobId, mergedBatches),
         ]
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
@@ -1301,9 +1440,56 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       }
     }
 
-    const job = get().jobs.find((item) => item.id === jobId) ?? null;
-    if (!job) return [];
-    return buildLocalEvents(job).slice(0, boundedLimit);
+    const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
+    if (!selectedJob) return [];
+    return buildLocalEvents(selectedJob).slice(0, boundedLimit);
+  },
+
+  listTrainingMetricBatches: async (jobId, limit = 100): Promise<TrainingMetricBatchSummary[]> => {
+    const boundedLimit = Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS);
+
+    if (isOptimisticLocalJobId(jobId)) {
+      return [];
+    }
+
+    if (trainingApiEnabled) {
+      const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
+      const tenantId = resolveTrainingCacheTenantId(selectedJob?.tenantId);
+      try {
+        const hydrated = await hasHydratedMetricBatches({ tenantId, jobId });
+        const cached = await listCachedMetricBatches({
+          tenantId,
+          jobId,
+          limit: boundedLimit,
+        });
+        if (!hydrated || (cached.length === 0 && selectedJob && ACTIVE_JOB_STATUSES.has(selectedJob.status))) {
+          const remoteBatches = await listTrainingMetricBatchesRemote(jobId, boundedLimit);
+          if (remoteBatches.length > 0) {
+            await cacheMetricBatches({
+              tenantId,
+              jobId,
+              items: remoteBatches,
+            });
+          }
+          if (shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
+            await markHydratedMetricBatches({ tenantId, jobId });
+          }
+        }
+        return await listCachedMetricBatches({
+          tenantId,
+          jobId,
+          limit: boundedLimit,
+        });
+      } catch (error) {
+        logWarn("Failed to list training metric batches from remote API", {
+          scope: "runtime-training",
+          data: { jobId, limit: boundedLimit, error },
+        });
+        return [];
+      }
+    }
+
+    return [];
   },
 
   listTrainingRunnerLogs: async (jobId, tail = 250): Promise<TrainingRunnerLogsSummary> => {

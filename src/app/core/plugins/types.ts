@@ -1,5 +1,6 @@
 import type { DockId, PanelId } from "../dock/types";
 import type React from "react";
+import type { TrainingMetricBatchSummary } from "../services/trainingApiClient";
 
 export type TrainingJobStatus = "submitting" | "queued" | "provisioning" | "running" | "completed" | "failed" | "cancelled";
 export type TrainingTrainer = "rsl_rl" | "rllib" | "sb3";
@@ -505,6 +506,7 @@ export type PluginHostAPI = {
     getTrainingTokenCost: () => number;
     listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
     listEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
+    listMetricBatches: (jobId: string, limit?: number) => Promise<TrainingMetricBatchSummary[]>;
     listRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
     subscribe: (listener: () => void) => () => void;
   };

@@ -19,6 +19,7 @@ export const pluginHostApi: PluginHostAPI = {
     getTrainingTokenCost: () => useRuntimeTrainingStore.getState().trainingTokenCost,
     listArtifacts: (jobId, kind) => useRuntimeTrainingStore.getState().listTrainingArtifacts(jobId, kind),
     listEvents: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingJobEvents(jobId, limit),
+    listMetricBatches: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingMetricBatches(jobId, limit),
     listRunnerLogs: (jobId, tail) => useRuntimeTrainingStore.getState().listTrainingRunnerLogs(jobId, tail),
     subscribe: (listener) =>
       useRuntimeTrainingStore.subscribe(() => {
