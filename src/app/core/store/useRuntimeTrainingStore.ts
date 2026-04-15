@@ -284,9 +284,31 @@ export function deriveVisibleMetricHistory(rows: TrainingMetricHistoryRow[]) {
   return rows.slice().sort((a, b) => a.trainerIteration - b.trainerIteration);
 }
 
+function latestMetricHistoryRow(rows: TrainingMetricHistoryRow[]) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return deriveVisibleMetricHistory(rows)[rows.length - 1] ?? null;
+}
+
+function deriveJobMetricHistory(job: TrainingJobSummary | null | undefined, currentRows: TrainingMetricHistoryRow[]) {
+  const acceptedRows = buildMetricHistoryRowsFromIngestionSummary(job);
+  const mergedAcceptedRows = deriveVisibleMetricHistory(acceptedRows);
+  const hasDurableRows = currentRows.length > 0;
+  const hasAcceptedRows = acceptedRows.length > 0;
+  if (!hasDurableRows && !hasAcceptedRows) {
+    return deriveVisibleMetricHistory(currentRows);
+  }
+  if (hasDurableRows) {
+    return mergeMetricRowsByIteration(currentRows, mergedAcceptedRows);
+  }
+  if (job && ACTIVE_JOB_STATUSES.has(job.status) && hasAcceptedRows) {
+    return mergeMetricRowsByIteration(currentRows, mergedAcceptedRows);
+  }
+  return deriveVisibleMetricHistory(currentRows);
+}
+
 export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
   const visibleHistory = deriveVisibleMetricHistory(rows);
-  const latest = visibleHistory.length > 0 ? visibleHistory[visibleHistory.length - 1] : null;
+  const latest = latestMetricHistoryRow(visibleHistory);
   const acceptedIteration = toFiniteNumber(job?.metricsIngestionSummary?.lastAcceptedStep);
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
@@ -311,11 +333,18 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   };
 }
 
-function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | null | undefined) {
+export function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | null | undefined) {
   const ingestionSummary = job?.metricsIngestionSummary ?? null;
   const latestMetricRows = Array.isArray(ingestionSummary?.latestMetricRows) ? ingestionSummary.latestMetricRows : [];
   const rows: TrainingMetricHistoryRow[] = [];
   for (const row of latestMetricRows) {
+    const directRewardMean = toFiniteNumber(row.rewardMean);
+    const directEpisodeLengthMean = toFiniteNumber(row.episodeLengthMean);
+    const directLoss = toFiniteNumber(row.loss);
+    const directFps = toFiniteNumber(row.fps);
+    const canonicalMetrics = row.canonicalMetrics ?? null;
+    const metrics = row.metrics ?? null;
+    const rawMetrics = row.rawMetrics ?? null;
     const normalized = normalizeMetricHistoryRow({
       trainerIteration: row.trainerIteration ?? row.metricStep,
       metricStep: row.trainerIteration ?? row.metricStep,
@@ -325,27 +354,70 @@ function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | nu
       sourceMarker: row.sourceMarker ?? row.source ?? null,
       episodeIndex: row.episodeIndex ?? null,
       rewardMean:
-        toFiniteNumber(row.canonicalMetrics?.rewardMean) ??
-        toFiniteNumber(row.metrics?.rewardMean) ??
-        toFiniteNumber(row.rawMetrics?.rewardMean) ??
+        directRewardMean ??
+        toFiniteNumber(canonicalMetrics?.rewardMean) ??
+        toFiniteNumber(metrics?.rewardMean) ??
+        toFiniteNumber(rawMetrics?.rewardMean) ??
         null,
       episodeLengthMean:
-        toFiniteNumber(row.canonicalMetrics?.episodeLengthMean) ??
-        toFiniteNumber(row.metrics?.episodeLengthMean) ??
-        toFiniteNumber(row.rawMetrics?.episodeLengthMean) ??
+        directEpisodeLengthMean ??
+        toFiniteNumber(canonicalMetrics?.episodeLengthMean) ??
+        toFiniteNumber(metrics?.episodeLengthMean) ??
+        toFiniteNumber(rawMetrics?.episodeLengthMean) ??
         null,
       loss:
-        toFiniteNumber(row.canonicalMetrics?.loss) ??
-        toFiniteNumber(row.metrics?.loss) ??
-        toFiniteNumber(row.rawMetrics?.loss) ??
+        directLoss ??
+        toFiniteNumber(canonicalMetrics?.loss) ??
+        toFiniteNumber(metrics?.loss) ??
+        toFiniteNumber(rawMetrics?.loss) ??
         null,
       fps:
-        toFiniteNumber(row.canonicalMetrics?.fps) ??
-        toFiniteNumber(row.metrics?.fps) ??
-        toFiniteNumber(row.rawMetrics?.fps) ??
+        directFps ??
+        toFiniteNumber(canonicalMetrics?.fps) ??
+        toFiniteNumber(metrics?.fps) ??
+        toFiniteNumber(rawMetrics?.fps) ??
         null,
     });
     if (normalized) rows.push(normalized);
+  }
+
+  const latestMetrics = toObjectOrEmpty(ingestionSummary?.latestMetrics);
+  const latestMetricsStep = Math.max(0, Math.round(Number(ingestionSummary?.lastAcceptedStep ?? 0)));
+  if (latestMetricsStep > 0 && Object.keys(latestMetrics).length > 0) {
+    const latestMetricsRow = normalizeMetricHistoryRow({
+      trainerIteration: latestMetricsStep,
+      metricStep: latestMetricsStep,
+      occurredAt: ingestionSummary?.lastAcceptedTimestamp ?? new Date().toISOString(),
+      progressRatio: null,
+      source: "accepted_canonical_metrics",
+      sourceMarker: "metricsIngestionSummary.latestMetrics",
+      episodeIndex: null,
+      rewardMean:
+        toFiniteNumber(latestMetrics.rewardMean) ??
+        toFiniteNumber(latestMetrics.reward) ??
+        toFiniteNumber(latestMetrics.mean_reward) ??
+        toFiniteNumber(latestMetrics["Train/mean_reward/time"]) ??
+        toFiniteNumber(latestMetrics["Train/mean_reward"]) ??
+        null,
+      episodeLengthMean:
+        toFiniteNumber(latestMetrics.episodeLengthMean) ??
+        toFiniteNumber(latestMetrics["Train/mean_episode_length/time"]) ??
+        toFiniteNumber(latestMetrics["Train/mean_episode_length"]) ??
+        null,
+      loss:
+        toFiniteNumber(latestMetrics.loss) ??
+        toFiniteNumber(latestMetrics.valueLoss) ??
+        toFiniteNumber(latestMetrics.surrogateLoss) ??
+        toFiniteNumber(latestMetrics["Loss/value_function"]) ??
+        toFiniteNumber(latestMetrics["Loss/surrogate"]) ??
+        null,
+      fps:
+        toFiniteNumber(latestMetrics.fps) ??
+        toFiniteNumber(latestMetrics["Perf/total_fps"]) ??
+        toFiniteNumber(latestMetrics["Perf/fps"]) ??
+        null,
+    });
+    if (latestMetricsRow) rows.push(latestMetricsRow);
   }
   return rows;
 }
@@ -355,11 +427,12 @@ export function deriveUnifiedVisibleTrainingState(
   rows: TrainingMetricHistoryRow[]
 ) {
   const acceptedRows = buildMetricHistoryRowsFromIngestionSummary(job);
-  const mergedRows = mergeMetricRowsByIteration(rows, acceptedRows);
+  const durableRows = deriveVisibleMetricHistory(rows);
+  const mergedRows = deriveJobMetricHistory(job, durableRows);
   const visibleTruth = deriveVisibleIterationTruth(job, mergedRows);
-  const chartRows = deriveVisibleMetricHistory(mergedRows);
-  const latestDurableIteration = rows.length > 0 ? rows[rows.length - 1]?.trainerIteration ?? null : null;
-  const latestAcceptedIteration = acceptedRows.length > 0 ? acceptedRows[acceptedRows.length - 1]?.trainerIteration ?? null : null;
+  const chartRows = mergedRows;
+  const latestDurableIteration = latestMetricHistoryRow(durableRows)?.trainerIteration ?? null;
+  const latestAcceptedIteration = latestMetricHistoryRow(acceptedRows)?.trainerIteration ?? null;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
   return {
@@ -367,11 +440,22 @@ export function deriveUnifiedVisibleTrainingState(
     visibleIteration: visibleTruth.browserVisibleIteration,
     visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
     visibleProgressSource: visibleTruth.source,
-    visibleChartSource: latestDurableIteration !== null ? "durable_metric_rows" : latestAcceptedIteration !== null ? "accepted_canonical_metrics" : "progress_unavailable",
     latestDurableTrainerIteration: latestDurableIteration,
     latestAcceptedCanonicalIteration: latestAcceptedIteration,
     livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
     persistedProgressIteration: progressSummary?.trainingProgress?.current ?? null,
+    visibleMetricSummarySource: visibleTruth.source,
+    visibleChartSource:
+      latestDurableIteration !== null
+        ? "durable_metric_rows"
+        : latestAcceptedIteration !== null
+          ? "accepted_canonical_metrics"
+          : "progress_unavailable",
+    mergedMetricHistoryLength: mergedRows.length,
+    chartRowsLength: chartRows.length,
+    chartFallbackActive: latestDurableIteration === null && latestAcceptedIteration !== null,
+    nonCanonicalChartFallbackDetected:
+      chartRows.some((row) => row.source !== "durable" && row.source !== "accepted_canonical_metrics") || false,
     nonCanonicalProgressFallbackDetected:
       Boolean(progressSource) && progressSource !== "durable_metric_rows" && progressSource !== "accepted_canonical_metrics",
   };
@@ -700,6 +784,10 @@ async function syncRemoteJobsOnce() {
         mergedById.set(remoteJob.id, remoteJob);
       }
       const mergedJobs = sortJobs([...mergedById.values(), ...optimistic]);
+      const nextMetricHistoryByJob = { ...current.metricHistoryByJob };
+      for (const job of mergedById.values()) {
+        nextMetricHistoryByJob[job.id] = deriveJobMetricHistory(job, nextMetricHistoryByJob[job.id] ?? []);
+      }
 
       let nextRecordings = current.recordings;
       for (const job of mergedById.values()) {
@@ -709,6 +797,7 @@ async function syncRemoteJobsOnce() {
       return {
         jobs: mergedJobs,
         recordings: nextRecordings,
+        metricHistoryByJob: nextMetricHistoryByJob,
       };
     });
     ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
@@ -754,6 +843,10 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
       return mergeActiveJobTruth(existing, withContext, existing?.liveTelemetrySummary ?? null);
     });
     const mergedJobs = sortJobs([...cachedWithContext, ...optimistic]);
+    const nextMetricHistoryByJob = { ...current.metricHistoryByJob };
+    for (const job of cachedWithContext) {
+      nextMetricHistoryByJob[job.id] = deriveJobMetricHistory(job, nextMetricHistoryByJob[job.id] ?? []);
+    }
 
     let nextRecordings = current.recordings;
     for (const job of cachedWithContext) {
@@ -763,6 +856,7 @@ async function hydrateJobsFromLocalCache(input: { forceMerge: boolean }) {
     return {
       jobs: mergedJobs,
       recordings: nextRecordings,
+      metricHistoryByJob: nextMetricHistoryByJob,
     };
   });
   ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
@@ -969,7 +1063,10 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
           metricHistoryByJob: historyRow
             ? {
                 ...current.metricHistoryByJob,
-                [jobId]: mergeMetricRowsByIteration(current.metricHistoryByJob[jobId] ?? [], [historyRow]),
+                [jobId]: deriveJobMetricHistory(
+                  current.jobs.find((job) => job.id === jobId) ?? null,
+                  mergeMetricRowsByIteration(current.metricHistoryByJob[jobId] ?? [], [historyRow])
+                ),
               }
             : current.metricHistoryByJob,
         }));
@@ -986,12 +1083,17 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
         useRuntimeTrainingStore.setState((current) => {
           const existing = current.jobs.find((item) => item.id === job.id);
           const mergedJob = mergeActiveJobTruth(existing, job, existing?.liveTelemetrySummary ?? null);
+          const nextRows = deriveJobMetricHistory(mergedJob, current.metricHistoryByJob[job.id] ?? []);
           return {
             jobs: sortJobs([
               mergedJob,
               ...current.jobs.filter((item) => item.id !== job.id),
             ]),
             recordings: upsertRecordingFromCompletedJob(current.recordings, mergedJob),
+            metricHistoryByJob: {
+              ...current.metricHistoryByJob,
+              [job.id]: nextRows,
+            },
           };
         });
       } catch (error) {
@@ -1708,10 +1810,11 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           jobId,
           limit: boundedLimit,
         });
-        const visibleHistory = mergeMetricRowsByIteration(
+        const selectedJobForVisibleHistory = get().jobs.find((item) => item.id === jobId) ?? null;
+        const visibleHistory = deriveJobMetricHistory(selectedJobForVisibleHistory, mergeMetricRowsByIteration(
           get().metricHistoryByJob[jobId] ?? [],
           buildMetricHistoryRowsFromBatches(metricBatches)
-        );
+        ));
         set((state) => ({
           metricHistoryByJob: {
             ...state.metricHistoryByJob,
