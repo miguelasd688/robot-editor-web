@@ -41,9 +41,26 @@ import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManag
 import { editorEngine } from "../editor/engineSingleton";
 import { useTrainingImportContextStore } from "./useTrainingImportContextStore";
 
+type MetricHistorySource = "durable" | "live_overlay" | "terminal_flush";
+
+type TrainingMetricHistoryRow = {
+  trainerIteration: number;
+  metricStep: number;
+  occurredAt: string;
+  progressRatio: number | null;
+  source: MetricHistorySource;
+  sourceMarker: string | null;
+  episodeIndex: number | null;
+  rewardMean: number | null;
+  episodeLengthMean: number | null;
+  loss: number | null;
+  fps: number | null;
+};
+
 type RuntimeTrainingState = {
   jobs: TrainingJobSummary[];
   recordings: TrainingRecordingSummary[];
+  metricHistoryByJob: Record<string, TrainingMetricHistoryRow[]>;
   trainingTokens: number;
   trainingTokenCost: number;
   startRemoteJobSync: () => () => void;
@@ -197,6 +214,124 @@ function shouldPersistMetricBatchHydration(
   remoteBatches: TrainingMetricBatchSummary[]
 ) {
   return remoteBatches.length > 0 || !job || !ACTIVE_JOB_STATUSES.has(job.status);
+}
+
+function normalizeMetricHistoryRow(
+  row: Partial<TrainingMetricHistoryRow> & {
+    trainerIteration?: unknown;
+    metricStep?: unknown;
+    occurredAt?: unknown;
+    source?: unknown;
+    sourceMarker?: unknown;
+  }
+): TrainingMetricHistoryRow | null {
+  const trainerIteration = Math.max(0, Math.round(Number(row.trainerIteration ?? row.metricStep ?? 0)));
+  if (trainerIteration <= 0) return null;
+  const occurredAt = String(row.occurredAt ?? "").trim();
+  if (!occurredAt) return null;
+  return {
+    trainerIteration,
+    metricStep: trainerIteration,
+    occurredAt,
+    progressRatio: toFiniteNumber(row.progressRatio),
+    source:
+      row.source === "terminal_flush" || row.source === "live_overlay" || row.source === "durable"
+        ? row.source
+        : "durable",
+    sourceMarker: typeof row.sourceMarker === "string" && row.sourceMarker.trim() ? row.sourceMarker.trim() : null,
+    episodeIndex: toFiniteNumber(row.episodeIndex) === null ? null : Math.max(0, Math.round(Number(row.episodeIndex))),
+    rewardMean: toFiniteNumber(row.rewardMean),
+    episodeLengthMean: toFiniteNumber(row.episodeLengthMean),
+    loss: toFiniteNumber(row.loss),
+    fps: toFiniteNumber(row.fps),
+  };
+}
+
+export function mergeMetricRowsByIteration(
+  current: TrainingMetricHistoryRow[],
+  incoming: TrainingMetricHistoryRow[]
+) {
+  const byIteration = new Map<number, TrainingMetricHistoryRow>();
+  for (const row of current) {
+    byIteration.set(row.trainerIteration, row);
+  }
+  for (const row of incoming) {
+    const existing = byIteration.get(row.trainerIteration);
+    if (!existing) {
+      byIteration.set(row.trainerIteration, row);
+      continue;
+    }
+    byIteration.set(row.trainerIteration, {
+      ...existing,
+      ...row,
+      progressRatio: row.progressRatio ?? existing.progressRatio,
+      episodeIndex: row.episodeIndex ?? existing.episodeIndex,
+      rewardMean: row.rewardMean ?? existing.rewardMean,
+      episodeLengthMean: row.episodeLengthMean ?? existing.episodeLengthMean,
+      loss: row.loss ?? existing.loss,
+      fps: row.fps ?? existing.fps,
+      sourceMarker: row.sourceMarker ?? existing.sourceMarker,
+      source: row.source ?? existing.source,
+    });
+  }
+  return Array.from(byIteration.values()).sort((a, b) => a.trainerIteration - b.trainerIteration);
+}
+
+export function deriveVisibleMetricHistory(rows: TrainingMetricHistoryRow[]) {
+  return rows.slice().sort((a, b) => a.trainerIteration - b.trainerIteration);
+}
+
+export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
+  const visibleHistory = deriveVisibleMetricHistory(rows);
+  const latest = visibleHistory.length > 0 ? visibleHistory[visibleHistory.length - 1] : null;
+  const browserVisibleIteration = latest?.trainerIteration ?? Number(job?.currentEpoch ?? 0);
+  const browserVisibleProgressRatio =
+    latest?.progressRatio ?? (Number.isFinite(Number(job?.progress)) ? Number(job?.progress) : null);
+  return {
+    browserVisibleIteration,
+    browserVisibleProgressRatio,
+    source: latest?.source ?? "durable",
+    latestMetricRow: latest,
+  };
+}
+
+function buildMetricHistoryRowsFromBatches(batches: TrainingMetricBatchSummary[]) {
+  const rows: TrainingMetricHistoryRow[] = [];
+  for (const batch of batches) {
+    for (const sample of batch.samples ?? []) {
+      const normalized = normalizeMetricHistoryRow({
+        trainerIteration: sample.trainerIteration ?? sample.metricStep,
+        metricStep: sample.trainerIteration ?? sample.metricStep,
+        occurredAt: sample.occurredAt,
+        progressRatio: sample.progressRatio ?? null,
+        source: "durable",
+        sourceMarker: batch.batchId,
+        episodeIndex: sample.episodeIndex ?? null,
+        rewardMean: sample.canonicalMetrics?.rewardMean ?? null,
+        episodeLengthMean: sample.canonicalMetrics?.episodeLengthMean ?? null,
+        loss: sample.canonicalMetrics?.loss ?? null,
+        fps: sample.canonicalMetrics?.fps ?? null,
+      });
+      if (normalized) rows.push(normalized);
+    }
+  }
+  return rows;
+}
+
+function buildMetricHistoryRowFromLivePulse(pulse: TrainingLivePulseSseEvent): TrainingMetricHistoryRow | null {
+  return normalizeMetricHistoryRow({
+    trainerIteration: pulse.trainerIteration ?? pulse.metricStep,
+    metricStep: pulse.trainerIteration ?? pulse.metricStep,
+    occurredAt: pulse.occurredAt ?? new Date().toISOString(),
+    progressRatio: pulse.progressRatio ?? null,
+    source: "live_overlay",
+    sourceMarker: pulse.eventId ?? null,
+    episodeIndex: pulse.episodeIndex ?? null,
+    rewardMean: pulse.latestMetricSample?.rewardMean ?? null,
+    episodeLengthMean: pulse.latestMetricSample?.episodeLengthMean ?? null,
+    loss: pulse.latestMetricSample?.loss ?? null,
+    fps: pulse.latestMetricSample?.fps ?? null,
+  });
 }
 
 function sortJobs(jobs: TrainingJobSummary[]) {
@@ -581,9 +716,12 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
     updatedAt,
     liveTelemetrySummary: {
       ...(job.liveTelemetrySummary ?? {}),
+      trainerIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
+      latestLivePulseIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
       latestLivePulseStep: pulse.metricStep ?? null,
       latestLivePulseEpisodeIndex:
         explicitEpisodeIndex === null ? job.liveTelemetrySummary?.latestLivePulseEpisodeIndex ?? null : explicitEpisodeIndex,
+      latestAcceptedMetricIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
       latestMetricSample,
       latestRawMetricSample: pulse.latestRawMetricSample ?? null,
       latestMetricSurface,
@@ -746,10 +884,15 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
       livePulseReconnectAttempts.delete(jobId);
       try {
         const pulse = JSON.parse((event as MessageEvent<string>).data) as TrainingLivePulseSseEvent;
+        const historyRow = buildMetricHistoryRowFromLivePulse(pulse);
         useRuntimeTrainingStore.setState((current) => ({
-          jobs: sortJobs(
-            current.jobs.map((job) => (job.id === jobId ? applyLivePulseToJob(job, pulse) : job))
-          ),
+          jobs: sortJobs(current.jobs.map((job) => (job.id === jobId ? applyLivePulseToJob(job, pulse) : job))),
+          metricHistoryByJob: historyRow
+            ? {
+                ...current.metricHistoryByJob,
+                [jobId]: mergeMetricRowsByIteration(current.metricHistoryByJob[jobId] ?? [], [historyRow]),
+              }
+            : current.metricHistoryByJob,
         }));
       } catch (error) {
         logWarn("Failed to parse live pulse event", {
@@ -1000,15 +1143,16 @@ function buildLaunchContextFromInput(
 
 export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingState>> = create<RuntimeTrainingState>(
   (set, get) => ({
-  jobs: [],
-  recordings: [],
-  trainingTokens: initialTrainingTokens,
-  trainingTokenCost: trainingTokenCost,
-  startRemoteJobSync: () => {
-    return startRemoteJobSyncSession();
-  },
+    jobs: [],
+    recordings: [],
+    metricHistoryByJob: {},
+    trainingTokens: initialTrainingTokens,
+    trainingTokenCost: trainingTokenCost,
+    startRemoteJobSync: () => {
+      return startRemoteJobSyncSession();
+    },
 
-  submitTrainingJob: (input) => {
+    submitTrainingJob: (input) => {
     const modelName = input.modelName.trim() || "default-model";
     const dataset = input.dataset.trim() || "default-dataset";
     const activeForDataset = get().jobs.find(
@@ -1253,7 +1397,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     }, queueDelayMs);
 
     return id;
-  },
+    },
 
   cancelTrainingJob: (jobId) => {
     if (trainingApiEnabled) {
@@ -1331,6 +1475,11 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             recording.jobId === jobId && resolveTrainingCacheTenantId(recording.tenantId) === targetTenantId
           )
       ),
+      metricHistoryByJob: (() => {
+        const next = { ...state.metricHistoryByJob };
+        delete next[jobId];
+        return next;
+      })(),
     }));
 
     void deleteTrainingTelemetryForJob({ tenantId: targetTenantId, jobId }).catch((error) => {
@@ -1475,11 +1624,22 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
             await markHydratedMetricBatches({ tenantId, jobId });
           }
         }
-        return await listCachedMetricBatches({
+        const metricBatches = await listCachedMetricBatches({
           tenantId,
           jobId,
           limit: boundedLimit,
         });
+        const visibleHistory = mergeMetricRowsByIteration(
+          get().metricHistoryByJob[jobId] ?? [],
+          buildMetricHistoryRowsFromBatches(metricBatches)
+        );
+        set((state) => ({
+          metricHistoryByJob: {
+            ...state.metricHistoryByJob,
+            [jobId]: visibleHistory,
+          },
+        }));
+        return metricBatches;
       } catch (error) {
         logWarn("Failed to list training metric batches from remote API", {
           scope: "runtime-training",

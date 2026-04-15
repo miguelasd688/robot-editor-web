@@ -17,6 +17,13 @@ export const pluginHostApi: PluginHostAPI = {
     getRecordings: () => useRuntimeTrainingStore.getState().recordings.map((recording) => ({ ...recording })),
     getTrainingTokens: () => useRuntimeTrainingStore.getState().trainingTokens,
     getTrainingTokenCost: () => useRuntimeTrainingStore.getState().trainingTokenCost,
+    getMetricHistoryByJob: () =>
+      Object.fromEntries(
+        Object.entries(useRuntimeTrainingStore.getState().metricHistoryByJob).map(([jobId, rows]) => [
+          jobId,
+          rows.map((row) => ({ ...row })),
+        ])
+      ),
     listArtifacts: (jobId, kind) => useRuntimeTrainingStore.getState().listTrainingArtifacts(jobId, kind),
     listEvents: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingJobEvents(jobId, limit),
     listMetricBatches: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingMetricBatches(jobId, limit),

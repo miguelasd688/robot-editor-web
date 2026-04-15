@@ -492,6 +492,20 @@ export type TrainingRecordingSummary = {
   qualityScore: number;
 };
 
+export type TrainingMetricHistoryRow = {
+  trainerIteration: number;
+  metricStep: number;
+  occurredAt: string;
+  progressRatio: number | null;
+  source: "durable" | "live_overlay" | "terminal_flush";
+  sourceMarker: string | null;
+  episodeIndex: number | null;
+  rewardMean: number | null;
+  episodeLengthMean: number | null;
+  loss: number | null;
+  fps: number | null;
+};
+
 export type PluginHostAPI = {
   // stores / servicios que sí quieres exponer
   getViewer: () => unknown; // luego tipas Viewer
@@ -504,6 +518,7 @@ export type PluginHostAPI = {
     getRecordings: () => TrainingRecordingSummary[];
     getTrainingTokens: () => number;
     getTrainingTokenCost: () => number;
+    getMetricHistoryByJob: () => Record<string, TrainingMetricHistoryRow[]>;
     listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
     listEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
     listMetricBatches: (jobId: string, limit?: number) => Promise<TrainingMetricBatchSummary[]>;

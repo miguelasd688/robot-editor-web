@@ -721,6 +721,7 @@ export type TrainingLivePulseSseEvent = {
   jobId: string;
   runnerJobId?: string | null;
   status: string;
+  trainerIteration?: number | null;
   metricStep: number;
   episodeIndex?: number | null;
   progressRatio?: number | null;
@@ -750,6 +751,7 @@ export type TrainingLivePulseSseEvent = {
 export type TrainingMetricsSseEvent = TrainingLivePulseSseEvent;
 
 export type TrainingMetricBatchSample = {
+  trainerIteration?: number | null;
   metricStep: number;
   episodeIndex?: number | null;
   progressRatio?: number | null;
