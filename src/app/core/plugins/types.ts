@@ -25,6 +25,23 @@ export type MetricsIngestionReasonCode =
   | "REPEATED_IDENTITY"
   | "FIELDS_MISSING"
   | "PARSE_REJECTED";
+
+export type MetricsIngestionMetricRow = {
+  trainerIteration: number;
+  metricStep: number;
+  occurredAt: string;
+  progressRatio?: number | null;
+  source?: string | null;
+  sourceMarker?: string | null;
+  episodeIndex?: number | null;
+  rewardMean?: number | null;
+  episodeLengthMean?: number | null;
+  loss?: number | null;
+  fps?: number | null;
+  canonicalMetrics?: Record<string, unknown> | null;
+  rawMetrics?: Record<string, unknown> | null;
+  metrics?: Record<string, unknown> | null;
+};
 export type PolicyProgressReasonCode =
   | "VISIBLE_POLICY_DELTA"
   | "NO_VISIBLE_DELTA"
@@ -271,6 +288,7 @@ export type MetricsIngestionSummary = {
   rejectedCount: number;
   reasonCode: MetricsIngestionReasonCode;
   latestMetrics?: Record<string, unknown> | null;
+  latestMetricRows?: MetricsIngestionMetricRow[];
 };
 
 export type PolicyProgressSummary = {
@@ -497,7 +515,7 @@ export type TrainingMetricHistoryRow = {
   metricStep: number;
   occurredAt: string;
   progressRatio: number | null;
-  source: "durable" | "live_overlay" | "terminal_flush";
+  source: "durable" | "accepted_canonical_metrics" | "live_overlay" | "terminal_flush";
   sourceMarker: string | null;
   episodeIndex: number | null;
   rewardMean: number | null;

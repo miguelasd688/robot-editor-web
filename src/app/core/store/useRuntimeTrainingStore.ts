@@ -41,7 +41,7 @@ import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManag
 import { editorEngine } from "../editor/engineSingleton";
 import { useTrainingImportContextStore } from "./useTrainingImportContextStore";
 
-type MetricHistorySource = "durable" | "live_overlay" | "terminal_flush";
+type MetricHistorySource = "durable" | "accepted_canonical_metrics" | "live_overlay" | "terminal_flush";
 
 type TrainingMetricHistoryRow = {
   trainerIteration: number;
@@ -235,7 +235,10 @@ function normalizeMetricHistoryRow(
     occurredAt,
     progressRatio: toFiniteNumber(row.progressRatio),
     source:
-      row.source === "terminal_flush" || row.source === "live_overlay" || row.source === "durable"
+      row.source === "terminal_flush" ||
+      row.source === "live_overlay" ||
+      row.source === "accepted_canonical_metrics" ||
+      row.source === "durable"
         ? row.source
         : "durable",
     sourceMarker: typeof row.sourceMarker === "string" && row.sourceMarker.trim() ? row.sourceMarker.trim() : null,
@@ -284,14 +287,93 @@ export function deriveVisibleMetricHistory(rows: TrainingMetricHistoryRow[]) {
 export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
   const visibleHistory = deriveVisibleMetricHistory(rows);
   const latest = visibleHistory.length > 0 ? visibleHistory[visibleHistory.length - 1] : null;
-  const browserVisibleIteration = latest?.trainerIteration ?? Number(job?.currentEpoch ?? 0);
+  const acceptedIteration = toFiniteNumber(job?.metricsIngestionSummary?.lastAcceptedStep);
+  const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
+  const totalIterations = toFiniteNumber(job?.maxSteps);
+  const browserVisibleIteration =
+    latest?.trainerIteration ??
+    acceptedIteration ??
+    canonicalProgress?.current ??
+    0;
   const browserVisibleProgressRatio =
-    latest?.progressRatio ?? (Number.isFinite(Number(job?.progress)) ? Number(job?.progress) : null);
+    totalIterations && browserVisibleIteration !== null && browserVisibleIteration !== undefined
+      ? Math.min(1, Math.max(0, browserVisibleIteration / totalIterations))
+      : latest?.progressRatio ??
+        canonicalProgress?.ratio ??
+        (acceptedIteration !== null && totalIterations ? acceptedIteration / totalIterations : null);
   return {
     browserVisibleIteration,
     browserVisibleProgressRatio,
-    source: latest?.source ?? "durable",
+    source:
+      latest?.source ??
+      (acceptedIteration !== null ? "accepted_canonical_metrics" : canonicalProgress?.source ?? "durable"),
     latestMetricRow: latest,
+  };
+}
+
+function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | null | undefined) {
+  const ingestionSummary = job?.metricsIngestionSummary ?? null;
+  const latestMetricRows = Array.isArray(ingestionSummary?.latestMetricRows) ? ingestionSummary.latestMetricRows : [];
+  const rows: TrainingMetricHistoryRow[] = [];
+  for (const row of latestMetricRows) {
+    const normalized = normalizeMetricHistoryRow({
+      trainerIteration: row.trainerIteration ?? row.metricStep,
+      metricStep: row.trainerIteration ?? row.metricStep,
+      occurredAt: row.occurredAt ?? new Date().toISOString(),
+      progressRatio: row.progressRatio ?? null,
+      source: "accepted_canonical_metrics",
+      sourceMarker: row.sourceMarker ?? row.source ?? null,
+      episodeIndex: row.episodeIndex ?? null,
+      rewardMean:
+        toFiniteNumber(row.canonicalMetrics?.rewardMean) ??
+        toFiniteNumber(row.metrics?.rewardMean) ??
+        toFiniteNumber(row.rawMetrics?.rewardMean) ??
+        null,
+      episodeLengthMean:
+        toFiniteNumber(row.canonicalMetrics?.episodeLengthMean) ??
+        toFiniteNumber(row.metrics?.episodeLengthMean) ??
+        toFiniteNumber(row.rawMetrics?.episodeLengthMean) ??
+        null,
+      loss:
+        toFiniteNumber(row.canonicalMetrics?.loss) ??
+        toFiniteNumber(row.metrics?.loss) ??
+        toFiniteNumber(row.rawMetrics?.loss) ??
+        null,
+      fps:
+        toFiniteNumber(row.canonicalMetrics?.fps) ??
+        toFiniteNumber(row.metrics?.fps) ??
+        toFiniteNumber(row.rawMetrics?.fps) ??
+        null,
+    });
+    if (normalized) rows.push(normalized);
+  }
+  return rows;
+}
+
+export function deriveUnifiedVisibleTrainingState(
+  job: TrainingJobSummary | null | undefined,
+  rows: TrainingMetricHistoryRow[]
+) {
+  const acceptedRows = buildMetricHistoryRowsFromIngestionSummary(job);
+  const mergedRows = mergeMetricRowsByIteration(rows, acceptedRows);
+  const visibleTruth = deriveVisibleIterationTruth(job, mergedRows);
+  const chartRows = deriveVisibleMetricHistory(mergedRows);
+  const latestDurableIteration = rows.length > 0 ? rows[rows.length - 1]?.trainerIteration ?? null : null;
+  const latestAcceptedIteration = acceptedRows.length > 0 ? acceptedRows[acceptedRows.length - 1]?.trainerIteration ?? null : null;
+  const progressSummary = job?.progressSummary ?? null;
+  const progressSource = progressSummary?.trainingProgress?.source ?? null;
+  return {
+    chartRows,
+    visibleIteration: visibleTruth.browserVisibleIteration,
+    visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
+    visibleProgressSource: visibleTruth.source,
+    visibleChartSource: latestDurableIteration !== null ? "durable_metric_rows" : latestAcceptedIteration !== null ? "accepted_canonical_metrics" : "progress_unavailable",
+    latestDurableTrainerIteration: latestDurableIteration,
+    latestAcceptedCanonicalIteration: latestAcceptedIteration,
+    livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
+    persistedProgressIteration: progressSummary?.trainingProgress?.current ?? null,
+    nonCanonicalProgressFallbackDetected:
+      Boolean(progressSource) && progressSource !== "durable_metric_rows" && progressSource !== "accepted_canonical_metrics",
   };
 }
 
@@ -782,13 +864,10 @@ function resolveVisibleActiveStatus(
     toFiniteNumber(liveSummary?.latestLivePulseStep) !== null ||
     toFiniteNumber(liveSummary?.latestAcceptedMetricStep) !== null;
   const ownershipProven = Boolean(
-    crossSurfaceTruth?.ownershipProven === true ||
-      hasLiveTelemetryStep ||
-      toFiniteNumber(existing?.metricsIngestionSummary?.lastAcceptedStep) !== null ||
-      toFiniteNumber(incoming.metricsIngestionSummary?.lastAcceptedStep) !== null
+    crossSurfaceTruth?.ownershipProven === true || hasLiveTelemetryStep
   );
   if (!ownershipProven) {
-    return incoming.status;
+    return incoming.status === "provisioning" ? "provisioning" : "queued";
   }
 
   const livePulseStep =
