@@ -289,6 +289,7 @@ export type MetricsIngestionSummary = {
   reasonCode: MetricsIngestionReasonCode;
   latestMetrics?: Record<string, unknown> | null;
   latestMetricRows?: MetricsIngestionMetricRow[];
+  recentMetricRows?: MetricsIngestionMetricRow[];
 };
 
 export type PolicyProgressSummary = {
@@ -515,9 +516,18 @@ export type TrainingMetricHistoryRow = {
   metricStep: number;
   occurredAt: string;
   progressRatio: number | null;
-  source: "durable" | "accepted_canonical_metrics" | "live_overlay" | "terminal_flush";
+  source:
+    | "durable"
+    | "durable_metric_rows"
+    | "accepted_canonical_metrics"
+    | "live_overlay"
+    | "terminal_flush"
+    | "browser_persisted_cache"
+    | "terminal_replay";
   sourceMarker: string | null;
   episodeIndex: number | null;
+  reward?: number | null;
+  episodeLength?: number | null;
   rewardMean: number | null;
   episodeLengthMean: number | null;
   loss: number | null;
