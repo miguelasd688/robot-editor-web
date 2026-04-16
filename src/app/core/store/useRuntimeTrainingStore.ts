@@ -30,7 +30,6 @@ import {
   cacheMetricHistoryRows,
   deleteTrainingTelemetryForJob,
   hasHydratedTrainingEvents,
-  hasHydratedMetricBatches,
   listCachedMetricHistoryRows,
   listCachedTrainingJobs,
   listCachedTrainingEvents,
@@ -72,6 +71,7 @@ type RuntimeTrainingState = {
   jobs: TrainingJobSummary[];
   recordings: TrainingRecordingSummary[];
   metricHistoryByJob: Record<string, TrainingMetricHistoryRow[]>;
+  transportDiagnosticsByJob: Record<string, RuntimeTrainingTransportDiagnostics>;
   trainingTokens: number;
   trainingTokenCost: number;
   startRemoteJobSync: () => () => void;
@@ -79,9 +79,31 @@ type RuntimeTrainingState = {
   cancelTrainingJob: (jobId: string) => void;
   deleteTrainingJob: (jobId: string, tenantId?: string) => void;
   listTrainingArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
-  listTrainingJobEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
-  listTrainingMetricBatches: (jobId: string, limit?: number) => Promise<TrainingMetricBatchSummary[]>;
+  listTrainingJobEvents: (
+    jobId: string,
+    options?: number | { limit?: number; source?: "inspector" | "history_open" | "terminal_replay" }
+  ) => Promise<TrainingJobEventSummary[]>;
+  listTrainingMetricBatches: (
+    jobId: string,
+    options?:
+      | number
+      | {
+          limit?: number;
+          reason?: MetricBatchFetchReason;
+          sseDisconnectMs?: number;
+        }
+  ) => Promise<TrainingMetricBatchSummary[]>;
   listTrainingRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
+};
+
+type MetricBatchFetchReason = "terminal_replay" | "history_open" | "manual_recovery";
+
+type RuntimeTrainingTransportDiagnostics = {
+  lastSseOpenAt?: number;
+  lastSseDisconnectAt?: number;
+  lastMetricBatchFetchReason?: MetricBatchFetchReason | null;
+  lastMetricBatchRemoteFetchAt?: number | null;
+  lastEmptyListCooldownHitAt?: number | null;
 };
 
 const runningIntervals = new Map<string, number>();
@@ -112,6 +134,7 @@ const metricHistoryPersistQueue = new Map<string, {
 }>();
 const metricHistoryPersistFingerprints = new Map<string, Map<number, string>>();
 let metricHistoryPersistFlushTimer: number | null = null;
+const MANUAL_RECOVERY_SSE_DISCONNECT_MS = 30_000;
 
 function closeLivePulseSource(jobId: string) {
   const reconnectTimer = livePulseReconnectTimers.get(jobId);
@@ -145,13 +168,27 @@ function scheduleLivePulseReconnect(jobId: string) {
   livePulseReconnectTimers.set(jobId, timer);
 }
 
-async function catchUpMetricBatchesForJob(jobId: string) {
+function shouldRecoverAfterDisconnect(disconnectedMs: number | null | undefined) {
+  return typeof disconnectedMs === "number" && disconnectedMs >= MANUAL_RECOVERY_SSE_DISCONNECT_MS;
+}
+
+function shouldFetchRemoteMetricBatches(job: TrainingJobSummary | null | undefined, reason: MetricBatchFetchReason) {
+  if (!job) return false;
+  if (job.id.startsWith("local_job_")) return false;
+  if (reason === "manual_recovery") {
+    const diagnostics = useRuntimeTrainingStore.getState().transportDiagnosticsByJob[job.id] ?? null;
+    return shouldRecoverAfterDisconnect(diagnostics?.lastSseDisconnectAt ? Date.now() - diagnostics.lastSseDisconnectAt : null);
+  }
+  return true;
+}
+
+async function recoverMetricBatchesForJob(jobId: string, reason: MetricBatchFetchReason) {
   if (!trainingApiEnabled) return;
-  if (jobId.startsWith("local_job_")) return;
   const state = useRuntimeTrainingStore.getState();
   const selectedJob = state.jobs.find((item) => item.id === jobId);
-  if (!selectedJob || !ACTIVE_JOB_STATUSES.has(selectedJob.status)) return;
-  const tenantId = resolveTrainingCacheTenantId(selectedJob.tenantId);
+  if (!shouldFetchRemoteMetricBatches(selectedJob, reason)) return;
+  const tenantId = resolveTrainingCacheTenantId(selectedJob?.tenantId);
+  const diagnosticsAtStart = state.transportDiagnosticsByJob[jobId] ?? {};
   try {
     const cached = await listCachedMetricBatches({ tenantId, jobId, limit: 1 });
     const cachedLatestStep = cached[0]?.toStep ?? 0;
@@ -162,8 +199,19 @@ async function catchUpMetricBatchesForJob(jobId: string) {
     if (shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
       await markHydratedMetricBatches({ tenantId, jobId });
     }
+    useRuntimeTrainingStore.setState((current) => ({
+      transportDiagnosticsByJob: {
+        ...current.transportDiagnosticsByJob,
+        [jobId]: {
+          ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+          lastMetricBatchFetchReason: reason,
+          lastMetricBatchRemoteFetchAt: Date.now(),
+          lastEmptyListCooldownHitAt: remoteBatches.length === 0 ? Date.now() : diagnosticsAtStart.lastEmptyListCooldownHitAt ?? null,
+        },
+      },
+    }));
   } catch (error) {
-    logWarn("Failed to catch up metric batches", {
+    logWarn("Failed to recover metric batches", {
       scope: "runtime-training",
       data: { jobId, error },
     });
@@ -1099,13 +1147,6 @@ async function syncRemoteJobsOnce() {
     }
     ensureLivePulseSubscriptions(useRuntimeTrainingStore.getState().jobs);
     void hydrateMetricHistoryFromLocalCache(useRuntimeTrainingStore.getState().jobs);
-    void Promise.all(
-      useRuntimeTrainingStore
-        .getState()
-        .jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status))
-        .filter((job) => !job.id.startsWith("local_job_"))
-        .map((job) => catchUpMetricBatchesForJob(job.id))
-    );
   } catch (error) {
     logWarn("Failed to sync jobs from training API", {
       scope: "runtime-training",
@@ -1593,9 +1634,31 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
         livePulseReconnectTimers.delete(jobId);
       }
       livePulseReconnectAttempts.delete(jobId);
-      void catchUpMetricBatchesForJob(jobId);
+      useRuntimeTrainingStore.setState((current) => ({
+        transportDiagnosticsByJob: {
+          ...current.transportDiagnosticsByJob,
+          [jobId]: {
+            ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+            lastSseOpenAt: Date.now(),
+          },
+        },
+      }));
     };
     source.onerror = () => {
+      const now = Date.now();
+      const diagnostics = useRuntimeTrainingStore.getState().transportDiagnosticsByJob[jobId] ?? null;
+      useRuntimeTrainingStore.setState((current) => ({
+        transportDiagnosticsByJob: {
+          ...current.transportDiagnosticsByJob,
+          [jobId]: {
+            ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+            lastSseDisconnectAt: now,
+          },
+        },
+      }));
+      if (shouldRecoverAfterDisconnect(diagnostics?.lastSseOpenAt ? now - diagnostics.lastSseOpenAt : null)) {
+        void recoverMetricBatchesForJob(jobId, "manual_recovery");
+      }
       scheduleLivePulseReconnect(jobId);
     };
     livePulseSources.set(jobId, source);
@@ -1810,6 +1873,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     jobs: [],
     recordings: [],
     metricHistoryByJob: {},
+    transportDiagnosticsByJob: {},
     trainingTokens: initialTrainingTokens,
     trainingTokenCost: trainingTokenCost,
     startRemoteJobSync: () => {
@@ -2185,7 +2249,8 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     return local.filter((item) => item.kind === kind);
   },
 
-  listTrainingJobEvents: async (jobId, limit = 100): Promise<TrainingJobEventSummary[]> => {
+  listTrainingJobEvents: async (jobId, options = 100): Promise<TrainingJobEventSummary[]> => {
+    const limit = typeof options === "number" ? options : options.limit ?? 100;
     const boundedLimit = Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS);
 
     if (isOptimisticLocalJobId(jobId)) {
@@ -2198,15 +2263,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
       const tenantId = resolveTrainingCacheTenantId(selectedJob?.tenantId);
       try {
-        const [eventsHydrated, metricBatchesHydrated] = await Promise.all([
-          hasHydratedTrainingEvents({ tenantId, jobId }),
-          hasHydratedMetricBatches({ tenantId, jobId }),
-        ]);
-        if (!eventsHydrated || !metricBatchesHydrated) {
-          const [remoteEvents, remoteBatches] = await Promise.all([
-            eventsHydrated ? Promise.resolve([]) : listTrainingJobEventsRemote(jobId, boundedLimit),
-            metricBatchesHydrated ? Promise.resolve([]) : listTrainingMetricBatchesRemote(jobId, boundedLimit),
-          ]);
+        const eventsHydrated = await hasHydratedTrainingEvents({ tenantId, jobId });
+        if (!eventsHydrated) {
+          const remoteEvents = await listTrainingJobEventsRemote(jobId, boundedLimit);
           if (remoteEvents.length > 0) {
             await cacheTrainingEvents({
               tenantId,
@@ -2214,19 +2273,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
               items: remoteEvents,
             });
           }
-          if (remoteBatches.length > 0) {
-            await cacheMetricBatches({
-              tenantId,
-              jobId,
-              items: remoteBatches,
-            });
-          }
-          if (!eventsHydrated) {
-            await markHydratedTrainingEvents({ tenantId, jobId });
-          }
-          if (!metricBatchesHydrated && shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
-            await markHydratedMetricBatches({ tenantId, jobId });
-          }
+          await markHydratedTrainingEvents({ tenantId, jobId });
         }
         const [mergedEvents, mergedBatches] = await Promise.all([
           listCachedTrainingEvents({
@@ -2261,8 +2308,10 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     return buildLocalEvents(selectedJob).slice(0, boundedLimit);
   },
 
-  listTrainingMetricBatches: async (jobId, limit = 100): Promise<TrainingMetricBatchSummary[]> => {
-    const boundedLimit = Math.min(Math.max(1, Math.round(limit)), MAX_EVENT_HISTORY_ITEMS);
+  listTrainingMetricBatches: async (jobId, options = 100): Promise<TrainingMetricBatchSummary[]> => {
+    const normalizedOptions = typeof options === "number" ? { limit: options } : options;
+    const boundedLimit = Math.min(Math.max(1, Math.round(normalizedOptions.limit ?? 100)), MAX_EVENT_HISTORY_ITEMS);
+    const reason = normalizedOptions.reason ?? null;
 
     if (isOptimisticLocalJobId(jobId)) {
       return [];
@@ -2272,13 +2321,18 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       const selectedJob = get().jobs.find((item) => item.id === jobId) ?? null;
       const tenantId = resolveTrainingCacheTenantId(selectedJob?.tenantId);
       try {
-        const hydrated = await hasHydratedMetricBatches({ tenantId, jobId });
         const cached = await listCachedMetricBatches({
           tenantId,
           jobId,
           limit: boundedLimit,
         });
-        if (!hydrated || (cached.length === 0 && selectedJob && ACTIVE_JOB_STATUSES.has(selectedJob.status))) {
+        if (reason !== null) {
+          if (reason === "manual_recovery" && !shouldRecoverAfterDisconnect(normalizedOptions.sseDisconnectMs)) {
+            return cached;
+          }
+          if (!shouldFetchRemoteMetricBatches(selectedJob, reason)) {
+            return cached;
+          }
           const remoteBatches = await listTrainingMetricBatchesRemote(jobId, boundedLimit);
           if (remoteBatches.length > 0) {
             await cacheMetricBatches({
@@ -2290,6 +2344,18 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           if (shouldPersistMetricBatchHydration(selectedJob, remoteBatches)) {
             await markHydratedMetricBatches({ tenantId, jobId });
           }
+          set((state) => ({
+            transportDiagnosticsByJob: {
+              ...state.transportDiagnosticsByJob,
+              [jobId]: {
+                ...(state.transportDiagnosticsByJob[jobId] ?? {}),
+                lastMetricBatchFetchReason: reason,
+                lastMetricBatchRemoteFetchAt: Date.now(),
+              },
+            },
+          }));
+        } else {
+          return cached;
         }
         const metricBatches = await listCachedMetricBatches({
           tenantId,

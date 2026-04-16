@@ -15,12 +15,10 @@ type TrainingArtifactListResponse = {
   items: TrainingArtifactSummary[];
 };
 
-type TrainingJobEventListResponse = {
-  items: TrainingJobEventSummary[];
-};
+type EmptyListCooldownKey = string;
 
-type TrainingMetricBatchListResponse = {
-  items: TrainingMetricBatchSummary[];
+type EmptyListCooldownEntry = {
+  emptyAt: number;
 };
 
 type TrainingValidationError = {
@@ -955,38 +953,84 @@ export async function listTrainingArtifactsRemote(
   const params = new URLSearchParams();
   if (kind) params.set("kind", kind);
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/artifacts${suffix}`), {
+  return fetchTrainingListWithEmptyCooldown<TrainingArtifactSummary>(
+    "artifacts",
+    jobId,
+    suffix.replace(/^\?/, ""),
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/artifacts${suffix}`)
+  );
+}
+
+const EMPTY_LIST_COOLDOWN_MS = 1500;
+const emptyListCooldownEntries = new Map<EmptyListCooldownKey, EmptyListCooldownEntry>();
+
+function buildEmptyListCooldownKey(endpoint: string, jobId: string, query: string) {
+  return `${endpoint}::${jobId}::${query}`;
+}
+
+function shouldSkipEmptyListRemoteRead(key: EmptyListCooldownKey, now: number) {
+  const entry = emptyListCooldownEntries.get(key);
+  if (!entry) return false;
+  return now - entry.emptyAt < EMPTY_LIST_COOLDOWN_MS;
+}
+
+function recordEmptyListRemoteRead(key: EmptyListCooldownKey, now: number) {
+  emptyListCooldownEntries.set(key, { emptyAt: now });
+}
+
+function clearEmptyListRemoteRead(key: EmptyListCooldownKey) {
+  emptyListCooldownEntries.delete(key);
+}
+
+export const emptyListCooldown = {
+  shouldSkip: shouldSkipEmptyListRemoteRead,
+  recordEmpty: recordEmptyListRemoteRead,
+  clear: clearEmptyListRemoteRead,
+  buildKey: buildEmptyListCooldownKey,
+};
+
+async function fetchTrainingListWithEmptyCooldown<T>(
+  endpoint: string,
+  jobId: string,
+  query: string,
+  request: RequestInfo | URL
+): Promise<T[]> {
+  const key = buildEmptyListCooldownKey(endpoint, jobId, query);
+  const now = Date.now();
+  if (shouldSkipEmptyListRemoteRead(key, now)) {
+    return [];
+  }
+  const response = await fetch(request, {
     method: "GET",
     headers: buildHeaders({ accept: "application/json" }),
   });
-  const payload = await parseJson<TrainingArtifactListResponse>(response);
-  return payload.items;
+  const payload = (await parseJson<{ items: T[] }>(response)).items;
+  if (payload.length === 0) {
+    recordEmptyListRemoteRead(key, now);
+  } else {
+    clearEmptyListRemoteRead(key);
+  }
+  return payload;
 }
 
 export async function listTrainingJobEventsRemote(jobId: string, limit = 100): Promise<TrainingJobEventSummary[]> {
   const bounded = Math.min(Math.max(1, Math.round(limit)), 20_000);
-  const response = await fetch(
-    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/events?limit=${bounded}`),
-    {
-      method: "GET",
-      headers: buildHeaders({ accept: "application/json" }),
-    }
+  return fetchTrainingListWithEmptyCooldown<TrainingJobEventSummary>(
+    "events",
+    jobId,
+    `limit=${bounded}`,
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/events?limit=${bounded}`)
   );
-  const payload = await parseJson<TrainingJobEventListResponse>(response);
-  return payload.items;
 }
 
 export async function listTrainingMetricBatchesRemote(jobId: string, limit = 100): Promise<TrainingMetricBatchSummary[]> {
   const bounded = Math.min(Math.max(1, Math.round(limit)), 20_000);
-  const response = await fetch(
-    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/metrics/batches?limit=${bounded}`),
-    {
-      method: "GET",
-      headers: buildHeaders({ accept: "application/json" }),
-    }
+  return fetchTrainingListWithEmptyCooldown<TrainingMetricBatchSummary>(
+    "metrics/batches",
+    jobId,
+    `limit=${bounded}`,
+    buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/metrics/batches?limit=${bounded}`)
   );
-  const payload = await parseJson<TrainingMetricBatchListResponse>(response);
-  return payload.items;
 }
 
 export async function getTrainingRunnerLogsRemote(jobId: string, tail = 250): Promise<TrainingRunnerLogsSummary> {

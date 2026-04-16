@@ -548,8 +548,20 @@ export type PluginHostAPI = {
     getTrainingTokenCost: () => number;
     getMetricHistoryByJob: () => Record<string, TrainingMetricHistoryRow[]>;
     listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
-    listEvents: (jobId: string, limit?: number) => Promise<TrainingJobEventSummary[]>;
-    listMetricBatches: (jobId: string, limit?: number) => Promise<TrainingMetricBatchSummary[]>;
+    listEvents: (
+      jobId: string,
+      options?: number | { limit?: number; source?: "inspector" | "history_open" | "terminal_replay" }
+    ) => Promise<TrainingJobEventSummary[]>;
+    listMetricBatches: (
+      jobId: string,
+      options?:
+        | number
+        | {
+            limit?: number;
+            reason?: "terminal_replay" | "history_open" | "manual_recovery";
+            sseDisconnectMs?: number;
+          }
+    ) => Promise<TrainingMetricBatchSummary[]>;
     listRunnerLogs: (jobId: string, tail?: number) => Promise<TrainingRunnerLogsSummary>;
     subscribe: (listener: () => void) => () => void;
   };

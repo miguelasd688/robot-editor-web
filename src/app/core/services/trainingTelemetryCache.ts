@@ -6,7 +6,7 @@ import type {
 import type { TrainingMetricBatchSummary } from "./trainingApiClient";
 
 const DB_NAME = "runtime-training-telemetry-cache";
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const JOBS_STORE = "trainingJobs";
 const EVENTS_STORE = "jobEvents";
 const METRIC_BATCHES_STORE = "metricBatches";
