@@ -114,7 +114,6 @@ const livePulseSources = new Map<string, EventSource>();
 const livePulseReconnectTimers = new Map<string, number>();
 const livePulseReconnectAttempts = new Map<string, number>();
 let trainingJobCounter = 0;
-let recordingCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
 const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["submitting", "queued", "provisioning", "running"]);
@@ -379,9 +378,9 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
   const browserVisibleIteration =
+    canonicalProgress?.current ??
     latest?.trainerIteration ??
     acceptedIteration ??
-    canonicalProgress?.current ??
     0;
   const browserVisibleProgressRatio =
     totalIterations && browserVisibleIteration !== null && browserVisibleIteration !== undefined
@@ -539,6 +538,7 @@ export function deriveUnifiedVisibleTrainingState(
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
+  const budgetCompletionRule = progressSummary?.budgetCompletionRule ?? null;
   const visibleSource = latestMergedRow?.source ?? (latestAcceptedIteration !== null ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
@@ -550,6 +550,7 @@ export function deriveUnifiedVisibleTrainingState(
     latestAcceptedCanonicalIteration: latestAcceptedIteration,
     livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
     persistedProgressIteration: progressSummary?.trainingProgress?.current ?? null,
+    budgetCompletionRule,
     visibleMetricSummarySource: visibleSource,
     visibleChartSource: visibleSource,
     mergedMetricHistoryLength: mergedRows.length,
@@ -1029,10 +1030,6 @@ function buildLocalRunnerLogs(job: TrainingJobSummary): TrainingRunnerLogsSummar
   };
 }
 
-function resolveEpisodeBudget(job: Pick<TrainingJobSummary, "episodeTarget" | "maxSteps">) {
-  return Math.max(1, Math.round(job.episodeTarget ?? job.maxSteps ?? 1));
-}
-
 function buildMetricEventsFromBatches(jobId: string, batches: TrainingMetricBatchSummary[]): TrainingJobEventSummary[] {
   const items: TrainingJobEventSummary[] = [];
   const orderedBatches = batches
@@ -1275,7 +1272,7 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
       ? job.currentEpisode
       : Math.max(Number(job.currentEpisode ?? 0), explicitEpisodeIndex);
   const nextProgress = Number.isFinite(Number(pulse.progressRatio))
-    ? Math.max(0, Math.min(1, Number(pulse.progressRatio)))
+    ? Math.max(Number(job.progress ?? 0), Math.max(0, Math.min(1, Number(pulse.progressRatio))))
     : job.progress;
   const nextLossRaw = latestMetricSample?.loss;
   const nextLoss = nextLossRaw === null || nextLossRaw === undefined
@@ -1295,12 +1292,30 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
     updatedAt,
     liveTelemetrySummary: {
       ...(job.liveTelemetrySummary ?? {}),
-      trainerIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
-      latestLivePulseIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
-      latestLivePulseStep: pulse.metricStep ?? null,
+      trainerIteration: Math.max(
+        Number(job.liveTelemetrySummary?.trainerIteration ?? 0),
+        Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
+      ),
+      latestLivePulseIteration: Math.max(
+        Number(job.liveTelemetrySummary?.latestLivePulseIteration ?? 0),
+        Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
+      ),
+      latestLivePulseStep: Math.max(
+        Number(job.liveTelemetrySummary?.latestLivePulseStep ?? 0),
+        Number(pulse.metricStep ?? pulse.trainerIteration ?? 0)
+      ),
       latestLivePulseEpisodeIndex:
-        explicitEpisodeIndex === null ? job.liveTelemetrySummary?.latestLivePulseEpisodeIndex ?? null : explicitEpisodeIndex,
-      latestAcceptedMetricIteration: pulse.trainerIteration ?? pulse.metricStep ?? null,
+        explicitEpisodeIndex === null
+          ? job.liveTelemetrySummary?.latestLivePulseEpisodeIndex ?? null
+          : Math.max(Number(job.liveTelemetrySummary?.latestLivePulseEpisodeIndex ?? 0), explicitEpisodeIndex),
+      latestAcceptedMetricIteration: Math.max(
+        Number(job.liveTelemetrySummary?.latestAcceptedMetricIteration ?? 0),
+        Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
+      ),
+      latestAcceptedMetricStep: Math.max(
+        Number(job.liveTelemetrySummary?.latestAcceptedMetricStep ?? 0),
+        Number(pulse.metricStep ?? pulse.trainerIteration ?? 0)
+      ),
       latestMetricSample,
       latestRawMetricSample: pulse.latestRawMetricSample ?? null,
       latestMetricSurface,
@@ -1500,12 +1515,11 @@ function mergeActiveJobTruth(
   }
 
   const freshestLiveSummary = latestLivePulse ?? existing.liveTelemetrySummary ?? incoming.liveTelemetrySummary ?? null;
-  const freshestLiveAt = parseLiveTelemetryTimestamp(freshestLiveSummary);
-  const incomingLiveAt = parseLiveTelemetryTimestamp(incoming.liveTelemetrySummary);
-  if (incomingLiveAt > freshestLiveAt) {
-    return incoming;
-  }
-
+  const freshestLiveAt = Math.max(
+    parseLiveTelemetryTimestamp(freshestLiveSummary),
+    parseLiveTelemetryTimestamp(incoming.liveTelemetrySummary),
+    parseLiveTelemetryTimestamp(existing.liveTelemetrySummary)
+  );
   const currentEpoch = Math.max(Number(existing.currentEpoch ?? 0), Number(incoming.currentEpoch ?? 0));
   const currentEpisode = Math.max(Number(existing.currentEpisode ?? 0), Number(incoming.currentEpisode ?? 0));
   const progress = Math.max(Number(existing.progress ?? 0), Number(incoming.progress ?? 0));
@@ -1706,80 +1720,6 @@ function clearTrainingTimer(jobId: string) {
     window.clearInterval(timer);
     runningIntervals.delete(jobId);
   }
-}
-
-function scheduleTrainingProgress(jobId: string) {
-  const timer = window.setInterval(() => {
-    const state = useRuntimeTrainingStore.getState();
-    const job = state.jobs.find((item) => item.id === jobId);
-
-    if (!job || job.status !== "running") {
-      clearTrainingTimer(jobId);
-      return;
-    }
-
-    const episodeBudget = resolveEpisodeBudget(job);
-    const nextIteration = Math.min(episodeBudget, Number(job.currentEpoch ?? 0) + 1);
-    const nextProgress = nextIteration / Math.max(1, episodeBudget);
-    const trend = 1.2 * (1 - nextProgress) + 0.05;
-    const jitter = (Math.random() - 0.5) * 0.08;
-    const nextLoss = Number(Math.max(0.02, trend + jitter).toFixed(4));
-    const updatedAt = Date.now();
-    const finished = nextIteration >= episodeBudget;
-    const nextStatus: TrainingJobStatus = finished ? "completed" : "running";
-
-    useRuntimeTrainingStore.setState((current) => {
-      const updatedJobs = current.jobs.map((item) =>
-        item.id === jobId
-          ? {
-              ...item,
-              currentEpoch: nextIteration,
-              progress: nextProgress,
-              loss: nextLoss,
-              status: nextStatus,
-              updatedAt,
-            }
-          : item
-      );
-
-      if (!finished) {
-        return { jobs: updatedJobs };
-      }
-
-      const exists = current.recordings.some(
-        (recording) =>
-          recording.jobId === jobId &&
-          resolveTrainingCacheTenantId(recording.tenantId) === resolveTrainingCacheTenantId(job.tenantId)
-      );
-      if (exists) {
-        return { jobs: updatedJobs };
-      }
-
-      const qualityScore = Number(Math.max(0, (1 - nextLoss) * 100).toFixed(1));
-      const recording: TrainingRecordingSummary = {
-        id: `rec_${Date.now()}_${recordingCounter++}`,
-        jobId,
-        tenantId: resolveTrainingCacheTenantId(job.tenantId),
-        title: `${job.modelName} · ${job.dataset}`,
-        createdAt: updatedAt,
-        previewUrl: null,
-        finalLoss: nextLoss,
-        qualityScore,
-      };
-
-      return {
-        jobs: updatedJobs,
-        recordings: [recording, ...current.recordings],
-      };
-    });
-
-    if (finished) {
-      clearTrainingTimer(jobId);
-      logInfo("Training job completed", { scope: "runtime-training", data: { jobId } });
-    }
-  }, 900);
-
-  runningIntervals.set(jobId, timer);
 }
 
 function toObjectOrEmpty(value: unknown): Record<string, unknown> {
@@ -2121,7 +2061,6 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
       }));
 
       logInfo("Training job started", { scope: "runtime-training", data: { jobId: id } });
-      scheduleTrainingProgress(id);
     }, queueDelayMs);
 
     return id;
