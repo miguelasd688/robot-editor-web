@@ -41,15 +41,23 @@ import {
 import { isaacLabEnvironmentManager } from "../training/IsaacLabEnvironmentManager";
 import { editorEngine } from "../editor/engineSingleton";
 import { useTrainingImportContextStore } from "./useTrainingImportContextStore";
+import { mergeMetricRowsByIteration, deriveVisibleMetricHistory } from "./training/metricHistory";
+import {
+  applyVisibleProgressWatermark,
+  createVisibleProgressWatermark,
+  type VisibleProgressWatermark,
+} from "./training/progressWatermark";
+import {
+  createLivePulseSessionState,
+  shouldAcceptLivePulse,
+  updateLivePulseSession,
+  type LivePulseSessionState,
+} from "./training/livePulseSession";
+
+export { mergeMetricRowsByIteration, deriveVisibleMetricHistory } from "./training/metricHistory";
 
 type MetricHistorySource =
-  | "durable"
-  | "durable_metric_rows"
-  | "accepted_canonical_metrics"
-  | "live_overlay"
-  | "terminal_flush"
-  | "browser_persisted_cache"
-  | "terminal_replay";
+  string;
 
 type TrainingMetricHistoryRow = {
   trainerIteration: number;
@@ -134,6 +142,8 @@ const metricHistoryPersistQueue = new Map<string, {
 const metricHistoryPersistFingerprints = new Map<string, Map<number, string>>();
 let metricHistoryPersistFlushTimer: number | null = null;
 const MANUAL_RECOVERY_SSE_DISCONNECT_MS = 30_000;
+const visibleProgressWatermarksByJob = new Map<string, VisibleProgressWatermark>();
+const livePulseSessionsByJob = new Map<string, LivePulseSessionState>();
 
 function closeLivePulseSource(jobId: string) {
   const reconnectTimer = livePulseReconnectTimers.get(jobId);
@@ -285,42 +295,6 @@ function shouldPersistMetricBatchHydration(
   return remoteBatches.length > 0 || !job || !ACTIVE_JOB_STATUSES.has(job.status);
 }
 
-export function mergeMetricRowsByIteration(
-  current: TrainingMetricHistoryRow[],
-  incoming: TrainingMetricHistoryRow[]
-) {
-  const byIteration = new Map<number, TrainingMetricHistoryRow>();
-  for (const row of current) {
-    byIteration.set(row.trainerIteration, normalizeCanonicalMergeRow(row));
-  }
-  for (const row of incoming) {
-    const existing = byIteration.get(row.trainerIteration);
-    if (!existing) {
-      byIteration.set(row.trainerIteration, normalizeCanonicalMergeRow(row));
-      continue;
-    }
-    byIteration.set(row.trainerIteration, {
-      ...existing,
-      ...row,
-      progressRatio: row.progressRatio ?? existing.progressRatio,
-      episodeIndex: row.episodeIndex ?? existing.episodeIndex,
-      reward: preferMetricValue(existing.reward, row.reward),
-      episodeLength: preferMetricValue(existing.episodeLength, row.episodeLength),
-      rewardMean: preferMetricValue(existing.rewardMean, row.rewardMean ?? row.reward),
-      episodeLengthMean: preferMetricValue(existing.episodeLengthMean, row.episodeLengthMean ?? row.episodeLength),
-      loss: preferSparseMetricValue(existing.loss, row.loss),
-      fps: preferSparseMetricValue(existing.fps, row.fps),
-      sourceMarker: row.sourceMarker ?? existing.sourceMarker,
-      source: row.source ?? existing.source,
-    });
-  }
-  return Array.from(byIteration.values()).sort((a, b) => a.trainerIteration - b.trainerIteration);
-}
-
-export function deriveVisibleMetricHistory(rows: TrainingMetricHistoryRow[]) {
-  return rows.slice().sort((a, b) => a.trainerIteration - b.trainerIteration);
-}
-
 function isDurableMetricHistorySource(source: MetricHistorySource) {
   return source === "durable" || source === "durable_metric_rows";
 }
@@ -377,11 +351,24 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   const acceptedIteration = toFiniteNumber(job?.metricsIngestionSummary?.lastAcceptedStep);
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
-  const browserVisibleIteration =
+  const requestedIteration =
     canonicalProgress?.current ??
     latest?.trainerIteration ??
     acceptedIteration ??
     0;
+  const jobId = job?.id ?? "";
+  const watermark = visibleProgressWatermarksByJob.get(jobId) ?? createVisibleProgressWatermark();
+  const watermarkResult = applyVisibleProgressWatermark(
+    watermark,
+    toFiniteNumber(requestedIteration),
+    canonicalProgress?.ratio ?? latest?.progressRatio ?? null,
+    Date.now()
+  );
+  if (jobId) {
+    visibleProgressWatermarksByJob.set(jobId, watermarkResult.next);
+  }
+  const browserVisibleIteration =
+    watermarkResult.next.visibleProgressWatermarkIteration ?? requestedIteration;
   const browserVisibleProgressRatio =
     totalIterations && browserVisibleIteration !== null && browserVisibleIteration !== undefined
       ? Math.min(1, Math.max(0, browserVisibleIteration / totalIterations))
@@ -395,6 +382,13 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
       latest?.source ??
       (acceptedIteration !== null ? "accepted_canonical_metrics" : canonicalProgress?.source ?? "durable"),
     latestMetricRow: latest,
+    visibleProgressWatermarkIteration: watermarkResult.next.visibleProgressWatermarkIteration,
+    visibleProgressWatermarkRatio: watermarkResult.next.visibleProgressWatermarkRatio,
+    visibleProgressWatermarkAt: watermarkResult.next.visibleProgressWatermarkAt,
+    staleProgressPulseDroppedCount: watermarkResult.next.staleProgressPulseDroppedCount,
+    lastDroppedPulseIteration: watermarkResult.next.lastDroppedPulseIteration,
+    lastDroppedPulseOccurredAt: watermarkResult.next.lastDroppedPulseOccurredAt,
+    nonMonotonicProgressUpdateSuppressed: watermarkResult.next.nonMonotonicProgressUpdateSuppressed,
   };
 }
 
@@ -538,7 +532,6 @@ export function deriveUnifiedVisibleTrainingState(
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
-  const budgetCompletionRule = progressSummary?.budgetCompletionRule ?? null;
   const visibleSource = latestMergedRow?.source ?? (latestAcceptedIteration !== null ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
@@ -550,7 +543,6 @@ export function deriveUnifiedVisibleTrainingState(
     latestAcceptedCanonicalIteration: latestAcceptedIteration,
     livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
     persistedProgressIteration: progressSummary?.trainingProgress?.current ?? null,
-    budgetCompletionRule,
     visibleMetricSummarySource: visibleSource,
     visibleChartSource: visibleSource,
     mergedMetricHistoryLength: mergedRows.length,
@@ -1281,6 +1273,15 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
       ? Number(nextLossRaw)
       : job.loss;
   const updatedAt = Date.parse(String(pulse.occurredAt ?? "")) || Date.now();
+  const nextIteration = Math.max(
+    Number(job.liveTelemetrySummary?.trainerIteration ?? 0),
+    Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
+  );
+  const session = livePulseSessionsByJob.get(job.id) ?? createLivePulseSessionState();
+  if (!shouldAcceptLivePulse(session, job.runRef ?? null, nextIteration)) {
+    return job;
+  }
+  livePulseSessionsByJob.set(job.id, updateLivePulseSession(session, job.runRef ?? null, nextIteration));
   return {
     ...job,
     status: nextStatus,
@@ -1292,10 +1293,7 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
     updatedAt,
     liveTelemetrySummary: {
       ...(job.liveTelemetrySummary ?? {}),
-      trainerIteration: Math.max(
-        Number(job.liveTelemetrySummary?.trainerIteration ?? 0),
-        Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
-      ),
+      trainerIteration: nextIteration,
       latestLivePulseIteration: Math.max(
         Number(job.liveTelemetrySummary?.latestLivePulseIteration ?? 0),
         Number(pulse.trainerIteration ?? pulse.metricStep ?? 0)
@@ -1370,29 +1368,6 @@ function resolvePreferredMetricValue(
     }
   }
   return null;
-}
-
-function preferMetricValue(existing: number | null | undefined, incoming: number | null | undefined) {
-  if (incoming === null || incoming === undefined) return existing ?? null;
-  if (existing === null || existing === undefined) return incoming;
-  if (existing === 0 && incoming !== 0) return incoming;
-  return existing;
-}
-
-function preferSparseMetricValue(existing: number | null | undefined, incoming: number | null | undefined) {
-  if (incoming === null || incoming === undefined) return existing ?? null;
-  if (incoming === 0 && (existing === null || existing === undefined)) return null;
-  if (existing === null || existing === undefined) return incoming;
-  if (existing === 0 && incoming !== 0) return incoming;
-  return existing;
-}
-
-function normalizeCanonicalMergeRow(row: TrainingMetricHistoryRow): TrainingMetricHistoryRow {
-  return {
-    ...row,
-    rewardMean: row.rewardMean ?? row.reward ?? null,
-    episodeLengthMean: row.episodeLengthMean ?? row.episodeLength ?? null,
-  };
 }
 
 function normalizeCanonicalMetricSource(source: unknown): MetricHistorySource {
@@ -1589,7 +1564,7 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
                       };
                     })()
                   : {}),
-              }
+            }
             : current.metricHistoryByJob,
         }));
         if (historyRow) {
@@ -2134,6 +2109,8 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
     const persistKey = buildMetricHistoryPersistKey(targetTenantId, jobId, targetJob.runRef ?? null);
     metricHistoryPersistQueue.delete(persistKey);
     metricHistoryPersistFingerprints.delete(persistKey);
+    visibleProgressWatermarksByJob.delete(jobId);
+    livePulseSessionsByJob.delete(jobId);
 
     set((state) => ({
       jobs: state.jobs.filter(

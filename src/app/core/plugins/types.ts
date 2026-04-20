@@ -79,6 +79,7 @@ export type TaskCompletenessReasonCode =
   | "MANAGER_CONTRACT_INCOMPLETE"
   | "EFFECTIVE_RUNTIME_INCOMPLETE"
   | "RESET_CONTRACT_INCOMPLETE"
+  | "LIVE_ENV_UNRESOLVED"
   | "EPISODE_EVIDENCE_PENDING"
   | "SCENE_OWNERSHIP_UNSTABLE"
   | "RESET_OWNERSHIP_UNSTABLE"
@@ -516,14 +517,7 @@ export type TrainingMetricHistoryRow = {
   metricStep: number;
   occurredAt: string;
   progressRatio: number | null;
-  source:
-    | "durable"
-    | "durable_metric_rows"
-    | "accepted_canonical_metrics"
-    | "live_overlay"
-    | "terminal_flush"
-    | "browser_persisted_cache"
-    | "terminal_replay";
+  source: string;
   sourceMarker: string | null;
   episodeIndex: number | null;
   reward?: number | null;

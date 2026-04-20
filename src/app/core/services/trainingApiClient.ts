@@ -11,10 +11,6 @@ type TrainingJobListResponse = {
   items: TrainingJobSummary[];
 };
 
-type TrainingArtifactListResponse = {
-  items: TrainingArtifactSummary[];
-};
-
 type EmptyListCooldownKey = string;
 
 type EmptyListCooldownEntry = {
