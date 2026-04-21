@@ -16,6 +16,7 @@ export type CanonicalMetricHistoryRow = {
 
 function preferValue(existing: number | null | undefined, incoming: number | null | undefined) {
   if (incoming === null || incoming === undefined) return existing ?? null;
+  if (incoming === 0) return existing ?? null;
   if (existing === null || existing === undefined) return incoming;
   if (existing === 0 && incoming !== 0) return incoming;
   return existing;
@@ -64,4 +65,3 @@ export function mergeMetricRowsByIteration(
 export function deriveVisibleMetricHistory(rows: CanonicalMetricHistoryRow[]) {
   return rows.slice().sort((a, b) => a.trainerIteration - b.trainerIteration);
 }
-

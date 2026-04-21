@@ -2,7 +2,7 @@ import type { DockId, PanelId } from "../dock/types";
 import type React from "react";
 import type { TrainingMetricBatchSummary } from "../services/trainingApiClient";
 
-export type TrainingJobStatus = "submitting" | "queued" | "provisioning" | "running" | "completed" | "failed" | "cancelled";
+export type TrainingJobStatus = "submitting" | "queued" | "provisioning" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
 export type TrainingTrainer = "rsl_rl" | "rllib" | "sb3";
 export type LearningTrend = "improving" | "flat" | "degrading" | "unknown";
 export type LearningHealthReasonCode =

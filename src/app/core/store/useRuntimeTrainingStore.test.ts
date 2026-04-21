@@ -5,12 +5,13 @@ const mocks = vi.hoisted(() => ({
   listTrainingMetricBatchesRemote: vi.fn(),
   listTrainingArtifactsRemote: vi.fn(),
   listTrainingJobsRemote: vi.fn(),
+  cancelTrainingJobRemote: vi.fn(),
 }));
 
 vi.mock("../services/trainingApiClient", () => ({
   trainingApiEnabled: true,
   buildTrainingLivePulseStreamUrl: vi.fn(),
-  cancelTrainingJobRemote: vi.fn(),
+  cancelTrainingJobRemote: mocks.cancelTrainingJobRemote,
   getTrainingRunnerLogsRemote: vi.fn(),
   listTrainingArtifactsRemote: mocks.listTrainingArtifactsRemote,
   listTrainingJobEventsRemote: mocks.listTrainingJobEventsRemote,
@@ -75,6 +76,35 @@ describe("useRuntimeTrainingStore transport ownership", () => {
       trainingTokens: 20,
       trainingTokenCost: 1,
     });
+  });
+
+  it("shows cancelling immediately and suppresses duplicate remote cancels", async () => {
+    useRuntimeTrainingStore.setState({
+      jobs: [
+        {
+          id: "job-cancel",
+          tenantId: "tenant-a",
+          status: "running",
+          lifecycleStatus: "running",
+          updatedAt: Date.now(),
+        } as never,
+      ],
+    });
+    mocks.cancelTrainingJobRemote.mockResolvedValueOnce({
+      jobId: "job-cancel",
+      accepted: true,
+      cancelRequested: true,
+      runnerCancelDispatchAttempted: true,
+      runnerCancelDispatchSucceeded: true,
+    });
+
+    useRuntimeTrainingStore.getState().cancelTrainingJob("job-cancel");
+    useRuntimeTrainingStore.getState().cancelTrainingJob("job-cancel");
+
+    const job = useRuntimeTrainingStore.getState().jobs.find((item) => item.id === "job-cancel");
+    expect(job?.status).toBe("cancelling");
+    expect(job?.lifecycleStatus).toBe("cancelling");
+    expect(mocks.cancelTrainingJobRemote).toHaveBeenCalledTimes(1);
   });
 
   it("does not cross-fetch metric batches when listing events", async () => {

@@ -934,12 +934,24 @@ export async function listTrainingJobsRemote(): Promise<TrainingJobSummary[]> {
   return payload.items;
 }
 
-export async function cancelTrainingJobRemote(jobId: string): Promise<void> {
+export async function cancelTrainingJobRemote(jobId: string): Promise<{
+  jobId: string;
+  accepted: boolean;
+  cancelRequested?: boolean;
+  runnerCancelDispatchAttempted?: boolean;
+  runnerCancelDispatchSucceeded?: boolean;
+}> {
   const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}:cancel`), {
     method: "POST",
     headers: buildHeaders({ accept: "application/json" }),
   });
-  await parseJson<{ jobId: string; accepted: boolean }>(response);
+  return parseJson<{
+    jobId: string;
+    accepted: boolean;
+    cancelRequested?: boolean;
+    runnerCancelDispatchAttempted?: boolean;
+    runnerCancelDispatchSucceeded?: boolean;
+  }>(response);
 }
 
 export async function listTrainingArtifactsRemote(

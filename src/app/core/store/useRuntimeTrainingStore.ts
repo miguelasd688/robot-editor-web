@@ -121,10 +121,11 @@ let remoteSyncInFlight = false;
 const livePulseSources = new Map<string, EventSource>();
 const livePulseReconnectTimers = new Map<string, number>();
 const livePulseReconnectAttempts = new Map<string, number>();
+const pendingCancelRequests = new Set<string>();
 let trainingJobCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
-const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["submitting", "queued", "provisioning", "running"]);
+const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["submitting", "queued", "provisioning", "running", "cancelling"]);
 const MAX_JOB_HISTORY_ITEMS = 20_000;
 const MAX_EVENT_HISTORY_ITEMS = 20_000;
 const METRIC_HISTORY_PERSIST_FLUSH_MS = 1000;
@@ -311,6 +312,13 @@ function isTerminalReplayMetricHistorySource(source: MetricHistorySource) {
   return source === "terminal_replay";
 }
 
+function getAcceptedCanonicalRowsCount(job: TrainingJobSummary | null | undefined) {
+  const ingestionSummary = job?.metricsIngestionSummary ?? null;
+  const recentMetricRows = Array.isArray(ingestionSummary?.recentMetricRows) ? ingestionSummary.recentMetricRows.length : 0;
+  const latestMetricRows = Array.isArray(ingestionSummary?.latestMetricRows) ? ingestionSummary.latestMetricRows.length : 0;
+  return Math.max(recentMetricRows, latestMetricRows);
+}
+
 function latestMetricHistoryRow(rows: TrainingMetricHistoryRow[]) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   return deriveVisibleMetricHistory(rows)[rows.length - 1] ?? null;
@@ -352,9 +360,9 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
   const requestedIteration =
-    canonicalProgress?.current ??
     latest?.trainerIteration ??
     acceptedIteration ??
+    canonicalProgress?.current ??
     0;
   const jobId = job?.id ?? "";
   const watermark = visibleProgressWatermarksByJob.get(jobId) ?? createVisibleProgressWatermark();
@@ -378,9 +386,7 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   return {
     browserVisibleIteration,
     browserVisibleProgressRatio,
-    source:
-      latest?.source ??
-      (acceptedIteration !== null ? "accepted_canonical_metrics" : canonicalProgress?.source ?? "durable"),
+    source: latest?.source ?? canonicalProgress?.source ?? "progress_unavailable",
     latestMetricRow: latest,
     visibleProgressWatermarkIteration: watermarkResult.next.visibleProgressWatermarkIteration,
     visibleProgressWatermarkRatio: watermarkResult.next.visibleProgressWatermarkRatio,
@@ -396,6 +402,8 @@ export function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSumma
   const ingestionSummary = job?.metricsIngestionSummary ?? null;
   const recentMetricRows = Array.isArray(ingestionSummary?.recentMetricRows) ? ingestionSummary.recentMetricRows : [];
   const latestMetricRows = Array.isArray(ingestionSummary?.latestMetricRows) ? ingestionSummary.latestMetricRows : [];
+  const latestMetrics = toObjectOrEmpty(ingestionSummary?.latestMetrics);
+  const acceptedCanonicalRowsCount = Number(ingestionSummary?.acceptedCount ?? 0);
   const rows: TrainingMetricHistoryRow[] = [];
   const preferredMetricRows = recentMetricRows.length > 0 ? recentMetricRows : latestMetricRows;
   for (const row of preferredMetricRows) {
@@ -433,24 +441,41 @@ export function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSumma
     });
     if (normalized) rows.push(normalized);
   }
-
-  const latestMetrics = toObjectOrEmpty(ingestionSummary?.latestMetrics);
-  const latestMetricsStep = Math.max(0, Math.round(Number(ingestionSummary?.lastAcceptedStep ?? 0)));
-  if (rows.length === 0 && latestMetricsStep > 0 && Object.keys(latestMetrics).length > 0) {
-    const latestMetricsRow = buildCanonicalMetricHistoryRow({
-      trainerIteration: latestMetricsStep,
-      metricStep: latestMetricsStep,
-      occurredAt: ingestionSummary?.lastAcceptedTimestamp ?? new Date().toISOString(),
-      progressRatio: null,
+  if (rows.length === 0 && acceptedCanonicalRowsCount > 0 && Object.keys(latestMetrics).length > 0) {
+    const fallbackStep =
+      toFiniteNumber(ingestionSummary?.lastAcceptedStep) ??
+      toFiniteNumber(job?.currentEpoch) ??
+      0;
+    const fallbackRow = buildCanonicalMetricHistoryRow({
+      trainerIteration: fallbackStep,
+      metricStep: fallbackStep,
+      occurredAt: String(ingestionSummary?.lastAcceptedTimestamp ?? job?.updatedAt ?? new Date().toISOString()),
+      progressRatio: toFiniteNumber(ingestionSummary?.latestMetrics?.progress ?? ingestionSummary?.latestMetrics?.progressRatio),
       source: "accepted_canonical_metrics",
-      sourceMarker: "metricsIngestionSummary.latestMetrics",
-      episodeIndex: null,
-      reward: resolvePreferredMetricValue([latestMetrics], ["reward", "rewardMean", "mean_reward", "Train/mean_reward/time", "Train/mean_reward"]),
-      episodeLength: resolvePreferredMetricValue([latestMetrics], ["episodeLength", "episodeLengthMean", "Train/mean_episode_length/time", "Train/mean_episode_length"]),
-      loss: resolvePreferredMetricValue([latestMetrics], ["loss", "valueLoss", "surrogateLoss", "Loss/value_function", "Loss/surrogate"]),
-      fps: resolvePreferredMetricValue([latestMetrics], ["fps", "Perf/total_fps", "Perf/fps", "Train/fps"]),
+      sourceMarker: ingestionSummary?.lastAcceptedTimestamp ?? ingestionSummary?.reasonCode ?? null,
+      episodeIndex: toFiniteNumber(ingestionSummary?.latestMetrics?.episodeIndex),
+      reward:
+        resolvePreferredMetricValue(
+          [latestMetrics],
+          ["reward", "rewardMean", "mean_reward", "Train/mean_reward/time", "Train/mean_reward"]
+        ),
+      episodeLength:
+        resolvePreferredMetricValue(
+          [latestMetrics],
+          ["episodeLength", "episodeLengthMean", "Train/mean_episode_length/time", "Train/mean_episode_length"]
+        ),
+      loss:
+        resolvePreferredMetricValue(
+          [latestMetrics],
+          ["loss", "valueLoss", "surrogateLoss", "Loss/value_function", "Loss/surrogate"]
+        ),
+      fps:
+        resolvePreferredMetricValue(
+          [latestMetrics],
+          ["fps", "Perf/total_fps", "Perf/fps", "Train/fps"]
+        ),
     });
-    if (latestMetricsRow) rows.push(latestMetricsRow);
+    if (fallbackRow) rows.push(fallbackRow);
   }
   return recentMetricRows.length > 0 ? mergeAndTrimRecentMetricRows([], rows) : rows;
 }
@@ -525,6 +550,7 @@ export function deriveUnifiedVisibleTrainingState(
   const latestAcceptedIteration = latestAcceptedRow?.trainerIteration ?? null;
   const latestMergedIteration = latestMergedRow?.trainerIteration ?? null;
   const latestPersistedIteration = latestPersistedRow?.trainerIteration ?? null;
+  const acceptedCanonicalRowsCount = getAcceptedCanonicalRowsCount(job);
   const availabilityDiagnostics = buildMetricAvailabilityDiagnostics(mergedRows);
   const persistedMetricRowsCount = mergedRows.filter((row) => isPersistedMetricHistorySource(row.source)).length;
   const durableMetricRowsCount = mergedRows.filter((row) => isDurableMetricHistorySource(row.source)).length;
@@ -532,13 +558,16 @@ export function deriveUnifiedVisibleTrainingState(
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
-  const visibleSource = latestMergedRow?.source ?? (latestAcceptedIteration !== null ? "accepted_canonical_metrics" : "progress_unavailable");
+  const visibleSource =
+    latestMergedRow?.source ??
+    (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
+  const visibleProgressSource = latestMergedRow?.source ?? (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
     chartRows,
     visibleIteration: visibleTruth.browserVisibleIteration,
     visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
-    visibleProgressSource: visibleTruth.source,
+    visibleProgressSource,
     latestDurableTrainerIteration: latestDurableIteration,
     latestAcceptedCanonicalIteration: latestAcceptedIteration,
     livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
@@ -556,7 +585,9 @@ export function deriveUnifiedVisibleTrainingState(
     durableMetricRowsCount,
     overlayMetricRowsCount,
     terminalReplayRowsCount,
-    chartFallbackActive: latestDurableIteration === null && (latestAcceptedIteration !== null || latestPersistedIteration !== null),
+    chartFallbackActive:
+      latestDurableIteration === null &&
+      (acceptedCanonicalRowsCount > 0 || recentWindowDiagnostics.latestMetricsFallbackUsed),
     nonCanonicalChartFallbackDetected:
       chartRows.some(
         (row) =>
@@ -1400,8 +1431,12 @@ function buildCanonicalMetricHistoryRow(input: {
   loss?: unknown;
   fps?: unknown;
 }): TrainingMetricHistoryRow | null {
-  const trainerIteration = Math.max(0, Math.round(Number(input.trainerIteration ?? input.metricStep ?? 0)));
-  if (trainerIteration <= 0) return null;
+  const rawTrainerIteration = input.trainerIteration ?? input.metricStep;
+  if (rawTrainerIteration === null || rawTrainerIteration === undefined) return null;
+  const trainerIterationNumber = Number(rawTrainerIteration);
+  if (!Number.isFinite(trainerIterationNumber)) return null;
+  const trainerIteration = Math.max(0, Math.round(trainerIterationNumber));
+  if (trainerIteration < 0) return null;
   const occurredAt = String(input.occurredAt ?? "").trim();
   if (!occurredAt) return null;
   const reward = toFiniteNumber(input.reward ?? input.rewardMean);
@@ -1410,7 +1445,12 @@ function buildCanonicalMetricHistoryRow(input: {
   const fps = input.fps === null || input.fps === undefined ? null : toFiniteNumber(input.fps);
   return {
     trainerIteration,
-    metricStep: Math.max(0, Math.round(Number(input.metricStep ?? trainerIteration) || trainerIteration)),
+    metricStep:
+      input.metricStep === null || input.metricStep === undefined
+        ? trainerIteration
+        : Number.isFinite(Number(input.metricStep))
+          ? Math.max(0, Math.round(Number(input.metricStep)))
+          : trainerIteration,
     occurredAt,
     progressRatio: toFiniteNumber(input.progressRatio),
     source: normalizeCanonicalMetricSource(input.source),
@@ -1472,6 +1512,23 @@ function resolveVisibleActiveStatus(
   return "provisioning";
 }
 
+function hasVisibleCancelIntent(
+  jobId: string,
+  liveTelemetrySummary: TrainingJobSummary["liveTelemetrySummary"] | null | undefined
+) {
+  const liveSummary = isObject(liveTelemetrySummary) ? liveTelemetrySummary : null;
+  const crossSurfaceTruth = isObject(liveSummary?.crossSurfaceTruthSummary)
+    ? (liveSummary?.crossSurfaceTruthSummary as Record<string, unknown>)
+    : null;
+  return Boolean(
+    pendingCancelRequests.has(jobId) ||
+      crossSurfaceTruth?.cancelRequested === true ||
+      crossSurfaceTruth?.shutdownRequested === true ||
+      liveSummary?.shutdownRequested === true ||
+      liveSummary?.cancelRequested === true
+  );
+}
+
 function mergeActiveJobTruth(
   existing: TrainingJobSummary | undefined,
   incoming: TrainingJobSummary,
@@ -1507,11 +1564,15 @@ function mergeActiveJobTruth(
         ? incoming.loss
         : incoming.loss;
   const visibleStatus = resolveVisibleActiveStatus(existing, incoming, freshestLiveSummary);
+  const visibleLifecycleStatus =
+    hasVisibleCancelIntent(incoming.id, freshestLiveSummary) && visibleStatus !== "completed" && visibleStatus !== "failed" && visibleStatus !== "cancelled"
+      ? "cancelling"
+      : visibleStatus;
 
   return {
     ...incoming,
-    status: visibleStatus,
-    lifecycleStatus: visibleStatus,
+    status: visibleLifecycleStatus,
+    lifecycleStatus: visibleLifecycleStatus,
     currentEpoch,
     currentEpisode,
     progress,
@@ -2043,6 +2104,9 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
 
   cancelTrainingJob: (jobId) => {
     if (trainingApiEnabled) {
+      if (pendingCancelRequests.has(jobId)) {
+        return;
+      }
       if (optimisticJobIds.has(jobId)) {
         optimisticJobIds.delete(jobId);
         set((state) => ({
@@ -2059,6 +2123,26 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
         return;
       }
 
+      pendingCancelRequests.add(jobId);
+      set((state) => ({
+        jobs: state.jobs.map((item) =>
+          item.id === jobId
+            ? {
+                ...item,
+                status:
+                  item.status === "running" || item.status === "provisioning"
+                    ? ("cancelling" as TrainingJobStatus)
+                    : item.status,
+                lifecycleStatus:
+                  item.status === "running" || item.status === "provisioning"
+                    ? ("cancelling" as TrainingJobStatus)
+                    : item.lifecycleStatus,
+                updatedAt: Date.now(),
+              }
+            : item
+        ),
+      }));
+
       void cancelTrainingJobRemote(jobId)
         .catch((error) => {
           logWarn("Failed to cancel remote training job", {
@@ -2067,6 +2151,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           });
         })
         .finally(() => {
+          pendingCancelRequests.delete(jobId);
           requestRemoteJobsSyncOnce();
         });
       return;
