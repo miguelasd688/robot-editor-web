@@ -451,6 +451,54 @@ export function getVisibleCanonicalIteration(job: TrainingJobSummary | null | un
   return liveIteration === null ? null : Math.max(0, Math.round(liveIteration));
 }
 
+export function getVisibleIterationSource(job: TrainingJobSummary | null | undefined) {
+  const durableRows = Array.isArray(job?.metricsIngestionSummary?.latestMetricRows)
+    ? job.metricsIngestionSummary.latestMetricRows
+    : [];
+  if (durableRows.some((row) => toFiniteNumber(row?.trainerIteration) !== null)) return "durable_metrics_batch";
+  const acceptedRows = Array.isArray(job?.metricsIngestionSummary?.recentMetricRows)
+    ? job.metricsIngestionSummary.recentMetricRows
+    : [];
+  if (acceptedRows.some((row) => toFiniteNumber(row?.trainerIteration) !== null)) return "accepted_canonical_metrics";
+  const liveTelemetrySummary = job?.liveTelemetrySummary ?? null;
+  if (
+    toFiniteNumber(liveTelemetrySummary?.trainerIteration) !== null ||
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseIteration) !== null ||
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseStep) !== null
+  ) {
+    return "runner_live_pulse";
+  }
+  return "none";
+}
+
+function stampBrowserMetricsTruth(job: TrainingJobSummary): TrainingJobSummary {
+  const liveTelemetrySummary = isObject(job.liveTelemetrySummary) ? job.liveTelemetrySummary : null;
+  const apiTruth = isObject(job.metricsTruth)
+    ? (job.metricsTruth as Record<string, unknown>)
+    : isObject(liveTelemetrySummary?.metricsTruth)
+      ? (liveTelemetrySummary.metricsTruth as Record<string, unknown>)
+      : {};
+  const browserVisibleIteration = getVisibleCanonicalIteration(job);
+  const browserVisibleAt = new Date().toISOString();
+  const browserVisibleIterationSource = getVisibleIterationSource(job);
+  const metricsTruth = {
+    ...apiTruth,
+    browserVisibleIteration,
+    browserVisibleAt,
+    browserVisibleIterationSource,
+  };
+  return {
+    ...job,
+    metricsTruth,
+    liveTelemetrySummary: liveTelemetrySummary
+      ? {
+          ...liveTelemetrySummary,
+          metricsTruth,
+        }
+      : job.liveTelemetrySummary,
+  };
+}
+
 export function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | null | undefined) {
   const ingestionSummary = job?.metricsIngestionSummary ?? null;
   const recentMetricRows = Array.isArray(ingestionSummary?.recentMetricRows) ? ingestionSummary.recentMetricRows : [];
@@ -1638,19 +1686,19 @@ function mergeActiveJobTruth(
   incoming: TrainingJobSummary,
   latestLivePulse?: TrainingJobSummary["liveTelemetrySummary"] | null
 ): TrainingJobSummary {
-  if (!existing) return incoming;
+  if (!existing) return stampBrowserMetricsTruth(incoming);
 
   const freshestLiveSummary = latestLivePulse ?? existing.liveTelemetrySummary ?? incoming.liveTelemetrySummary ?? null;
   const cancelIntentVisible = hasVisibleCancelIntent(incoming.id, freshestLiveSummary) || hasVisibleCancelIntent(existing.id, freshestLiveSummary);
   if (isTerminalJobStatus(incoming.status) && !(incoming.status === "failed" && cancelIntentVisible)) {
-    return incoming;
+    return stampBrowserMetricsTruth(incoming);
   }
   if (isTerminalJobStatus(existing.status) && !(existing.status === "failed" && cancelIntentVisible)) {
-    return existing;
+    return stampBrowserMetricsTruth(existing);
   }
   const incomingFailedButCancelable = incoming.status === "failed" && cancelIntentVisible;
   if (!ACTIVE_JOB_STATUSES.has(existing.status) || (!ACTIVE_JOB_STATUSES.has(incoming.status) && !incomingFailedButCancelable)) {
-    return incoming;
+    return stampBrowserMetricsTruth(incoming);
   }
 
   const freshestLiveAt = Math.max(
@@ -1675,7 +1723,7 @@ function mergeActiveJobTruth(
       ? "cancelling"
       : visibleStatus;
 
-  return {
+  return stampBrowserMetricsTruth({
     ...incoming,
     status: visibleLifecycleStatus,
     lifecycleStatus: visibleLifecycleStatus,
@@ -1686,7 +1734,7 @@ function mergeActiveJobTruth(
     updatedAt: Math.max(Number(incoming.updatedAt ?? 0), Number(existing.updatedAt ?? 0), freshestLiveAt),
     liveTelemetrySummary: freshestLiveSummary ?? incoming.liveTelemetrySummary ?? existing.liveTelemetrySummary,
     recordingLiveSyncSummary: existing.recordingLiveSyncSummary ?? incoming.recordingLiveSyncSummary,
-  };
+  });
 }
 
 function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {

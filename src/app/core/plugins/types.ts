@@ -452,6 +452,7 @@ export type TrainingJobSummary = {
   episodeRuntimeTraceSummary?: EpisodeRuntimeTraceSummary | null;
   structuredMetricsTelemetry?: Record<string, unknown> | null;
   liveTelemetrySummary?: Record<string, unknown> | null;
+  metricsTruth?: Record<string, unknown> | null;
   recordingLiveSyncSummary?: Record<string, unknown> | null;
   learningHealthSummary?: LearningHealthSummary | null;
   agentArtifactSummary?: AgentArtifactSummary | null;
