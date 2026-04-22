@@ -428,6 +428,29 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   };
 }
 
+export function getVisibleCanonicalIteration(job: TrainingJobSummary | null | undefined) {
+  const durableRows = Array.isArray(job?.metricsIngestionSummary?.latestMetricRows)
+    ? job.metricsIngestionSummary.latestMetricRows
+    : [];
+  for (let index = durableRows.length - 1; index >= 0; index -= 1) {
+    const value = toFiniteNumber(durableRows[index]?.trainerIteration);
+    if (value !== null) return Math.max(0, Math.round(value));
+  }
+  const acceptedRows = Array.isArray(job?.metricsIngestionSummary?.recentMetricRows)
+    ? job.metricsIngestionSummary.recentMetricRows
+    : [];
+  for (let index = acceptedRows.length - 1; index >= 0; index -= 1) {
+    const value = toFiniteNumber(acceptedRows[index]?.trainerIteration);
+    if (value !== null) return Math.max(0, Math.round(value));
+  }
+  const liveTelemetrySummary = job?.liveTelemetrySummary ?? null;
+  const liveIteration =
+    toFiniteNumber(liveTelemetrySummary?.trainerIteration) ??
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseIteration) ??
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseStep);
+  return liveIteration === null ? null : Math.max(0, Math.round(liveIteration));
+}
+
 export function buildMetricHistoryRowsFromIngestionSummary(job: TrainingJobSummary | null | undefined) {
   const ingestionSummary = job?.metricsIngestionSummary ?? null;
   const recentMetricRows = Array.isArray(ingestionSummary?.recentMetricRows) ? ingestionSummary.recentMetricRows : [];
@@ -593,7 +616,9 @@ export function deriveUnifiedVisibleTrainingState(
     (latestDurableRow.source === "durable" || latestDurableRow.source === "durable_metric_rows" || latestDurableRow.source === "browser_persisted_cache" || latestDurableRow.source === "terminal_flush")
       ? latestDurableRow.source
       : null;
-  const acceptedVisibleSource = latestAcceptedRow?.source ?? null;
+  const acceptedVisibleSource = latestAcceptedRow?.trainerIteration !== null && latestAcceptedRow?.trainerIteration !== undefined
+    ? latestAcceptedRow.source
+    : null;
   const visibleSource =
     acceptedVisibleSource ??
     durableVisibleSource ??
@@ -609,7 +634,7 @@ export function deriveUnifiedVisibleTrainingState(
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
     chartRows,
-    visibleIteration: visibleTruth.browserVisibleIteration,
+    visibleIteration: getVisibleCanonicalIteration(job) ?? visibleTruth.browserVisibleIteration,
     visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
     visibleProgressSource,
     latestDurableTrainerIteration: latestDurableIteration,
