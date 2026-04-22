@@ -125,7 +125,14 @@ const pendingCancelRequests = new Set<string>();
 let trainingJobCounter = 0;
 const initialTrainingTokens = readPositiveIntEnv(import.meta.env.VITE_TRAINING_INITIAL_TOKENS, 20);
 const trainingTokenCost = readPositiveIntEnv(import.meta.env.VITE_TRAINING_JOB_TOKEN_COST, 1);
-const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>(["submitting", "queued", "provisioning", "running", "cancelling"]);
+const ACTIVE_JOB_STATUSES = new Set<TrainingJobStatus>([
+  "submitting",
+  "queued",
+  "provisioning",
+  "running",
+  "cancelling",
+  "health_blocked_shutdown" as TrainingJobStatus,
+]);
 const MAX_JOB_HISTORY_ITEMS = 20_000;
 const MAX_EVENT_HISTORY_ITEMS = 20_000;
 const METRIC_HISTORY_PERSIST_FLUSH_MS = 1000;
@@ -230,6 +237,21 @@ async function recoverMetricBatchesForJob(jobId: string, reason: MetricBatchFetc
 
 function closeAllLivePulseSources() {
   for (const jobId of livePulseSources.keys()) closeLivePulseSource(jobId);
+}
+
+export function __resetRuntimeTrainingTransportStateForTests() {
+  closeAllLivePulseSources();
+  if (typeof window !== "undefined") {
+    for (const timer of livePulseReconnectTimers.values()) {
+      window.clearTimeout(timer);
+    }
+  }
+  livePulseReconnectTimers.clear();
+  livePulseReconnectAttempts.clear();
+  livePulseSessionsByJob.clear();
+  pendingCancelRequests.clear();
+  remoteSyncConsumerCount = 0;
+  remoteSyncInFlight = false;
 }
 
 function readDeletedTrainingJobKeys() {
@@ -356,10 +378,18 @@ function mergeAndTrimRecentMetricRows(
 export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
   const visibleHistory = deriveVisibleMetricHistory(rows);
   const latest = latestMetricHistoryRow(visibleHistory);
+  const durableRows = visibleHistory.filter((row) => isDurableMetricHistorySource(row.source));
+  const acceptedRows = visibleHistory.filter((row) => row.source === "accepted_canonical_metrics");
+  const liveOverlayRows = visibleHistory.filter((row) => row.source === "live_overlay");
+  const latestDurable = latestMetricHistoryRow(durableRows);
+  const latestAccepted = latestMetricHistoryRow(acceptedRows);
+  const latestOverlay = latestMetricHistoryRow(liveOverlayRows);
   const acceptedIteration = toFiniteNumber(job?.metricsIngestionSummary?.lastAcceptedStep);
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
   const requestedIteration =
+    latestDurable?.trainerIteration ??
+    latestAccepted?.trainerIteration ??
     latest?.trainerIteration ??
     acceptedIteration ??
     canonicalProgress?.current ??
@@ -386,8 +416,8 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   return {
     browserVisibleIteration,
     browserVisibleProgressRatio,
-    source: latest?.source ?? canonicalProgress?.source ?? "progress_unavailable",
-    latestMetricRow: latest,
+    source: latestDurable?.source ?? latestAccepted?.source ?? canonicalProgress?.source ?? latest?.source ?? latestOverlay?.source ?? "progress_unavailable",
+    latestMetricRow: latestDurable ?? latestAccepted ?? latest ?? latestOverlay,
     visibleProgressWatermarkIteration: watermarkResult.next.visibleProgressWatermarkIteration,
     visibleProgressWatermarkRatio: watermarkResult.next.visibleProgressWatermarkRatio,
     visibleProgressWatermarkAt: watermarkResult.next.visibleProgressWatermarkAt,
@@ -558,10 +588,24 @@ export function deriveUnifiedVisibleTrainingState(
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
+  const durableVisibleSource =
+    latestDurableRow &&
+    (latestDurableRow.source === "durable" || latestDurableRow.source === "durable_metric_rows" || latestDurableRow.source === "browser_persisted_cache" || latestDurableRow.source === "terminal_flush")
+      ? latestDurableRow.source
+      : null;
+  const acceptedVisibleSource = latestAcceptedRow?.source ?? null;
   const visibleSource =
+    acceptedVisibleSource ??
+    durableVisibleSource ??
+    visibleTruth.source ??
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
-  const visibleProgressSource = latestMergedRow?.source ?? (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
+  const visibleProgressSource =
+    acceptedVisibleSource ??
+    durableVisibleSource ??
+    visibleTruth.source ??
+    latestMergedRow?.source ??
+    (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
     chartRows,
@@ -1469,7 +1513,7 @@ function buildCanonicalMetricHistoryRow(input: {
 function getStatusRank(status: TrainingJobStatus | string | null | undefined) {
   if (status === "queued" || status === "submitting") return 0;
   if (status === "provisioning") return 1;
-  if (status === "running") return 2;
+  if (status === "running" || status === "cancelling" || status === "health_blocked_shutdown") return 2;
   return -1;
 }
 
@@ -1482,6 +1526,36 @@ function resolveVisibleActiveStatus(
   const crossSurfaceTruth = isObject(liveSummary?.crossSurfaceTruthSummary)
     ? (liveSummary?.crossSurfaceTruthSummary as Record<string, unknown>)
     : null;
+  const runtimeHealthSummary = isObject(liveSummary?.runtimeHealthSummary)
+    ? (liveSummary.runtimeHealthSummary as Record<string, unknown>)
+    : null;
+  const runtimeSmokeSummary = isObject(liveSummary?.runtimeSmokeSummary)
+    ? (liveSummary.runtimeSmokeSummary as Record<string, unknown>)
+    : runtimeHealthSummary;
+  const stopTruth = isObject(crossSurfaceTruth?.stopHandshakeSummary)
+    ? (crossSurfaceTruth.stopHandshakeSummary as Record<string, unknown>)
+    : crossSurfaceTruth;
+  const failFastRequested = liveSummary?.failFastRequested === true || stopTruth?.shutdownRequested === true;
+  const processExitObservedAt = stopTruth?.processExitObservedAt;
+  const smokeStage = typeof runtimeSmokeSummary?.runtimeSmokeStage === "string"
+    ? runtimeSmokeSummary.runtimeSmokeStage
+    : typeof runtimeSmokeSummary?.healthEvaluationStage === "string"
+      ? runtimeSmokeSummary.healthEvaluationStage
+      : "";
+  if (
+    smokeStage === "fatal" &&
+    (crossSurfaceTruth?.processAlive === true || (failFastRequested === true && processExitObservedAt == null)) &&
+    incoming.status !== "completed" &&
+    incoming.status !== "cancelled"
+  ) {
+    return "health_blocked_shutdown" as TrainingJobStatus;
+  }
+  if (failFastRequested === true && processExitObservedAt == null && incoming.status !== "completed" && incoming.status !== "cancelled") {
+    return "health_blocked_shutdown" as TrainingJobStatus;
+  }
+  if ((stopTruth?.cancelRequested === true || stopTruth?.shutdownRequested === true) && incoming.status !== "completed" && incoming.status !== "cancelled") {
+    return "cancelling";
+  }
   const hasLiveTelemetryStep =
     toFiniteNumber(crossSurfaceTruth?.runnerLivePulseIteration) !== null ||
     toFiniteNumber(liveSummary?.latestLivePulseStep) !== null ||
@@ -1520,8 +1594,13 @@ function hasVisibleCancelIntent(
   const crossSurfaceTruth = isObject(liveSummary?.crossSurfaceTruthSummary)
     ? (liveSummary?.crossSurfaceTruthSummary as Record<string, unknown>)
     : null;
+  const stopTruth = isObject(crossSurfaceTruth?.stopHandshakeSummary)
+    ? (crossSurfaceTruth.stopHandshakeSummary as Record<string, unknown>)
+    : crossSurfaceTruth;
   return Boolean(
     pendingCancelRequests.has(jobId) ||
+      stopTruth?.cancelRequested === true ||
+      stopTruth?.shutdownRequested === true ||
       crossSurfaceTruth?.cancelRequested === true ||
       crossSurfaceTruth?.shutdownRequested === true ||
       liveSummary?.shutdownRequested === true ||
@@ -1536,17 +1615,19 @@ function mergeActiveJobTruth(
 ): TrainingJobSummary {
   if (!existing) return incoming;
 
-  if (isTerminalJobStatus(incoming.status)) {
+  const freshestLiveSummary = latestLivePulse ?? existing.liveTelemetrySummary ?? incoming.liveTelemetrySummary ?? null;
+  const cancelIntentVisible = hasVisibleCancelIntent(incoming.id, freshestLiveSummary) || hasVisibleCancelIntent(existing.id, freshestLiveSummary);
+  if (isTerminalJobStatus(incoming.status) && !(incoming.status === "failed" && cancelIntentVisible)) {
     return incoming;
   }
-  if (isTerminalJobStatus(existing.status)) {
+  if (isTerminalJobStatus(existing.status) && !(existing.status === "failed" && cancelIntentVisible)) {
     return existing;
   }
-  if (!ACTIVE_JOB_STATUSES.has(existing.status) || !ACTIVE_JOB_STATUSES.has(incoming.status)) {
+  const incomingFailedButCancelable = incoming.status === "failed" && cancelIntentVisible;
+  if (!ACTIVE_JOB_STATUSES.has(existing.status) || (!ACTIVE_JOB_STATUSES.has(incoming.status) && !incomingFailedButCancelable)) {
     return incoming;
   }
 
-  const freshestLiveSummary = latestLivePulse ?? existing.liveTelemetrySummary ?? incoming.liveTelemetrySummary ?? null;
   const freshestLiveAt = Math.max(
     parseLiveTelemetryTimestamp(freshestLiveSummary),
     parseLiveTelemetryTimestamp(incoming.liveTelemetrySummary),
@@ -1587,7 +1668,7 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
   if (!trainingApiEnabled || typeof EventSource === "undefined") return;
   const activeJobIds = new Set(
     jobs
-      .filter((job) => ["queued", "provisioning", "running"].includes(job.status))
+      .filter((job) => ["queued", "provisioning", "running", "cancelling"].includes(job.status))
       .filter((job) => !job.id.startsWith("local_job_"))
       .map((job) => job.id)
   );
@@ -1713,6 +1794,10 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
     };
     livePulseSources.set(jobId, source);
   }
+}
+
+export function __ensureLivePulseSubscriptionsForTests(jobs: TrainingJobSummary[]) {
+  ensureLivePulseSubscriptions(jobs);
 }
 
 function hydrateJobsFromLocalCacheOnce() {
@@ -1843,6 +1928,8 @@ function buildLaunchContextFromInput(
 
   return context;
 }
+
+export { resolveVisibleActiveStatus, mergeActiveJobTruth, hasVisibleCancelIntent };
 
 export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingState>> = create<RuntimeTrainingState>(
   (set, get) => ({
