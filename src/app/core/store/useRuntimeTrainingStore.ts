@@ -346,21 +346,62 @@ function latestMetricHistoryRow(rows: TrainingMetricHistoryRow[]) {
   return deriveVisibleMetricHistory(rows)[rows.length - 1] ?? null;
 }
 
+function mergeCanonicalMetricRowsByTrainerIteration(
+  current: TrainingMetricHistoryRow[],
+  incoming: TrainingMetricHistoryRow[]
+) {
+  return mergeMetricRowsByIteration(current, incoming);
+}
+
+function selectBrowserVisibleIteration(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const canonicalTruthIteration = toFiniteNumber(truth?.browserVisibleIteration ?? truth?.apiVisibleIteration);
+  if (canonicalTruthIteration !== null) {
+    return canonicalTruthIteration;
+  }
+  const visibleHistory = deriveVisibleMetricHistory(rows);
+  const durableRows = visibleHistory.filter((row) => isDurableMetricHistorySource(row.source));
+  const acceptedRows = visibleHistory.filter((row) => row.source === "accepted_canonical_metrics");
+  const liveOverlayRows = visibleHistory.filter((row) => row.source === "live_overlay");
+  const latestDurable = latestMetricHistoryRow(durableRows);
+  const latestAccepted = latestMetricHistoryRow(acceptedRows);
+  const latestLive = latestMetricHistoryRow(liveOverlayRows);
+  return latestDurable?.trainerIteration ?? latestAccepted?.trainerIteration ?? latestLive?.trainerIteration ?? null;
+}
+
+function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const sourceFromTruth = typeof truth?.browserVisibleIterationSource === "string" && truth.browserVisibleIterationSource.trim()
+    ? truth.browserVisibleIterationSource.trim()
+    : typeof truth?.apiVisibleIterationSource === "string" && truth.apiVisibleIterationSource.trim()
+      ? truth.apiVisibleIterationSource.trim()
+      : null;
+  if (sourceFromTruth) return sourceFromTruth;
+  const visibleHistory = deriveVisibleMetricHistory(rows);
+  const durableRows = visibleHistory.filter((row) => isDurableMetricHistorySource(row.source));
+  const acceptedRows = visibleHistory.filter((row) => row.source === "accepted_canonical_metrics");
+  const liveOverlayRows = visibleHistory.filter((row) => row.source === "live_overlay");
+  const latestDurable = latestMetricHistoryRow(durableRows);
+  const latestAccepted = latestMetricHistoryRow(acceptedRows);
+  const latestLive = latestMetricHistoryRow(liveOverlayRows);
+  return latestDurable?.source ?? latestAccepted?.source ?? latestLive?.source ?? "none";
+}
+
 function deriveJobMetricHistory(job: TrainingJobSummary | null | undefined, currentRows: TrainingMetricHistoryRow[]) {
   const acceptedRows = buildMetricHistoryRowsFromIngestionSummary(job);
   const liveTelemetryRow = buildMetricHistoryRowFromLiveTelemetrySummary(job);
   const mergedAcceptedRows = deriveVisibleMetricHistory(acceptedRows);
-  const currentAndLiveRows = liveTelemetryRow ? mergeMetricRowsByIteration(currentRows, [liveTelemetryRow]) : currentRows;
+  const currentAndLiveRows = liveTelemetryRow ? mergeCanonicalMetricRowsByTrainerIteration(currentRows, [liveTelemetryRow]) : currentRows;
   const hasDurableRows = currentRows.length > 0;
   const hasAcceptedRows = acceptedRows.length > 0;
   if (!hasDurableRows && !hasAcceptedRows && !liveTelemetryRow) {
     return deriveVisibleMetricHistory(currentRows);
   }
   if (hasDurableRows) {
-    return mergeMetricRowsByIteration(currentAndLiveRows, mergedAcceptedRows);
+    return mergeCanonicalMetricRowsByTrainerIteration(currentAndLiveRows, mergedAcceptedRows);
   }
   if (job && ACTIVE_JOB_STATUSES.has(job.status) && (hasAcceptedRows || liveTelemetryRow)) {
-    return mergeMetricRowsByIteration(currentAndLiveRows, mergedAcceptedRows);
+    return mergeCanonicalMetricRowsByTrainerIteration(currentAndLiveRows, mergedAcceptedRows);
   }
   return deriveVisibleMetricHistory(currentAndLiveRows);
 }
@@ -370,7 +411,7 @@ function mergeAndTrimRecentMetricRows(
   incoming: TrainingMetricHistoryRow[],
   maxRows = ACTIVE_RECENT_METRIC_ROW_WINDOW
 ) {
-  const merged = mergeMetricRowsByIteration(current, incoming);
+  const merged = mergeCanonicalMetricRowsByTrainerIteration(current, incoming);
   if (merged.length <= maxRows) return merged;
   return merged.slice(merged.length - maxRows);
 }
@@ -384,16 +425,13 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   const latestDurable = latestMetricHistoryRow(durableRows);
   const latestAccepted = latestMetricHistoryRow(acceptedRows);
   const latestOverlay = latestMetricHistoryRow(liveOverlayRows);
-  const acceptedIteration = toFiniteNumber(job?.metricsIngestionSummary?.lastAcceptedStep);
   const canonicalProgress = job?.progressSummary?.trainingProgress ?? null;
   const totalIterations = toFiniteNumber(job?.maxSteps);
   const requestedIteration =
     latestDurable?.trainerIteration ??
     latestAccepted?.trainerIteration ??
     latest?.trainerIteration ??
-    acceptedIteration ??
-    canonicalProgress?.current ??
-    0;
+    null;
   const jobId = job?.id ?? "";
   const watermark = visibleProgressWatermarksByJob.get(jobId) ?? createVisibleProgressWatermark();
   const watermarkResult = applyVisibleProgressWatermark(
@@ -410,9 +448,7 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
   const browserVisibleProgressRatio =
     totalIterations && browserVisibleIteration !== null && browserVisibleIteration !== undefined
       ? Math.min(1, Math.max(0, browserVisibleIteration / totalIterations))
-      : latest?.progressRatio ??
-        canonicalProgress?.ratio ??
-        (acceptedIteration !== null && totalIterations ? acceptedIteration / totalIterations : null);
+      : latest?.progressRatio ?? null;
   return {
     browserVisibleIteration,
     browserVisibleProgressRatio,
@@ -429,6 +465,9 @@ export function deriveVisibleIterationTruth(job: TrainingJobSummary | null | und
 }
 
 export function getVisibleCanonicalIteration(job: TrainingJobSummary | null | undefined) {
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const browserVisibleIteration = toFiniteNumber(truth?.browserVisibleIteration ?? truth?.apiVisibleIteration);
+  if (browserVisibleIteration !== null) return browserVisibleIteration;
   const durableRows = Array.isArray(job?.metricsIngestionSummary?.latestMetricRows)
     ? job.metricsIngestionSummary.latestMetricRows
     : [];
@@ -452,6 +491,13 @@ export function getVisibleCanonicalIteration(job: TrainingJobSummary | null | un
 }
 
 export function getVisibleIterationSource(job: TrainingJobSummary | null | undefined) {
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const truthSource = typeof truth?.browserVisibleIterationSource === "string" && truth.browserVisibleIterationSource.trim()
+    ? truth.browserVisibleIterationSource.trim()
+    : typeof truth?.apiVisibleIterationSource === "string" && truth.apiVisibleIterationSource.trim()
+      ? truth.apiVisibleIterationSource.trim()
+      : null;
+  if (truthSource) return truthSource;
   const durableRows = Array.isArray(job?.metricsIngestionSummary?.latestMetricRows)
     ? job.metricsIngestionSummary.latestMetricRows
     : [];
@@ -667,22 +713,26 @@ export function deriveUnifiedVisibleTrainingState(
   const acceptedVisibleSource = latestAcceptedRow?.trainerIteration !== null && latestAcceptedRow?.trainerIteration !== undefined
     ? latestAcceptedRow.source
     : null;
+  const canonicalBrowserIteration = selectBrowserVisibleIteration(job, mergedRows);
+  const canonicalBrowserIterationSource = selectBrowserVisibleIterationSource(job, mergedRows);
   const visibleSource =
-    acceptedVisibleSource ??
     durableVisibleSource ??
+    acceptedVisibleSource ??
     visibleTruth.source ??
+    canonicalBrowserIterationSource ??
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const visibleProgressSource =
-    acceptedVisibleSource ??
     durableVisibleSource ??
+    acceptedVisibleSource ??
     visibleTruth.source ??
+    canonicalBrowserIterationSource ??
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
   return {
     chartRows,
-    visibleIteration: getVisibleCanonicalIteration(job) ?? visibleTruth.browserVisibleIteration,
+    visibleIteration: canonicalBrowserIteration ?? visibleTruth.browserVisibleIteration,
     visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
     visibleProgressSource,
     latestDurableTrainerIteration: latestDurableIteration,
@@ -1382,7 +1432,7 @@ async function hydrateMetricHistoryFromLocalCache(jobs: TrainingJobSummary[]) {
     const nextMetricHistoryByJob = { ...current.metricHistoryByJob };
     for (const item of hydratedRows) {
       if (item.rows.length === 0) continue;
-      const merged = mergeMetricRowsByIteration(item.rows, nextMetricHistoryByJob[item.jobId] ?? []);
+      const merged = mergeCanonicalMetricRowsByTrainerIteration(item.rows, nextMetricHistoryByJob[item.jobId] ?? []);
       nextMetricHistoryByJob[item.jobId] = deriveJobMetricHistory(
         current.jobs.find((job) => job.id === item.jobId) ?? null,
         merged
@@ -1774,7 +1824,7 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
                       return {
                         [jobId]: deriveJobMetricHistory(
                           updatedJob,
-                          mergeMetricRowsByIteration(current.metricHistoryByJob[jobId] ?? [], [historyRow])
+                          mergeCanonicalMetricRowsByTrainerIteration(current.metricHistoryByJob[jobId] ?? [], [historyRow])
                         ),
                       };
                     })()
@@ -2524,7 +2574,7 @@ export const useRuntimeTrainingStore: UseBoundStore<StoreApi<RuntimeTrainingStat
           limit: boundedLimit,
         });
         const selectedJobForVisibleHistory = get().jobs.find((item) => item.id === jobId) ?? null;
-        const visibleHistory = deriveJobMetricHistory(selectedJobForVisibleHistory, mergeMetricRowsByIteration(
+        const visibleHistory = deriveJobMetricHistory(selectedJobForVisibleHistory, mergeCanonicalMetricRowsByTrainerIteration(
           get().metricHistoryByJob[jobId] ?? [],
           buildMetricHistoryRowsFromBatches(metricBatches)
         ));
