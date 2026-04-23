@@ -826,6 +826,9 @@ function formatValidationErrorSuffix(details: Record<string, unknown> | null): s
   const reasonCode = String(details.reasonCode ?? "").trim();
   const authoritySourceKind = String(details.authoritySourceKind ?? "").trim();
   const evidenceChainId = String(details.evidenceChainId ?? "").trim();
+  const missingFields = Array.isArray(details.missingFields)
+    ? details.missingFields.map((item) => String(item).trim()).filter(Boolean)
+    : [];
   const blockingDiagnostics = Array.isArray(details.blockingDiagnostics)
     ? details.blockingDiagnostics.map((item) => String(item).trim()).filter(Boolean)
     : [];
@@ -835,6 +838,7 @@ function formatValidationErrorSuffix(details: Record<string, unknown> | null): s
   if (reasonCode) parts.push(`reason ${reasonCode}`);
   if (authoritySourceKind) parts.push(`authority ${authoritySourceKind}`);
   if (evidenceChainId) parts.push(`trace ${evidenceChainId}`);
+  if (missingFields.length > 0) parts.push(`missing ${missingFields.join(", ")}`);
   if (blockingDiagnostics.length > 0) parts.push(`blockers ${blockingDiagnostics.join(", ")}`);
   if (advisoryDiagnostics.length > 0) parts.push(`advisories ${advisoryDiagnostics.join(", ")}`);
   return parts.length > 0 ? ` (${parts.join(" | ")})` : "";
