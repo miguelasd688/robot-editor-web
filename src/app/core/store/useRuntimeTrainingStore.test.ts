@@ -444,6 +444,51 @@ describe("useRuntimeTrainingStore transport ownership", () => {
     expect(visible.visibleIteration).toBe(18);
     expect(visible.chartRowsLength).toBe(4);
     expect(visible.mergedMetricHistoryLength).toBe(4);
-    expect(visible.visibleMetricSummarySource).toBe("accepted_canonical_metrics");
+    expect(visible.visibleMetricSummarySource).toBe("durable_metric_rows");
+  });
+
+  it("repairs stale zero progress scalars from the API shape before rendering", () => {
+    const visible = deriveUnifiedVisibleTrainingState(
+      {
+        id: "job-progress-fallback",
+        tenantId: "tenant-a",
+        status: "running",
+        maxSteps: 100,
+        currentEpoch: 96,
+        progressSummary: {
+          trainingProgress: {
+            current: 0,
+            total: 100,
+            ratio: 0,
+            source: "job.current_epoch/job.max_steps",
+          },
+          iterationProgress: {
+            current: 0,
+            total: 100,
+            ratio: 0,
+            source: "live_pulse.metricStep",
+          },
+        },
+        metricsTruth: {
+          apiVisibleIteration: 96,
+          apiVisibleIterationSource: "runner_live_pulse",
+          apiVisibleProgressRatio: 0.96,
+        },
+        liveTelemetrySummary: {
+          latestLivePulseIteration: 96,
+          latestLivePulseProgressRatio: 0.96,
+          metricsTruth: {
+            apiVisibleIteration: 96,
+            apiVisibleIterationSource: "runner_live_pulse",
+          },
+        },
+      } as never,
+      []
+    );
+
+    expect(visible.visibleIteration).toBe(96);
+    expect(visible.visibleProgressRatio).toBe(0.96);
+    expect(visible.persistedProgressIteration).toBe(96);
+    expect(visible.visibleProgressSource).toBe("job.current_epoch/job.max_steps");
   });
 });

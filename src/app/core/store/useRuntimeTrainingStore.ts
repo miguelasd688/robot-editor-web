@@ -358,6 +358,13 @@ function selectBrowserVisibleIteration(job: TrainingJobSummary | null | undefine
   return toFiniteNumber(truth?.browserVisibleIteration ?? truth?.apiVisibleIteration ?? truth?.runnerLivePulseIteration);
 }
 
+function repairProgressAxisRatio(current: number | null, total: number | null, ratio: number | null) {
+  if (current !== null && total !== null && total > 0) {
+    return Math.min(1, Math.max(0, current / total));
+  }
+  return ratio;
+}
+
 function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | undefined) {
   const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
   const sourceFromTruth = typeof truth?.browserVisibleIterationSource === "string" && truth.browserVisibleIterationSource.trim()
@@ -375,6 +382,58 @@ function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | un
     return "runner_live_pulse";
   }
   return "none";
+}
+
+function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) {
+  const progressSummary = job?.progressSummary?.trainingProgress ?? null;
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const liveTelemetrySummary = job?.liveTelemetrySummary ?? null;
+  const totalIterations = toFiniteNumber(progressSummary?.total ?? job?.maxSteps);
+  const summaryCurrent = toFiniteNumber(progressSummary?.current);
+  const summaryRatio = repairProgressAxisRatio(summaryCurrent, totalIterations, toFiniteNumber(progressSummary?.ratio));
+  const currentEpoch = toFiniteNumber(job?.currentEpoch);
+  const apiVisibleIteration = toFiniteNumber(truth?.apiVisibleIteration);
+  const livePulseIteration = toFiniteNumber(
+    truth?.runnerLivePulseIteration ??
+      liveTelemetrySummary?.latestLivePulseIteration ??
+      liveTelemetrySummary?.latestLivePulseStep
+  );
+  const visibleIteration =
+    summaryCurrent !== null && summaryCurrent > 0
+      ? summaryCurrent
+      : currentEpoch !== null && currentEpoch > 0
+        ? currentEpoch
+        : apiVisibleIteration !== null
+          ? apiVisibleIteration
+          : livePulseIteration !== null
+            ? livePulseIteration
+            : summaryCurrent ?? currentEpoch ?? apiVisibleIteration ?? livePulseIteration ?? null;
+  const visibleProgressRatio =
+    totalIterations !== null && totalIterations > 0 && visibleIteration !== null
+      ? Math.min(1, Math.max(0, visibleIteration / totalIterations))
+      : summaryRatio ??
+        toFiniteNumber(truth?.apiVisibleProgressRatio) ??
+        toFiniteNumber(liveTelemetrySummary?.latestLivePulseProgressRatio) ??
+        null;
+  const visibleProgressSource =
+    summaryCurrent !== null && summaryCurrent > 0
+      ? typeof progressSummary?.source === "string" && progressSummary.source.trim()
+        ? progressSummary.source.trim()
+        : "job.current_epoch/job.max_steps"
+      : currentEpoch !== null && currentEpoch > 0
+        ? "job.current_epoch/job.max_steps"
+        : typeof truth?.apiVisibleIterationSource === "string" && truth.apiVisibleIterationSource.trim()
+          ? truth.apiVisibleIterationSource.trim()
+          : typeof liveTelemetrySummary?.metricsTruth?.apiVisibleIterationSource === "string" &&
+              liveTelemetrySummary.metricsTruth.apiVisibleIterationSource.trim()
+            ? liveTelemetrySummary.metricsTruth.apiVisibleIterationSource.trim()
+            : selectBrowserVisibleIterationSource(job);
+  return {
+    current: visibleIteration,
+    total: totalIterations,
+    ratio: visibleProgressRatio,
+    source: visibleProgressSource,
+  };
 }
 
 function deriveJobMetricHistory(job: TrainingJobSummary | null | undefined, currentRows: TrainingMetricHistoryRow[]) {
@@ -695,6 +754,7 @@ export function deriveUnifiedVisibleTrainingState(
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
+  const displayProgress = selectDisplayProgressState(job);
   const durableVisibleSource =
     latestDurableRow &&
     (latestDurableRow.source === "durable" || latestDurableRow.source === "durable_metric_rows" || latestDurableRow.source === "browser_persisted_cache" || latestDurableRow.source === "terminal_flush")
@@ -705,10 +765,12 @@ export function deriveUnifiedVisibleTrainingState(
     : null;
   const canonicalBrowserIteration = selectBrowserVisibleIteration(job);
   const canonicalBrowserIterationSource = selectBrowserVisibleIterationSource(job);
+  const displayProgressHasPositiveIteration = displayProgress.current !== null && displayProgress.current > 0;
   const visibleSource =
     durableVisibleSource ??
     acceptedVisibleSource ??
     visibleTruth.source ??
+    (displayProgressHasPositiveIteration ? displayProgress.source : null) ??
     canonicalBrowserIterationSource ??
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
@@ -716,19 +778,40 @@ export function deriveUnifiedVisibleTrainingState(
     durableVisibleSource ??
     acceptedVisibleSource ??
     visibleTruth.source ??
+    (displayProgressHasPositiveIteration ? displayProgress.source : null) ??
     canonicalBrowserIterationSource ??
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const recentWindowDiagnostics = buildRecentMetricWindowDiagnostics(mergedRows, job);
+  const fallbackVisibleIteration =
+    canonicalBrowserIteration !== null && canonicalBrowserIteration > 0
+      ? canonicalBrowserIteration
+      : visibleTruth.browserVisibleIteration ?? 0;
+  const visibleTruthHasPositiveIteration = visibleTruth.browserVisibleIteration !== null && visibleTruth.browserVisibleIteration > 0;
   return {
     chartRows,
-    visibleIteration: canonicalBrowserIteration ?? visibleTruth.browserVisibleIteration,
-    visibleProgressRatio: visibleTruth.browserVisibleProgressRatio,
+    visibleIteration: visibleTruthHasPositiveIteration
+      ? visibleTruth.browserVisibleIteration
+      : displayProgressHasPositiveIteration
+        ? displayProgress.current
+        : fallbackVisibleIteration,
+    visibleProgressRatio:
+      visibleTruthHasPositiveIteration
+        ? visibleTruth.browserVisibleProgressRatio
+        : displayProgressHasPositiveIteration
+          ? displayProgress.ratio
+          : displayProgress.total !== null && displayProgress.total > 0
+            ? Math.min(1, Math.max(0, fallbackVisibleIteration / displayProgress.total))
+            : visibleTruth.browserVisibleProgressRatio,
     visibleProgressSource,
     latestDurableTrainerIteration: latestDurableIteration,
     latestAcceptedCanonicalIteration: latestAcceptedIteration,
     livePulseIteration: toFiniteNumber(job?.liveTelemetrySummary?.latestLivePulseIteration),
-    persistedProgressIteration: progressSummary?.trainingProgress?.current ?? null,
+    persistedProgressIteration: visibleTruthHasPositiveIteration
+      ? visibleTruth.browserVisibleIteration
+      : displayProgressHasPositiveIteration
+        ? displayProgress.current
+        : fallbackVisibleIteration,
     visibleMetricSummarySource: visibleSource,
     visibleChartSource: visibleSource,
     mergedMetricHistoryLength: mergedRows.length,
