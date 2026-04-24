@@ -353,23 +353,12 @@ function mergeCanonicalMetricRowsByTrainerIteration(
   return mergeMetricRowsByIteration(current, incoming);
 }
 
-function selectBrowserVisibleIteration(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
+function selectBrowserVisibleIteration(job: TrainingJobSummary | null | undefined) {
   const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
-  const canonicalTruthIteration = toFiniteNumber(truth?.browserVisibleIteration ?? truth?.apiVisibleIteration);
-  if (canonicalTruthIteration !== null) {
-    return canonicalTruthIteration;
-  }
-  const visibleHistory = deriveVisibleMetricHistory(rows);
-  const durableRows = visibleHistory.filter((row) => isDurableMetricHistorySource(row.source));
-  const acceptedRows = visibleHistory.filter((row) => row.source === "accepted_canonical_metrics");
-  const liveOverlayRows = visibleHistory.filter((row) => row.source === "live_overlay");
-  const latestDurable = latestMetricHistoryRow(durableRows);
-  const latestAccepted = latestMetricHistoryRow(acceptedRows);
-  const latestLive = latestMetricHistoryRow(liveOverlayRows);
-  return latestDurable?.trainerIteration ?? latestAccepted?.trainerIteration ?? latestLive?.trainerIteration ?? null;
+  return toFiniteNumber(truth?.browserVisibleIteration ?? truth?.apiVisibleIteration ?? truth?.runnerLivePulseIteration);
 }
 
-function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | undefined, rows: TrainingMetricHistoryRow[]) {
+function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | undefined) {
   const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
   const sourceFromTruth = typeof truth?.browserVisibleIterationSource === "string" && truth.browserVisibleIterationSource.trim()
     ? truth.browserVisibleIterationSource.trim()
@@ -377,14 +366,15 @@ function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | un
       ? truth.apiVisibleIterationSource.trim()
       : null;
   if (sourceFromTruth) return sourceFromTruth;
-  const visibleHistory = deriveVisibleMetricHistory(rows);
-  const durableRows = visibleHistory.filter((row) => isDurableMetricHistorySource(row.source));
-  const acceptedRows = visibleHistory.filter((row) => row.source === "accepted_canonical_metrics");
-  const liveOverlayRows = visibleHistory.filter((row) => row.source === "live_overlay");
-  const latestDurable = latestMetricHistoryRow(durableRows);
-  const latestAccepted = latestMetricHistoryRow(acceptedRows);
-  const latestLive = latestMetricHistoryRow(liveOverlayRows);
-  return latestDurable?.source ?? latestAccepted?.source ?? latestLive?.source ?? "none";
+  const liveTelemetrySummary = job?.liveTelemetrySummary ?? null;
+  if (
+    toFiniteNumber(liveTelemetrySummary?.trainerIteration) !== null ||
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseIteration) !== null ||
+    toFiniteNumber(liveTelemetrySummary?.latestLivePulseStep) !== null
+  ) {
+    return "runner_live_pulse";
+  }
+  return "none";
 }
 
 function deriveJobMetricHistory(job: TrainingJobSummary | null | undefined, currentRows: TrainingMetricHistoryRow[]) {
@@ -713,8 +703,8 @@ export function deriveUnifiedVisibleTrainingState(
   const acceptedVisibleSource = latestAcceptedRow?.trainerIteration !== null && latestAcceptedRow?.trainerIteration !== undefined
     ? latestAcceptedRow.source
     : null;
-  const canonicalBrowserIteration = selectBrowserVisibleIteration(job, mergedRows);
-  const canonicalBrowserIterationSource = selectBrowserVisibleIterationSource(job, mergedRows);
+  const canonicalBrowserIteration = selectBrowserVisibleIteration(job);
+  const canonicalBrowserIterationSource = selectBrowserVisibleIterationSource(job);
   const visibleSource =
     durableVisibleSource ??
     acceptedVisibleSource ??
