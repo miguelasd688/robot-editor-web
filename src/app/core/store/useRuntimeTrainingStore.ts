@@ -384,6 +384,19 @@ function selectBrowserVisibleIterationSource(job: TrainingJobSummary | null | un
   return "none";
 }
 
+function resolveTerminalVisibleIteration(job: TrainingJobSummary | null | undefined) {
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
+  const lifecycleStatus = String(job?.lifecycleStatus ?? job?.status ?? "").trim();
+  const terminalBudgetComplete = truth?.terminalBudgetComplete === true || lifecycleStatus === "completed";
+  if (!terminalBudgetComplete) return null;
+  const terminalVisibleIteration = toFiniteNumber(
+    truth?.terminalVisibleTrainingIteration ??
+      truth?.apiVisibleIteration ??
+      job?.currentEpoch
+  );
+  return terminalVisibleIteration !== null && terminalVisibleIteration > 0 ? terminalVisibleIteration : null;
+}
+
 function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) {
   const progressSummary = job?.progressSummary?.trainingProgress ?? null;
   const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
@@ -392,6 +405,7 @@ function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) 
   const summaryCurrent = toFiniteNumber(progressSummary?.current);
   const summaryRatio = repairProgressAxisRatio(summaryCurrent, totalIterations, toFiniteNumber(progressSummary?.ratio));
   const currentEpoch = toFiniteNumber(job?.currentEpoch);
+  const terminalVisibleIteration = resolveTerminalVisibleIteration(job);
   const apiVisibleIteration = toFiniteNumber(truth?.apiVisibleIteration);
   const livePulseIteration = toFiniteNumber(
     truth?.runnerLivePulseIteration ??
@@ -399,7 +413,9 @@ function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) 
       liveTelemetrySummary?.latestLivePulseStep
   );
   const visibleIteration =
-    summaryCurrent !== null && summaryCurrent > 0
+    terminalVisibleIteration !== null
+      ? terminalVisibleIteration
+      : summaryCurrent !== null && summaryCurrent > 0
       ? summaryCurrent
       : currentEpoch !== null && currentEpoch > 0
         ? currentEpoch
@@ -416,7 +432,11 @@ function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) 
         toFiniteNumber(liveTelemetrySummary?.latestLivePulseProgressRatio) ??
         null;
   const visibleProgressSource =
-    summaryCurrent !== null && summaryCurrent > 0
+    terminalVisibleIteration !== null
+      ? typeof truth?.terminalProgressSource === "string" && truth.terminalProgressSource.trim()
+        ? truth.terminalProgressSource.trim()
+        : "terminal_completed"
+      : summaryCurrent !== null && summaryCurrent > 0
       ? typeof progressSummary?.source === "string" && progressSummary.source.trim()
         ? progressSummary.source.trim()
         : "job.current_epoch/job.max_steps"
@@ -753,8 +773,17 @@ export function deriveUnifiedVisibleTrainingState(
   const overlayMetricRowsCount = mergedRows.filter((row) => isOverlayMetricHistorySource(row.source)).length;
   const terminalReplayRowsCount = mergedRows.filter((row) => isTerminalReplayMetricHistorySource(row.source)).length;
   const progressSummary = job?.progressSummary ?? null;
+  const truth = isObject(job?.metricsTruth) ? job.metricsTruth : null;
   const progressSource = progressSummary?.trainingProgress?.source ?? null;
   const displayProgress = selectDisplayProgressState(job);
+  const totalIterations = displayProgress.total;
+  const terminalVisibleIteration = resolveTerminalVisibleIteration(job);
+  const terminalVisibleProgressSource =
+    terminalVisibleIteration !== null
+      ? typeof truth?.terminalProgressSource === "string" && truth.terminalProgressSource.trim()
+        ? truth.terminalProgressSource.trim()
+        : "terminal_completed"
+      : null;
   const durableVisibleSource =
     latestDurableRow &&
     (latestDurableRow.source === "durable" || latestDurableRow.source === "durable_metric_rows" || latestDurableRow.source === "browser_persisted_cache" || latestDurableRow.source === "terminal_flush")
@@ -767,6 +796,7 @@ export function deriveUnifiedVisibleTrainingState(
   const canonicalBrowserIterationSource = selectBrowserVisibleIterationSource(job);
   const displayProgressHasPositiveIteration = displayProgress.current !== null && displayProgress.current > 0;
   const visibleSource =
+    terminalVisibleProgressSource ??
     durableVisibleSource ??
     acceptedVisibleSource ??
     visibleTruth.source ??
@@ -775,6 +805,7 @@ export function deriveUnifiedVisibleTrainingState(
     latestMergedRow?.source ??
     (acceptedCanonicalRowsCount > 0 ? "accepted_canonical_metrics" : "progress_unavailable");
   const visibleProgressSource =
+    terminalVisibleProgressSource ??
     durableVisibleSource ??
     acceptedVisibleSource ??
     visibleTruth.source ??
@@ -788,15 +819,23 @@ export function deriveUnifiedVisibleTrainingState(
       ? canonicalBrowserIteration
       : visibleTruth.browserVisibleIteration ?? 0;
   const visibleTruthHasPositiveIteration = visibleTruth.browserVisibleIteration !== null && visibleTruth.browserVisibleIteration > 0;
+  const terminalVisibleProgressRatio =
+    terminalVisibleIteration !== null && totalIterations !== null && totalIterations > 0
+      ? Math.min(1, Math.max(0, terminalVisibleIteration / totalIterations))
+      : null;
   return {
     chartRows,
-    visibleIteration: visibleTruthHasPositiveIteration
+    visibleIteration: terminalVisibleIteration !== null
+      ? terminalVisibleIteration
+      : visibleTruthHasPositiveIteration
       ? visibleTruth.browserVisibleIteration
       : displayProgressHasPositiveIteration
         ? displayProgress.current
         : fallbackVisibleIteration,
     visibleProgressRatio:
-      visibleTruthHasPositiveIteration
+      terminalVisibleProgressRatio !== null
+        ? terminalVisibleProgressRatio
+        : visibleTruthHasPositiveIteration
         ? visibleTruth.browserVisibleProgressRatio
         : displayProgressHasPositiveIteration
           ? displayProgress.ratio
