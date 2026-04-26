@@ -444,10 +444,15 @@ function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) 
         ? "job.current_epoch/job.max_steps"
         : typeof truth?.apiVisibleIterationSource === "string" && truth.apiVisibleIterationSource.trim()
           ? truth.apiVisibleIterationSource.trim()
-          : typeof liveTelemetrySummary?.metricsTruth?.apiVisibleIterationSource === "string" &&
-              liveTelemetrySummary.metricsTruth.apiVisibleIterationSource.trim()
-            ? liveTelemetrySummary.metricsTruth.apiVisibleIterationSource.trim()
-            : selectBrowserVisibleIterationSource(job);
+          : (() => {
+              const liveTelemetryTruth = isObject(liveTelemetrySummary?.metricsTruth)
+                ? (liveTelemetrySummary.metricsTruth as Record<string, unknown>)
+                : null;
+              return typeof liveTelemetryTruth?.apiVisibleIterationSource === "string" &&
+                liveTelemetryTruth.apiVisibleIterationSource.trim()
+                ? liveTelemetryTruth.apiVisibleIterationSource.trim()
+                : selectBrowserVisibleIterationSource(job);
+            })();
   return {
     current: visibleIteration,
     total: totalIterations,
