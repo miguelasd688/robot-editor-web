@@ -24,6 +24,13 @@ export const pluginHostApi: PluginHostAPI = {
           rows.map((row) => ({ ...row })),
         ])
       ),
+    getTransportDiagnosticsByJob: () =>
+      Object.fromEntries(
+        Object.entries(useRuntimeTrainingStore.getState().transportDiagnosticsByJob).map(([jobId, value]) => [
+          jobId,
+          { ...value },
+        ])
+      ),
     listArtifacts: (jobId, kind) => useRuntimeTrainingStore.getState().listTrainingArtifacts(jobId, kind),
     listEvents: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingJobEvents(jobId, limit),
     listMetricBatches: (jobId, limit) => useRuntimeTrainingStore.getState().listTrainingMetricBatches(jobId, limit),

@@ -744,6 +744,44 @@ export type TrainingLivePulseSseEvent = {
 
 export type TrainingMetricsSseEvent = TrainingLivePulseSseEvent;
 
+export type TrainingRecordingSyncSseView = {
+  viewId: string;
+  available?: boolean;
+  clipCount?: number;
+  latestClipIndex?: number;
+  visibleClipIndex?: number;
+  latestVideoStep?: number | null;
+  visibleVideoStep?: number | null;
+  currentClipIndex?: number | null;
+  currentSourceEpisodeIndex?: number | null;
+  latestSourceEpisodeIndex?: number | null;
+  visibleSourceEpisodeIndex?: number | null;
+};
+
+export type TrainingRecordingSyncSseEvent = {
+  eventType: "recording_sync";
+  jobId: string;
+  runRef: string;
+  clipCount: number;
+  latestClipIndex: number;
+  visibleClipIndex: number;
+  latestVideoStep?: number | null;
+  visibleVideoStep?: number | null;
+  durableEpisodeIndex?: number | null;
+  visibleEpisodeIndex?: number | null;
+  clipSourceField: string;
+  views: TrainingRecordingSyncSseView[];
+  availableViews: string[];
+  missingViews: string[];
+  recordingVisible: boolean;
+  recordingFinalized: boolean;
+  jobTerminal: boolean;
+  source: string;
+  occurredAt: string;
+  signature: string;
+  eventId?: string | null;
+};
+
 export type TrainingMetricBatchSample = {
   trainerIteration?: number | null;
   metricStep: number;
@@ -796,6 +834,29 @@ export function buildTrainingLivePulseStreamUrl(jobId: string) {
   const params = new URLSearchParams();
   params.set("access_token", rawApiToken);
   return buildUrl(`/v1/training/jobs/${safeJobId}/metrics/stream?${params.toString()}`);
+}
+
+export function buildTrainingRecordingLatestUrl(jobId: string, clipIndex: number, viewId = "global") {
+  const params = new URLSearchParams();
+  params.set("clipIndex", String(Math.max(1, Math.round(clipIndex))));
+  const safeViewId = String(viewId ?? "").trim();
+  if (safeViewId) params.set("view", safeViewId);
+  return buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/latest?${params.toString()}`);
+}
+
+export function parseTrainingRecordingSyncSseEvent(data: string | null | undefined): TrainingRecordingSyncSseEvent | null {
+  if (typeof data !== "string" || !data.trim()) return null;
+  try {
+    const parsed = JSON.parse(data) as TrainingRecordingSyncSseEvent;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.eventType !== "recording_sync") return null;
+    if (!Array.isArray(parsed.availableViews)) parsed.availableViews = [];
+    if (!Array.isArray(parsed.missingViews)) parsed.missingViews = [];
+    if (!Array.isArray(parsed.views)) parsed.views = [];
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function buildHeaders(headers: Record<string, string> = {}) {
@@ -1082,6 +1143,7 @@ export async function getTrainingPreviewFrameRemote(jobId: string, step?: number
 }
 
 export async function getTrainingRecordingMetaRemote(jobId: string): Promise<TrainingRecordingMeta> {
+  // Hydration-only fallback for manual/history refresh. Active selected-job playback must not call this.
   const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/meta`), {
     method: "GET",
     headers: buildHeaders({ accept: "application/json" }),

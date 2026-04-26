@@ -453,7 +453,24 @@ export type TrainingJobSummary = {
   structuredMetricsTelemetry?: Record<string, unknown> | null;
   liveTelemetrySummary?: Record<string, unknown> | null;
   metricsTruth?: Record<string, unknown> | null;
-  recordingLiveSyncSummary?: Record<string, unknown> | null;
+  recordingLiveSyncSummary?: {
+    recordingVisible?: boolean;
+    recordingFinalized?: boolean;
+    visibleClipIndex?: number | null;
+    visibleVideoStep?: number | null;
+    availableViews?: string[];
+    missingViews?: string[];
+    views?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  } | null;
+  recordingSyncEventCount?: number;
+  lastRecordingSyncAt?: string | null;
+  lastRecordingSyncSignature?: string | null;
+  recordingFinalized?: boolean;
+  recordingSyncSource?: string | null;
+  recordingMetaPollingSuppressed?: boolean;
+  recordingMetaHydrationReason?: string | null;
+  recordingMetaHydrationCount?: number;
   learningHealthSummary?: LearningHealthSummary | null;
   agentArtifactSummary?: AgentArtifactSummary | null;
   metricsIngestionSummary?: MetricsIngestionSummary | null;
@@ -542,6 +559,7 @@ export type PluginHostAPI = {
     getTrainingTokens: () => number;
     getTrainingTokenCost: () => number;
     getMetricHistoryByJob: () => Record<string, TrainingMetricHistoryRow[]>;
+    getTransportDiagnosticsByJob: () => Record<string, Record<string, unknown>>;
     listArtifacts: (jobId: string, kind?: TrainingArtifactKind) => Promise<TrainingArtifactSummary[]>;
     listEvents: (
       jobId: string,

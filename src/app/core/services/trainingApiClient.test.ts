@@ -1,21 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { emptyListCooldown } from "./trainingApiClient";
+import { buildTrainingRecordingLatestUrl, parseTrainingRecordingSyncSseEvent } from "./trainingApiClient";
 
-describe("emptyListCooldown", () => {
-  it("dedupes identical empty list reads within the cooldown window", () => {
-    const key = emptyListCooldown.buildKey("metrics/batches", "job-1", "limit=50");
-    const t0 = 1000;
-    emptyListCooldown.clear(key);
+describe("parseTrainingRecordingSyncSseEvent", () => {
+  it("parses valid recording_sync payloads", () => {
+    const event = parseTrainingRecordingSyncSseEvent(
+      JSON.stringify({
+        eventType: "recording_sync",
+        jobId: "job-1",
+        runRef: "run-1",
+        clipCount: 4,
+        latestClipIndex: 4,
+        visibleClipIndex: 3,
+        latestVideoStep: 40,
+        visibleVideoStep: 30,
+        durableEpisodeIndex: 4,
+        visibleEpisodeIndex: 3,
+        clipSourceField: "sourceEpisodeIndex",
+        views: [],
+        availableViews: ["global"],
+        missingViews: [],
+        recordingVisible: true,
+        recordingFinalized: false,
+        jobTerminal: false,
+        source: "runner_recording_watcher",
+        occurredAt: "2026-04-24T00:00:00.000Z",
+        signature: "sig-1",
+      })
+    );
 
-    expect(emptyListCooldown.shouldSkip(key, t0)).toBe(false);
+    expect(event?.eventType).toBe("recording_sync");
+    expect(event?.signature).toBe("sig-1");
+  });
 
-    emptyListCooldown.recordEmpty(key, t0);
+  it("returns null for malformed recording_sync payloads", () => {
+    expect(parseTrainingRecordingSyncSseEvent("not-json")).toBeNull();
+    expect(parseTrainingRecordingSyncSseEvent(JSON.stringify({ eventType: "live_pulse" }))).toBeNull();
+  });
 
-    expect(emptyListCooldown.shouldSkip(key, t0 + 1)).toBe(true);
-    expect(emptyListCooldown.shouldSkip(key, t0 + 1499)).toBe(true);
-    expect(emptyListCooldown.shouldSkip(key, t0 + 1500)).toBe(false);
-
-    emptyListCooldown.clear(key);
-    expect(emptyListCooldown.shouldSkip(key, t0 + 1)).toBe(false);
+  it("builds latest recording urls from job id clip and view", () => {
+    expect(buildTrainingRecordingLatestUrl("job-1", 2, "global")).toContain(
+      "/v1/training/jobs/job-1/recording/latest?clipIndex=2&view=global"
+    );
   });
 });

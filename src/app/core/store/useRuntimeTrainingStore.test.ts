@@ -18,6 +18,15 @@ vi.mock("../services/trainingApiClient", () => ({
   listTrainingJobEventsRemote: mocks.listTrainingJobEventsRemote,
   listTrainingMetricBatchesRemote: mocks.listTrainingMetricBatchesRemote,
   listTrainingJobsRemote: mocks.listTrainingJobsRemote,
+  parseTrainingRecordingSyncSseEvent: (data: string | null | undefined) => {
+    if (typeof data !== "string" || !data.trim()) return null;
+    const parsed = JSON.parse(data) as Record<string, unknown>;
+    if (parsed.eventType !== "recording_sync") return null;
+    if (!Array.isArray(parsed.availableViews)) parsed.availableViews = [];
+    if (!Array.isArray(parsed.missingViews)) parsed.missingViews = [];
+    if (!Array.isArray(parsed.views)) parsed.views = [];
+    return parsed;
+  },
   submitTrainingTaskRemoteWithResponse: vi.fn(),
 }));
 
@@ -302,7 +311,95 @@ describe("useRuntimeTrainingStore transport ownership", () => {
           } as never
         )
       ).toBe("cancelling");
-  } finally {
+    } finally {
+      (globalThis as typeof globalThis & { EventSource?: typeof EventSource }).EventSource = previousEventSource as never;
+    }
+  });
+
+  it("applies recording_sync events without mutating progress truth", () => {
+    const previousEventSource = globalThis.EventSource;
+    const createdSources: Array<{ source: { emit: (type: string, payload: Record<string, unknown>) => void }; url: string }> = [];
+    class FakeEventSource {
+      listeners = new Map<string, (event: MessageEvent<string>) => void>();
+      constructor(url: string) {
+        createdSources.push({ source: this, url });
+      }
+      addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+        this.listeners.set(type, listener);
+      }
+      close() {}
+      emit(type: string, payload: Record<string, unknown>) {
+        const listener = this.listeners.get(type);
+        if (!listener) return;
+        listener({ data: JSON.stringify(payload) } as MessageEvent<string>);
+      }
+    }
+
+    try {
+      (globalThis as typeof globalThis & { EventSource?: typeof EventSource }).EventSource = FakeEventSource as never;
+      mocks.buildTrainingLivePulseStreamUrl.mockImplementation((jobId: string) => `/stream/${jobId}`);
+      useRuntimeTrainingStore.setState({
+        jobs: [
+          {
+            id: "job-sync",
+            tenantId: "tenant-a",
+            status: "running",
+            lifecycleStatus: "running",
+            progress: 0.41,
+            currentEpoch: 41,
+            updatedAt: Date.now(),
+          } as never,
+        ],
+      });
+
+      __ensureLivePulseSubscriptionsForTests(useRuntimeTrainingStore.getState().jobs);
+      expect(createdSources.map((entry) => entry.url)).toEqual(["/stream/job-sync"]);
+
+      createdSources[0]?.source.emit("recording_sync", {
+        eventType: "recording_sync",
+        jobId: "job-sync",
+        runRef: "run-sync",
+        clipCount: 3,
+        latestClipIndex: 3,
+        visibleClipIndex: 2,
+        latestVideoStep: 2300,
+        visibleVideoStep: 2200,
+        durableEpisodeIndex: 3,
+        visibleEpisodeIndex: 2,
+        clipSourceField: "sourceEpisodeIndex",
+        views: [
+          {
+            viewId: "global",
+            available: true,
+            visibleClipIndex: 2,
+            visibleVideoStep: 2200,
+            latestClipIndex: 3,
+          },
+        ],
+        availableViews: ["global"],
+        missingViews: ["closeup_env0"],
+        recordingVisible: true,
+        recordingFinalized: false,
+        jobTerminal: false,
+        source: "sse",
+        occurredAt: "2026-04-16T00:00:00.000Z",
+        signature: "sync-1",
+      });
+
+      const job = useRuntimeTrainingStore.getState().jobs.find((item) => item.id === "job-sync");
+      expect(job?.progress).toBe(0.41);
+      expect(job?.currentEpoch).toBe(41);
+      expect(job?.recordingLiveSyncSummary?.recordingVisible).toBe(true);
+      expect(job?.recordingLiveSyncSummary?.views?.[0]?.visibleClipIndex).toBe(2);
+      expect(job?.recordingSyncEventCount).toBe(1);
+      expect(job?.lastRecordingSyncSignature).toBe("sync-1");
+      expect(job?.recordingFinalized).toBe(false);
+      expect(job?.recordingSyncSource).toBe("sse_recording_sync");
+      expect(useRuntimeTrainingStore.getState().transportDiagnosticsByJob["job-sync"]?.recordingMetaPollingSuppressed).toBe(true);
+      expect(useRuntimeTrainingStore.getState().transportDiagnosticsByJob["job-sync"]?.lastRecordingSyncAt).toBe(
+        "2026-04-16T00:00:00.000Z"
+      );
+    } finally {
       (globalThis as typeof globalThis & { EventSource?: typeof EventSource }).EventSource = previousEventSource as never;
     }
   });
@@ -491,4 +588,32 @@ describe("useRuntimeTrainingStore transport ownership", () => {
     expect(visible.persistedProgressIteration).toBe(96);
     expect(visible.visibleProgressSource).toBe("job.current_epoch/job.max_steps");
   });
+
+  it("preserves recordingLiveSyncSummary across partial active merges", () => {
+    const merged = mergeActiveJobTruth(
+      {
+        id: "job-merge",
+        status: "running",
+        tenantId: "tenant-a",
+        updatedAt: Date.now(),
+        recordingLiveSyncSummary: {
+          recordingVisible: true,
+          visibleClipIndex: 2,
+          visibleVideoStep: 2200,
+          availableViews: ["global"],
+        } as never,
+      } as never,
+      {
+        id: "job-merge",
+        status: "running",
+        tenantId: "tenant-a",
+        updatedAt: Date.now() + 1,
+      } as never,
+      null
+    );
+
+    expect(merged.recordingLiveSyncSummary?.visibleClipIndex).toBe(2);
+    expect(merged.recordingLiveSyncSummary?.visibleVideoStep).toBe(2200);
+  });
+
 });

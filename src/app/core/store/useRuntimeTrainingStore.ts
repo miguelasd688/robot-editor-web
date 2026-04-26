@@ -18,6 +18,8 @@ import {
   listTrainingArtifactsRemote,
   listTrainingJobEventsRemote,
   type TrainingLivePulseSseEvent,
+  parseTrainingRecordingSyncSseEvent,
+  type TrainingRecordingSyncSseEvent,
   type TrainingMetricBatchSummary,
   listTrainingJobsRemote,
   trainingApiEnabled,
@@ -112,6 +114,17 @@ type RuntimeTrainingTransportDiagnostics = {
   lastMetricBatchFetchReason?: MetricBatchFetchReason | null;
   lastMetricBatchRemoteFetchAt?: number | null;
   lastEmptyListCooldownHitAt?: number | null;
+  lastRecordingSyncAt?: string | null;
+  recordingFinalized?: boolean;
+  recordingMetaPollingSuppressed?: boolean;
+  recordingMetaHydrationReason?: string | null;
+  recordingMetaHydrationCount?: number;
+  recordingSyncSource?: string | null;
+  recordingMetaHydrationStatus?: string | null;
+  recordingMetaHydrationError?: string | null;
+  recordingMetaHydrationRetryable?: boolean | null;
+  recordingMetaProxyAttemptCount?: number;
+  recordingMetaProxySuppressedReason?: string | null;
 };
 
 const runningIntervals = new Map<string, number>();
@@ -432,7 +445,13 @@ function selectDisplayProgressState(job: TrainingJobSummary | null | undefined) 
         toFiniteNumber(liveTelemetrySummary?.latestLivePulseProgressRatio) ??
         null;
   const visibleProgressSource =
-    terminalVisibleIteration !== null
+    typeof liveTelemetrySummary?.metricsTruth === "object" &&
+    liveTelemetrySummary?.metricsTruth !== null &&
+    !Array.isArray(liveTelemetrySummary.metricsTruth) &&
+    typeof (liveTelemetrySummary.metricsTruth as Record<string, unknown>).apiVisibleIterationSource === "string" &&
+    String((liveTelemetrySummary.metricsTruth as Record<string, unknown>).apiVisibleIterationSource).trim()
+      ? String((liveTelemetrySummary.metricsTruth as Record<string, unknown>).apiVisibleIterationSource).trim()
+      : terminalVisibleIteration !== null
       ? typeof truth?.terminalProgressSource === "string" && truth.terminalProgressSource.trim()
         ? truth.terminalProgressSource.trim()
         : "terminal_completed"
@@ -1639,13 +1658,45 @@ function applyLivePulseToJob(job: TrainingJobSummary, pulse: TrainingLivePulseSs
       eventId: pulse.eventId ?? null,
       occurredAt: pulse.occurredAt ?? null,
     },
-    recordingLiveSyncSummary: {
-      ...(job.recordingLiveSyncSummary ?? {}),
-      visibleClipIndex: pulse.visibleClipIndex ?? null,
-      latestClipIndex: pulse.latestClipIndex ?? null,
-      visibleVideoStep: pulse.visibleVideoStep ?? null,
-      occurredAt: pulse.occurredAt ?? null,
-    },
+  };
+}
+
+function applyRecordingSyncToJob(
+  job: TrainingJobSummary,
+  event: TrainingRecordingSyncSseEvent
+): TrainingJobSummary {
+  const existingSummary = isObject(job.recordingLiveSyncSummary) ? job.recordingLiveSyncSummary : {};
+  const nextSummary = {
+    ...existingSummary,
+    eventType: event.eventType,
+    jobId: event.jobId,
+    runRef: event.runRef,
+    clipCount: event.clipCount,
+    latestClipIndex: event.latestClipIndex,
+    visibleClipIndex: event.visibleClipIndex,
+    latestVideoStep: event.latestVideoStep ?? null,
+    visibleVideoStep: event.visibleVideoStep ?? null,
+    durableEpisodeIndex: event.durableEpisodeIndex ?? null,
+    visibleEpisodeIndex: event.visibleEpisodeIndex ?? null,
+    clipSourceField: event.clipSourceField,
+    views: event.views,
+    availableViews: event.availableViews,
+    missingViews: event.missingViews,
+    recordingVisible: event.recordingVisible,
+    recordingFinalized: event.recordingFinalized,
+    jobTerminal: event.jobTerminal,
+    source: event.source,
+    occurredAt: event.occurredAt,
+    signature: event.signature,
+  };
+  return {
+    ...job,
+    recordingLiveSyncSummary: nextSummary,
+    recordingSyncEventCount: Number(job.recordingSyncEventCount ?? 0) + 1,
+    lastRecordingSyncAt: event.occurredAt,
+    lastRecordingSyncSignature: event.signature,
+    recordingFinalized: event.recordingFinalized || job.recordingFinalized === true,
+    recordingSyncSource: "sse_recording_sync",
   };
 }
 
@@ -1901,6 +1952,14 @@ function mergeActiveJobTruth(
     updatedAt: Math.max(Number(incoming.updatedAt ?? 0), Number(existing.updatedAt ?? 0), freshestLiveAt),
     liveTelemetrySummary: freshestLiveSummary ?? incoming.liveTelemetrySummary ?? existing.liveTelemetrySummary,
     recordingLiveSyncSummary: existing.recordingLiveSyncSummary ?? incoming.recordingLiveSyncSummary,
+    recordingSyncEventCount: incoming.recordingSyncEventCount ?? existing.recordingSyncEventCount,
+    lastRecordingSyncAt: incoming.lastRecordingSyncAt ?? existing.lastRecordingSyncAt,
+    lastRecordingSyncSignature: incoming.lastRecordingSyncSignature ?? existing.lastRecordingSyncSignature,
+    recordingFinalized: incoming.recordingFinalized ?? existing.recordingFinalized,
+    recordingSyncSource: incoming.recordingSyncSource ?? existing.recordingSyncSource,
+    recordingMetaPollingSuppressed: incoming.recordingMetaPollingSuppressed ?? existing.recordingMetaPollingSuppressed,
+    recordingMetaHydrationReason: incoming.recordingMetaHydrationReason ?? existing.recordingMetaHydrationReason,
+    recordingMetaHydrationCount: incoming.recordingMetaHydrationCount ?? existing.recordingMetaHydrationCount,
   });
 }
 
@@ -1965,6 +2024,35 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
         });
       }
     });
+    source.addEventListener("recording_sync", (event) => {
+      try {
+        const sync = parseTrainingRecordingSyncSseEvent((event as MessageEvent<string>).data);
+        if (!sync) return;
+        useRuntimeTrainingStore.setState((current) => {
+          const existing = current.jobs.find((job) => job.id === jobId);
+          const mergedJob = existing ? applyRecordingSyncToJob(existing, sync) : existing;
+          if (!mergedJob) return current;
+          return {
+            jobs: sortJobs(current.jobs.map((item) => (item.id === jobId ? mergedJob : item))),
+            transportDiagnosticsByJob: {
+              ...current.transportDiagnosticsByJob,
+              [jobId]: {
+                ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+                recordingMetaPollingSuppressed: true,
+                lastRecordingSyncAt: sync.occurredAt,
+                recordingFinalized: sync.recordingFinalized,
+                recordingSyncSource: "sse_recording_sync",
+              },
+            },
+          };
+        });
+      } catch (error) {
+        logWarn("Failed to parse recording sync event", {
+          scope: "runtime-training",
+          data: { jobId, error },
+        });
+      }
+    });
     source.addEventListener("job", (event) => {
       try {
         const job = JSON.parse((event as MessageEvent<string>).data) as TrainingJobSummary;
@@ -2006,11 +2094,12 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
       }
       livePulseReconnectAttempts.delete(jobId);
       useRuntimeTrainingStore.setState((current) => ({
-        transportDiagnosticsByJob: {
+          transportDiagnosticsByJob: {
           ...current.transportDiagnosticsByJob,
           [jobId]: {
             ...(current.transportDiagnosticsByJob[jobId] ?? {}),
             lastSseOpenAt: Date.now(),
+            recordingMetaPollingSuppressed: true,
           },
         },
       }));
@@ -2021,12 +2110,13 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
       useRuntimeTrainingStore.setState((current) => ({
         transportDiagnosticsByJob: {
           ...current.transportDiagnosticsByJob,
-          [jobId]: {
-            ...(current.transportDiagnosticsByJob[jobId] ?? {}),
-            lastSseDisconnectAt: now,
-          },
+        [jobId]: {
+          ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+          lastSseDisconnectAt: now,
+          recordingMetaPollingSuppressed: false,
         },
-      }));
+      },
+    }));
       if (shouldRecoverAfterDisconnect(diagnostics?.lastSseOpenAt ? now - diagnostics.lastSseOpenAt : null)) {
         void recoverMetricBatchesForJob(jobId, "manual_recovery");
       }
