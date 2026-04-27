@@ -671,6 +671,8 @@ export type TrainingRecordingViewMeta = {
   sourcePath?: string;
   latestSourcePath?: string;
   visibleSourcePath?: string;
+  visibleClipProvenance?: RecordingClipProvenance | null;
+  latestClipProvenance?: RecordingClipProvenance | null;
   clipCount?: number;
   latestClipIndex?: number;
   visibleClipIndex?: number;
@@ -715,6 +717,32 @@ export type TrainingRecordingViewMeta = {
   previewSource?: string;
   unavailableReason?: string;
   warning?: string;
+};
+
+export type RecordingClipProvenance = {
+  clipIndex: number;
+  displayClipIndex: number;
+  sourceVideoStep: number | null;
+  sourceEpisodeIndex: number | null;
+  sourceTrainerIterationApprox?: number | null;
+  sourceTrainerIterationApproxZeroBased: number | null;
+  sourceTrainerIterationApproxDisplay: number | null;
+  sourceTrainerIterationMethod:
+    | "derived_from_video_step_runtime_agent_yaml"
+    | "derived_from_video_step_stdout_inference"
+    | "derived_from_video_step_compiled_fallback"
+    | "correlated_at_file_discovery"
+    | "unknown";
+  requestedNumStepsPerEnv: number | null;
+  compiledNumStepsPerEnv: number | null;
+  runtimeNumStepsPerEnv: number | null;
+  effectiveNumStepsPerEnv: number | null;
+  effectiveNumStepsPerEnvSource:
+    | "rsl_rl_params_agent_yaml"
+    | "trainer_stdout_total_timesteps"
+    | "compiled_agent_config"
+    | "unknown";
+  discrepancyCodes: string[];
 };
 
 export type TrainingRecordingMeta = {
@@ -773,14 +801,20 @@ export type TrainingRecordingSyncSseView = {
   visibleSourceVideoStep?: number | null;
   effectiveNumStepsPerEnv?: number | null;
   effectiveNumStepsPerEnvSource?: string | null;
+  requestedNumStepsPerEnv?: number | null;
+  compiledNumStepsPerEnv?: number | null;
+  runtimeNumStepsPerEnv?: number | null;
   sourceTrainerIterationApprox?: number | null;
   sourceTrainerIterationApproxZeroBased?: number | null;
   sourceTrainerIterationApproxDisplay?: number | null;
   sourceTrainerIterationMethod?: string | null;
+  discrepancyCodes?: string[] | null;
   mediaLabelWarnings?: string[] | null;
   displayClipIndex?: number | null;
   currentClipIndex?: number | null;
   currentSourceEpisodeIndex?: number | null;
+  visibleClipProvenance?: RecordingClipProvenance | null;
+  latestClipProvenance?: RecordingClipProvenance | null;
 };
 
 export type TrainingRecordingSyncSseEvent = {
@@ -800,13 +834,19 @@ export type TrainingRecordingSyncSseEvent = {
   latestSourceVideoStep?: number | null;
   visibleSourceVideoStep?: number | null;
   displayClipIndex?: number | null;
+  requestedNumStepsPerEnv?: number | null;
+  compiledNumStepsPerEnv?: number | null;
+  runtimeNumStepsPerEnv?: number | null;
   effectiveNumStepsPerEnv?: number | null;
   effectiveNumStepsPerEnvSource?: string | null;
   sourceTrainerIterationApprox?: number | null;
   sourceTrainerIterationApproxZeroBased?: number | null;
   sourceTrainerIterationApproxDisplay?: number | null;
   sourceTrainerIterationMethod?: string | null;
+  discrepancyCodes?: string[] | null;
   mediaLabelWarnings?: string[] | null;
+  visibleClipProvenance?: RecordingClipProvenance | null;
+  latestClipProvenance?: RecordingClipProvenance | null;
   views: TrainingRecordingSyncSseView[];
   availableViews: string[];
   missingViews: string[];

@@ -210,6 +210,42 @@ export type CompiledTaskContractV2 = {
     blockingCodes: string[];
     advisoryCodes: string[];
   };
+  agentConfigContract?: {
+    requestedNumStepsPerEnv?: number | null;
+    compiledNumStepsPerEnv?: number | null;
+    hydraOverrideKey?: string | null;
+    hydraOverrides?: Array<{
+      key: string;
+      value: number | string | boolean;
+      source: "compiled_task_contract_v2";
+    }>;
+  };
+};
+
+export type RecordingClipProvenance = {
+  clipIndex: number;
+  displayClipIndex: number;
+  sourceVideoStep: number | null;
+  sourceEpisodeIndex: number | null;
+  sourceTrainerIterationApprox?: number | null;
+  sourceTrainerIterationApproxZeroBased: number | null;
+  sourceTrainerIterationApproxDisplay: number | null;
+  sourceTrainerIterationMethod:
+    | "derived_from_video_step_runtime_agent_yaml"
+    | "derived_from_video_step_stdout_inference"
+    | "derived_from_video_step_compiled_fallback"
+    | "correlated_at_file_discovery"
+    | "unknown";
+  requestedNumStepsPerEnv: number | null;
+  compiledNumStepsPerEnv: number | null;
+  runtimeNumStepsPerEnv: number | null;
+  effectiveNumStepsPerEnv: number | null;
+  effectiveNumStepsPerEnvSource:
+    | "rsl_rl_params_agent_yaml"
+    | "trainer_stdout_total_timesteps"
+    | "compiled_agent_config"
+    | "unknown";
+  discrepancyCodes: string[];
 };
 
 export type EpisodeRuntimeTraceEntry = {
@@ -458,9 +494,17 @@ export type TrainingJobSummary = {
     recordingFinalized?: boolean;
     visibleClipIndex?: number | null;
     visibleVideoStep?: number | null;
+    requestedNumStepsPerEnv?: number | null;
+    compiledNumStepsPerEnv?: number | null;
+    runtimeNumStepsPerEnv?: number | null;
+    effectiveNumStepsPerEnv?: number | null;
+    effectiveNumStepsPerEnvSource?: string | null;
+    discrepancyCodes?: string[];
     availableViews?: string[];
     missingViews?: string[];
     views?: Array<Record<string, unknown>>;
+    visibleClipProvenance?: RecordingClipProvenance | null;
+    latestClipProvenance?: RecordingClipProvenance | null;
     [key: string]: unknown;
   } | null;
   recordingSyncEventCount?: number;
