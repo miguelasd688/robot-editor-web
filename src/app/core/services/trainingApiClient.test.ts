@@ -16,7 +16,7 @@ describe("parseTrainingRecordingSyncSseEvent", () => {
         durableEpisodeIndex: 4,
         visibleEpisodeIndex: 3,
         clipSourceField: "sourceEpisodeIndex",
-        views: [],
+        views: {},
         availableViews: ["global"],
         missingViews: [],
         recordingVisible: true,

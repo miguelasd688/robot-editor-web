@@ -116,10 +116,18 @@ type RuntimeTrainingTransportDiagnostics = {
   lastEmptyListCooldownHitAt?: number | null;
   lastRecordingSyncAt?: string | null;
   recordingFinalized?: boolean;
+  recordingRefreshMode?: "sse" | "hydration" | "manual" | "suppressed" | null;
+  recordingRefreshSource?: string | null;
   recordingMetaPollingSuppressed?: boolean;
   recordingMetaHydrationReason?: string | null;
   recordingMetaHydrationCount?: number;
   recordingSyncSource?: string | null;
+  recordingFinalizedObserved?: boolean;
+  recordingTerminalFreezeActive?: boolean;
+  recordingTerminalFinalizationDone?: boolean;
+  legacyRecordingPollingBlocked?: boolean;
+  lastRecordingRefreshDecisionAt?: number | null;
+  lastRecordingRefreshSuppressionReasonCode?: string | null;
   recordingMetaHydrationStatus?: string | null;
   recordingMetaHydrationError?: string | null;
   recordingMetaHydrationRetryable?: boolean | null;
@@ -1973,7 +1981,7 @@ function mergeActiveJobTruth(
     recordingSyncEventCount: incoming.recordingSyncEventCount ?? existing.recordingSyncEventCount,
     lastRecordingSyncAt: incoming.lastRecordingSyncAt ?? existing.lastRecordingSyncAt,
     lastRecordingSyncSignature: incoming.lastRecordingSyncSignature ?? existing.lastRecordingSyncSignature,
-    recordingFinalized: incoming.recordingFinalized ?? existing.recordingFinalized,
+    recordingFinalized: incoming.recordingFinalized === true || existing.recordingFinalized === true,
     recordingSyncSource: incoming.recordingSyncSource ?? existing.recordingSyncSource,
     recordingMetaPollingSuppressed: incoming.recordingMetaPollingSuppressed ?? existing.recordingMetaPollingSuppressed,
     recordingMetaHydrationReason: incoming.recordingMetaHydrationReason ?? existing.recordingMetaHydrationReason,
@@ -2048,18 +2056,44 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
         if (!sync) return;
         useRuntimeTrainingStore.setState((current) => {
           const existing = current.jobs.find((job) => job.id === jobId);
-          const mergedJob = existing ? applyRecordingSyncToJob(existing, sync) : existing;
+          const sameSignature =
+            Boolean(existing) &&
+            (existing?.lastRecordingSyncSignature === sync.signature ||
+              (typeof existing?.recordingLiveSyncSummary === "object" &&
+                existing.recordingLiveSyncSummary !== null &&
+                !Array.isArray(existing.recordingLiveSyncSummary) &&
+                (existing.recordingLiveSyncSummary as Record<string, unknown>).signature === sync.signature));
+          const mergedJob = existing && !sameSignature ? applyRecordingSyncToJob(existing, sync) : existing;
           if (!mergedJob) return current;
+          const nextTransportDiagnostics = {
+            ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+            recordingMetaPollingSuppressed: true,
+            lastRecordingSyncAt: sync.occurredAt,
+            recordingFinalized: sync.recordingFinalized,
+            recordingSyncSource: "sse_recording_sync",
+            recordingRefreshMode: "sse" as const,
+            recordingRefreshSource: "sse_recording_sync",
+            recordingFinalizedObserved: sync.recordingFinalized,
+            recordingTerminalFreezeActive: Boolean(sync.recordingFinalized),
+            recordingTerminalFinalizationDone: Boolean(sync.recordingFinalized),
+            legacyRecordingPollingBlocked: false,
+            lastRecordingRefreshDecisionAt: Date.now(),
+            lastRecordingRefreshSuppressionReasonCode: sameSignature ? "recording_sync_same_signature_suppressed" : null,
+          };
+          if (sameSignature) {
+            return {
+              transportDiagnosticsByJob: {
+                ...current.transportDiagnosticsByJob,
+                [jobId]: nextTransportDiagnostics,
+              },
+            };
+          }
           return {
             jobs: sortJobs(current.jobs.map((item) => (item.id === jobId ? mergedJob : item))),
             transportDiagnosticsByJob: {
               ...current.transportDiagnosticsByJob,
               [jobId]: {
-                ...(current.transportDiagnosticsByJob[jobId] ?? {}),
-                recordingMetaPollingSuppressed: true,
-                lastRecordingSyncAt: sync.occurredAt,
-                recordingFinalized: sync.recordingFinalized,
-                recordingSyncSource: "sse_recording_sync",
+                ...nextTransportDiagnostics,
               },
             },
           };
@@ -2112,7 +2146,7 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
       }
       livePulseReconnectAttempts.delete(jobId);
       useRuntimeTrainingStore.setState((current) => ({
-          transportDiagnosticsByJob: {
+        transportDiagnosticsByJob: {
           ...current.transportDiagnosticsByJob,
           [jobId]: {
             ...(current.transportDiagnosticsByJob[jobId] ?? {}),
@@ -2128,13 +2162,13 @@ function ensureLivePulseSubscriptions(jobs: TrainingJobSummary[]) {
       useRuntimeTrainingStore.setState((current) => ({
         transportDiagnosticsByJob: {
           ...current.transportDiagnosticsByJob,
-        [jobId]: {
-          ...(current.transportDiagnosticsByJob[jobId] ?? {}),
-          lastSseDisconnectAt: now,
-          recordingMetaPollingSuppressed: false,
+          [jobId]: {
+            ...(current.transportDiagnosticsByJob[jobId] ?? {}),
+            lastSseDisconnectAt: now,
+            recordingMetaPollingSuppressed: false,
+          },
         },
-      },
-    }));
+      }));
       if (shouldRecoverAfterDisconnect(diagnostics?.lastSseOpenAt ? now - diagnostics.lastSseOpenAt : null)) {
         void recoverMetricBatchesForJob(jobId, "manual_recovery");
       }

@@ -24,7 +24,7 @@ vi.mock("../services/trainingApiClient", () => ({
     if (parsed.eventType !== "recording_sync") return null;
     if (!Array.isArray(parsed.availableViews)) parsed.availableViews = [];
     if (!Array.isArray(parsed.missingViews)) parsed.missingViews = [];
-    if (!Array.isArray(parsed.views)) parsed.views = [];
+    if (!parsed.views || typeof parsed.views !== "object" || Array.isArray(parsed.views)) parsed.views = {};
     return parsed;
   },
   submitTrainingTaskRemoteWithResponse: vi.fn(),
@@ -367,15 +367,15 @@ describe("useRuntimeTrainingStore transport ownership", () => {
         durableEpisodeIndex: 3,
         visibleEpisodeIndex: 2,
         clipSourceField: "sourceEpisodeIndex",
-        views: [
-          {
+        views: {
+          global: {
             viewId: "global",
             available: true,
             visibleClipIndex: 2,
             visibleVideoStep: 2200,
             latestClipIndex: 3,
           },
-        ],
+        },
         availableViews: ["global"],
         missingViews: ["closeup_env0"],
         recordingVisible: true,
@@ -386,16 +386,50 @@ describe("useRuntimeTrainingStore transport ownership", () => {
         signature: "sync-1",
       });
 
+      createdSources[0]?.source.emit("recording_sync", {
+        eventType: "recording_sync",
+        jobId: "job-sync",
+        runRef: "run-sync",
+        clipCount: 99,
+        latestClipIndex: 99,
+        visibleClipIndex: 99,
+        latestVideoStep: 9900,
+        visibleVideoStep: 9900,
+        durableEpisodeIndex: 99,
+        visibleEpisodeIndex: 99,
+        clipSourceField: "sourceEpisodeIndex",
+        views: {
+          global: {
+            viewId: "global",
+            available: true,
+            visibleClipIndex: 99,
+            visibleVideoStep: 9900,
+            latestClipIndex: 99,
+          },
+        },
+        availableViews: ["global"],
+        missingViews: ["closeup_env0"],
+        recordingVisible: true,
+        recordingFinalized: false,
+        jobTerminal: false,
+        source: "sse",
+        occurredAt: "2026-04-16T00:00:01.000Z",
+        signature: "sync-1",
+      });
+
       const job = useRuntimeTrainingStore.getState().jobs.find((item) => item.id === "job-sync");
       expect(job?.progress).toBe(0.41);
       expect(job?.currentEpoch).toBe(41);
       expect(job?.recordingLiveSyncSummary?.recordingVisible).toBe(true);
-      expect(job?.recordingLiveSyncSummary?.views?.[0]?.visibleClipIndex).toBe(2);
+      expect(job?.recordingLiveSyncSummary?.views?.global?.visibleClipIndex).toBe(2);
       expect(job?.recordingSyncEventCount).toBe(1);
       expect(job?.lastRecordingSyncSignature).toBe("sync-1");
       expect(job?.recordingFinalized).toBe(false);
       expect(job?.recordingSyncSource).toBe("sse_recording_sync");
       expect(useRuntimeTrainingStore.getState().transportDiagnosticsByJob["job-sync"]?.recordingMetaPollingSuppressed).toBe(true);
+      expect(useRuntimeTrainingStore.getState().transportDiagnosticsByJob["job-sync"]?.lastRecordingRefreshSuppressionReasonCode).toBe(
+        "recording_sync_same_signature_suppressed"
+      );
       expect(useRuntimeTrainingStore.getState().transportDiagnosticsByJob["job-sync"]?.lastRecordingSyncAt).toBe(
         "2026-04-16T00:00:00.000Z"
       );

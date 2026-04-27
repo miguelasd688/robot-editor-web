@@ -493,7 +493,9 @@ export type TrainingJobSummary = {
     recordingVisible?: boolean;
     recordingFinalized?: boolean;
     visibleClipIndex?: number | null;
+    latestClipIndex?: number | null;
     visibleVideoStep?: number | null;
+    latestVideoStep?: number | null;
     requestedNumStepsPerEnv?: number | null;
     compiledNumStepsPerEnv?: number | null;
     runtimeNumStepsPerEnv?: number | null;
@@ -502,7 +504,11 @@ export type TrainingJobSummary = {
     discrepancyCodes?: string[];
     availableViews?: string[];
     missingViews?: string[];
-    views?: Array<Record<string, unknown>>;
+    views?: Record<string, Record<string, unknown>>;
+    defaultViewId?: string | null;
+    viewOrder?: string[];
+    legacyScalarView?: string | null;
+    viewAlignmentPolicy?: string | null;
     visibleClipProvenance?: RecordingClipProvenance | null;
     latestClipProvenance?: RecordingClipProvenance | null;
     [key: string]: unknown;

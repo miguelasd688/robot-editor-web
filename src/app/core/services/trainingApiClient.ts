@@ -661,6 +661,7 @@ export type TrainingPreviewMeta = {
 };
 
 export type TrainingRecordingViewMeta = {
+  viewId?: string;
   available: boolean;
   updatedAt: string;
   sizeBytes?: number;
@@ -671,11 +672,17 @@ export type TrainingRecordingViewMeta = {
   sourcePath?: string;
   latestSourcePath?: string;
   visibleSourcePath?: string;
+  viewClipIndex?: number;
+  displayClipIndex?: number;
+  filename?: string;
+  path?: string;
   visibleClipProvenance?: RecordingClipProvenance | null;
   latestClipProvenance?: RecordingClipProvenance | null;
   clipCount?: number;
   latestClipIndex?: number;
   visibleClipIndex?: number;
+  latestViewClipIndex?: number;
+  visibleViewClipIndex?: number;
   lagClips?: number;
   stepsPerEpoch?: number;
   videoInterval?: number;
@@ -687,16 +694,21 @@ export type TrainingRecordingViewMeta = {
   latestVideoEpoch?: number;
   latestSourceEpisodeIndex?: number;
   latestSourceVideoStep?: number;
+  firstSourceVideoStep?: number | null;
+  missingInitialStepZero?: boolean;
   effectiveNumStepsPerEnv?: number;
   effectiveNumStepsPerEnvSource?: string;
   sourceTrainerIterationApprox?: number;
   sourceTrainerIterationApproxZeroBased?: number;
   sourceTrainerIterationApproxDisplay?: number;
   sourceTrainerIterationMethod?: string;
+  latestApproxIteration?: number | null;
+  latestApproxIterationDisplay?: number | null;
+  latestSourceTrainerIterationMethod?: string | null;
   mediaLabelWarnings?: string[];
-  displayClipIndex?: number;
   currentClipIndex?: number;
   currentSourceEpisodeIndex?: number;
+  missingReasonCode?: string | null;
   states?: Array<{
     clipIndex: number;
     stateKey: string;
@@ -722,6 +734,10 @@ export type TrainingRecordingViewMeta = {
 export type RecordingClipProvenance = {
   clipIndex: number;
   displayClipIndex: number;
+  viewId?: string | null;
+  viewClipIndex?: number | null;
+  filename?: string | null;
+  path?: string | null;
   sourceVideoStep: number | null;
   sourceEpisodeIndex: number | null;
   sourceTrainerIterationApprox?: number | null;
@@ -743,6 +759,8 @@ export type RecordingClipProvenance = {
     | "compiled_agent_config"
     | "unknown";
   discrepancyCodes: string[];
+  available?: boolean;
+  missingReasonCode?: string | null;
 };
 
 export type TrainingRecordingMeta = {
@@ -791,6 +809,9 @@ export type TrainingRecordingSyncSseView = {
   viewId: string;
   available?: boolean;
   clipCount?: number;
+  viewClipIndex?: number | null;
+  visibleViewClipIndex?: number | null;
+  latestViewClipIndex?: number | null;
   latestClipIndex?: number;
   visibleClipIndex?: number;
   latestVideoStep?: number | null;
@@ -799,6 +820,9 @@ export type TrainingRecordingSyncSseView = {
   visibleSourceEpisodeIndex?: number | null;
   latestSourceVideoStep?: number | null;
   visibleSourceVideoStep?: number | null;
+  firstSourceVideoStep?: number | null;
+  missingInitialStepZero?: boolean;
+  missingReasonCode?: string | null;
   effectiveNumStepsPerEnv?: number | null;
   effectiveNumStepsPerEnvSource?: string | null;
   requestedNumStepsPerEnv?: number | null;
@@ -847,9 +871,13 @@ export type TrainingRecordingSyncSseEvent = {
   mediaLabelWarnings?: string[] | null;
   visibleClipProvenance?: RecordingClipProvenance | null;
   latestClipProvenance?: RecordingClipProvenance | null;
-  views: TrainingRecordingSyncSseView[];
+  views: Record<string, TrainingRecordingSyncSseView>;
+  defaultViewId?: string | null;
+  viewOrder?: string[];
   availableViews: string[];
   missingViews: string[];
+  legacyScalarView?: string | null;
+  viewAlignmentPolicy?: string | null;
   recordingVisible: boolean;
   recordingFinalized: boolean;
   jobTerminal: boolean;
@@ -932,7 +960,8 @@ export function parseTrainingRecordingSyncSseEvent(data: string | null | undefin
     if (parsed.eventType !== "recording_sync") return null;
     if (!Array.isArray(parsed.availableViews)) parsed.availableViews = [];
     if (!Array.isArray(parsed.missingViews)) parsed.missingViews = [];
-    if (!Array.isArray(parsed.views)) parsed.views = [];
+    if (!parsed.views || typeof parsed.views !== "object" || Array.isArray(parsed.views)) parsed.views = {};
+    if (!Array.isArray(parsed.viewOrder)) parsed.viewOrder = [];
     return parsed;
   } catch {
     return null;
@@ -1226,7 +1255,10 @@ export async function getTrainingRecordingMetaRemote(jobId: string): Promise<Tra
   // Hydration-only fallback for manual/history refresh. Active selected-job playback must not call this.
   const response = await fetch(buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/meta`), {
     method: "GET",
-    headers: buildHeaders({ accept: "application/json" }),
+    headers: buildHeaders({
+      accept: "application/json",
+      "x-recording-meta-use": "hydration-only",
+    }),
   });
   return await parseJson<TrainingRecordingMeta>(response);
 }
