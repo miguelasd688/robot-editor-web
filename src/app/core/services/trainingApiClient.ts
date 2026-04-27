@@ -685,6 +685,14 @@ export type TrainingRecordingViewMeta = {
   latestVideoEpoch?: number;
   latestSourceEpisodeIndex?: number;
   latestSourceVideoStep?: number;
+  effectiveNumStepsPerEnv?: number;
+  effectiveNumStepsPerEnvSource?: string;
+  sourceTrainerIterationApprox?: number;
+  sourceTrainerIterationApproxZeroBased?: number;
+  sourceTrainerIterationApproxDisplay?: number;
+  sourceTrainerIterationMethod?: string;
+  mediaLabelWarnings?: string[];
+  displayClipIndex?: number;
   currentClipIndex?: number;
   currentSourceEpisodeIndex?: number;
   states?: Array<{
@@ -695,6 +703,13 @@ export type TrainingRecordingViewMeta = {
     videoEpoch?: number;
     sourceEpisodeIndex?: number;
     sourceVideoStep?: number;
+    effectiveNumStepsPerEnv?: number;
+    effectiveNumStepsPerEnvSource?: string;
+    sourceTrainerIterationApprox?: number;
+    sourceTrainerIterationApproxZeroBased?: number;
+    sourceTrainerIterationApproxDisplay?: number;
+    sourceTrainerIterationMethod?: string;
+    mediaLabelWarnings?: string[];
     isLatest: boolean;
   }>;
   previewSource?: string;
@@ -752,10 +767,20 @@ export type TrainingRecordingSyncSseView = {
   visibleClipIndex?: number;
   latestVideoStep?: number | null;
   visibleVideoStep?: number | null;
-  currentClipIndex?: number | null;
-  currentSourceEpisodeIndex?: number | null;
   latestSourceEpisodeIndex?: number | null;
   visibleSourceEpisodeIndex?: number | null;
+  latestSourceVideoStep?: number | null;
+  visibleSourceVideoStep?: number | null;
+  effectiveNumStepsPerEnv?: number | null;
+  effectiveNumStepsPerEnvSource?: string | null;
+  sourceTrainerIterationApprox?: number | null;
+  sourceTrainerIterationApproxZeroBased?: number | null;
+  sourceTrainerIterationApproxDisplay?: number | null;
+  sourceTrainerIterationMethod?: string | null;
+  mediaLabelWarnings?: string[] | null;
+  displayClipIndex?: number | null;
+  currentClipIndex?: number | null;
+  currentSourceEpisodeIndex?: number | null;
 };
 
 export type TrainingRecordingSyncSseEvent = {
@@ -770,6 +795,18 @@ export type TrainingRecordingSyncSseEvent = {
   durableEpisodeIndex?: number | null;
   visibleEpisodeIndex?: number | null;
   clipSourceField: string;
+  latestSourceEpisodeIndex?: number | null;
+  visibleSourceEpisodeIndex?: number | null;
+  latestSourceVideoStep?: number | null;
+  visibleSourceVideoStep?: number | null;
+  displayClipIndex?: number | null;
+  effectiveNumStepsPerEnv?: number | null;
+  effectiveNumStepsPerEnvSource?: string | null;
+  sourceTrainerIterationApprox?: number | null;
+  sourceTrainerIterationApproxZeroBased?: number | null;
+  sourceTrainerIterationApproxDisplay?: number | null;
+  sourceTrainerIterationMethod?: string | null;
+  mediaLabelWarnings?: string[] | null;
   views: TrainingRecordingSyncSseView[];
   availableViews: string[];
   missingViews: string[];
@@ -838,7 +875,10 @@ export function buildTrainingLivePulseStreamUrl(jobId: string) {
 
 export function buildTrainingRecordingLatestUrl(jobId: string, clipIndex: number, viewId = "global") {
   const params = new URLSearchParams();
-  params.set("clipIndex", String(Math.max(1, Math.round(clipIndex))));
+  const normalizedClipIndex = Number(clipIndex);
+  if (Number.isFinite(normalizedClipIndex) && normalizedClipIndex >= 0) {
+    params.set("clipIndex", String(Math.max(0, Math.round(normalizedClipIndex))));
+  }
   const safeViewId = String(viewId ?? "").trim();
   if (safeViewId) params.set("view", safeViewId);
   return buildUrl(`/v1/training/jobs/${encodeURIComponent(jobId)}/recording/latest?${params.toString()}`);
@@ -1157,8 +1197,8 @@ export async function getTrainingRecordingLatestRemote(
 ): Promise<Blob> {
   const params = new URLSearchParams();
   const clipIndex = Number(options?.clipIndex);
-  if (Number.isFinite(clipIndex) && clipIndex > 0) {
-    params.set("clipIndex", String(Math.max(1, Math.round(clipIndex))));
+  if (Number.isFinite(clipIndex) && clipIndex >= 0) {
+    params.set("clipIndex", String(Math.max(0, Math.round(clipIndex))));
   }
   const state = String(options?.state ?? "").trim();
   if (state) {

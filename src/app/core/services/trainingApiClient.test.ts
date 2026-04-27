@@ -42,4 +42,10 @@ describe("parseTrainingRecordingSyncSseEvent", () => {
       "/v1/training/jobs/job-1/recording/latest?clipIndex=2&view=global"
     );
   });
+
+  it("preserves clipIndex zero in latest recording urls", () => {
+    expect(buildTrainingRecordingLatestUrl("job-1", 0, "global")).toContain(
+      "/v1/training/jobs/job-1/recording/latest?clipIndex=0&view=global"
+    );
+  });
 });
