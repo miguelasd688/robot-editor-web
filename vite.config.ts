@@ -12,8 +12,8 @@ function buildTrainingApiProxy(target: string) {
     target,
     changeOrigin: true,
     secure: false,
-    configure(proxy) {
-      proxy.on("proxyReq", (proxyReq, req) => {
+    configure(proxy: any) {
+      proxy.on("proxyReq", (proxyReq: any, req: any) => {
         const range = req.headers.range;
         if (range) {
           proxyReq.setHeader("Range", range);

@@ -160,6 +160,7 @@ export type CustomTrainingRuntimePayload = {
   videoLengthSec?: number;
   videoLengthMs?: number;
   videoLength?: number;
+  clipIntervalEpisodes?: number;
   videoInterval?: number;
   baseConstraintMode?: "fix_base" | "source_weld";
   assetPipeline?: { mode: "usd_passthrough" | "mjcf_conversion"; reason?: string };

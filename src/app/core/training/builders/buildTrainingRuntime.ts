@@ -42,6 +42,12 @@ export function buildTrainingRuntime(input: {
       toPositiveIntFromAliases(input.configValues, ["videoLengthSec", "video_length_sec", "clipLengthSec", "clip_length_sec"]),
     videoLengthMs: toPositiveIntFromAliases(previewValues, ["videoLengthMs", "video_length_ms"]),
     videoLength: toPositiveIntFromAliases(previewValues, ["videoLength", "video_length"]),
+    clipIntervalEpisodes:
+      toPositiveIntFromAliases(previewValues, [
+        "clipIntervalEpisodes",
+        "clip_interval_episodes",
+        "clipIntervalTrainerIterations",
+      ]) ?? toPositiveIntFromAliases(input.configValues, ["clipIntervalEpisodes", "clip_interval_episodes"]),
     videoInterval: toPositiveIntFromAliases(previewValues, ["videoInterval", "video_interval"]),
     baseConstraintMode:
       toTextOrEmpty(input.configValues.baseConstraintMode) === "fix_base"

@@ -18,6 +18,7 @@ describe("buildTrainingRuntime", () => {
           video_length_sec: 7,
           video_length_ms: 7000,
           video_length: 21,
+          clip_interval_episodes: 13,
           video_interval: 12,
           recordingViews: {
             views: {
@@ -42,6 +43,7 @@ describe("buildTrainingRuntime", () => {
       videoLengthSec: 7,
       videoLengthMs: 7000,
       videoLength: 21,
+      clipIntervalEpisodes: 13,
       videoInterval: 12,
       baseConstraintMode: "source_weld",
       assetPipeline: { mode: "mjcf_conversion", reason: "alias test" },
