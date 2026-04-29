@@ -61,4 +61,49 @@ describe("buildTrainingRuntime", () => {
       },
     });
   });
+
+  it("keeps unedited recording display defaults out of user override aliases", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        recording: {
+          clipLengthSec: 5,
+          clipIntervalIterations: 92,
+          clipLengthEdited: false,
+          clipIntervalEdited: false,
+          displayNumStepsPerEnv: 24,
+          displayVideoIntervalSteps: 2208,
+        },
+      },
+    });
+
+    expect(runtime.recording).toMatchObject({
+      displayClipLengthSec: 5,
+      displayClipIntervalIterations: 92,
+      displayNumStepsPerEnv: 24,
+      displayVideoIntervalSteps: 2208,
+    });
+    expect(runtime.videoLengthSec).toBeUndefined();
+    expect(runtime.clipIntervalEpisodes).toBeUndefined();
+    expect(runtime.recording?.requestedClipLengthSec).toBeUndefined();
+    expect(runtime.recording?.requestedClipIntervalIterations).toBeUndefined();
+  });
+
+  it("serializes edited recording interval as explicit requested intent", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        recording: {
+          clipLengthSec: 5,
+          clipIntervalIterations: 50,
+          clipLengthEdited: false,
+          clipIntervalEdited: true,
+          displayNumStepsPerEnv: 24,
+        },
+      },
+    });
+
+    expect(runtime.recording?.requestedClipIntervalIterations).toBe(50);
+    expect(runtime.clipIntervalEpisodes).toBe(50);
+  });
 });

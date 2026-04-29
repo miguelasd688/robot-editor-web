@@ -162,6 +162,14 @@ export type CustomTrainingRuntimePayload = {
   videoLength?: number;
   clipIntervalEpisodes?: number;
   videoInterval?: number;
+  recording?: {
+    displayClipLengthSec?: number;
+    displayClipIntervalIterations?: number;
+    displayNumStepsPerEnv?: number;
+    displayVideoIntervalSteps?: number;
+    requestedClipLengthSec?: number;
+    requestedClipIntervalIterations?: number;
+  };
   baseConstraintMode?: "fix_base" | "source_weld";
   assetPipeline?: { mode: "usd_passthrough" | "mjcf_conversion"; reason?: string };
   extraArgs?: string[];
