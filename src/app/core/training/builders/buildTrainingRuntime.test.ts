@@ -40,10 +40,10 @@ describe("buildTrainingRuntime", () => {
       numEnvs: 24,
       checkpoint: 3,
       stepsPerEpoch: 16,
-      videoLengthSec: 7,
+      videoLengthSec: undefined,
       videoLengthMs: 7000,
       videoLength: 21,
-      clipIntervalEpisodes: 13,
+      clipIntervalEpisodes: undefined,
       videoInterval: 12,
       baseConstraintMode: "source_weld",
       assetPipeline: { mode: "mjcf_conversion", reason: "alias test" },
@@ -105,5 +105,31 @@ describe("buildTrainingRuntime", () => {
 
     expect(runtime.recording?.requestedClipIntervalIterations).toBe(50);
     expect(runtime.clipIntervalEpisodes).toBe(50);
+  });
+
+  it("serializes edited clip length as explicit requested intent", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        recording: {
+          displayClipLengthSec: 2,
+          displayClipIntervalIterations: 92,
+          displayNumStepsPerEnv: 24,
+          displayVideoIntervalSteps: 2208,
+          clipLengthEdited: true,
+          clipIntervalEdited: false,
+          requestedClipLengthSec: 2,
+        },
+      },
+    });
+
+    expect(runtime.recording).toMatchObject({
+      displayClipLengthSec: 2,
+      displayClipIntervalIterations: 92,
+      displayNumStepsPerEnv: 24,
+      displayVideoIntervalSteps: 2208,
+      requestedClipLengthSec: 2,
+    });
+    expect(runtime.videoLengthSec).toBe(2);
   });
 });
