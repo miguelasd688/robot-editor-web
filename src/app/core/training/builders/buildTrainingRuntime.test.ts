@@ -103,6 +103,13 @@ describe("buildTrainingRuntime", () => {
       },
     });
 
+    expect(runtime.recording).toMatchObject({
+      clipLengthSec: 5,
+      clipIntervalIterations: 50,
+      displayClipLengthSec: 5,
+      displayClipIntervalIterations: 50,
+      displayNumStepsPerEnv: 24,
+    });
     expect(runtime.recording?.requestedClipIntervalIterations).toBe(50);
     expect(runtime.clipIntervalEpisodes).toBe(50);
   });
@@ -131,5 +138,80 @@ describe("buildTrainingRuntime", () => {
       requestedClipLengthSec: 2,
     });
     expect(runtime.videoLengthSec).toBe(2);
+  });
+
+  it("serializes edited recording interval from display aliases as explicit requested intent", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        stepsPerEpoch: 48,
+        recording: {
+          displayClipIntervalIterations: 46,
+          clipIntervalEdited: true,
+          displayNumStepsPerEnv: 48,
+          displayVideoIntervalSteps: 2208,
+        },
+      },
+    });
+
+    expect(runtime.recording).toMatchObject({
+      clipIntervalIterations: 46,
+      displayClipIntervalIterations: 46,
+      displayNumStepsPerEnv: 48,
+      displayVideoIntervalSteps: 2208,
+      clipIntervalEdited: true,
+      requestedClipIntervalIterations: 46,
+    });
+    expect(runtime.clipIntervalEpisodes).toBe(46);
+  });
+
+  it("serializes edited recording interval from snake_case aliases as explicit requested intent", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        steps_per_epoch: 48,
+        recording: {
+          display_clip_interval_iterations: 46,
+          clip_interval_edited: true,
+          display_num_steps_per_env: 48,
+          display_video_interval_steps: 2208,
+        },
+      },
+    });
+
+    expect(runtime.recording).toMatchObject({
+      clipIntervalIterations: 46,
+      displayClipIntervalIterations: 46,
+      displayNumStepsPerEnv: 48,
+      displayVideoIntervalSteps: 2208,
+      clipIntervalEdited: true,
+      requestedClipIntervalIterations: 46,
+    });
+    expect(runtime.clipIntervalEpisodes).toBe(46);
+  });
+
+  it("keeps the default clip interval as display-only until edited", () => {
+    const runtime = buildTrainingRuntime({
+      maxSteps: 128,
+      configValues: {
+        stepsPerEpoch: 48,
+        recording: {
+          clipIntervalIterations: 92,
+          clipIntervalEdited: false,
+          displayNumStepsPerEnv: 48,
+          displayVideoIntervalSteps: 4416,
+        },
+      },
+    });
+
+    expect(runtime.recording).toMatchObject({
+      clipIntervalIterations: 92,
+      displayClipIntervalIterations: 92,
+      displayNumStepsPerEnv: 48,
+      displayVideoIntervalSteps: 4416,
+      clipIntervalEdited: false,
+    });
+    expect(runtime.recording?.requestedClipIntervalIterations).toBeUndefined();
+    expect(runtime.clipIntervalEpisodes).toBeUndefined();
   });
 });
